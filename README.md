@@ -10,8 +10,8 @@ Web-based payroll and HR system for Pakistani factories. It rebuilds the workflo
 |---|---|---|
 | 1 | Schema + migrations, auth/roles, SPA shell, Setup module (Employee + photo, Department, Designation, Shift, Shift Group, Holidays/rest days, Company settings), Employee List report, ID cards | **Delivered** |
 | 2 | Attendance: manual voucher, barcode kiosk, ZKTeco ADMS push + CSV/Excel import, daily post, OT approval, leave register, attendance reports, live TV screen | **Delivered** |
-| 3 | Accounts vouchers + loan schedule + JV + voucher reports + DayBook | Next |
-| 4 | PayrollEngine, salary sheets, posting/locking, payslips, salary reports, unit tests | — |
+| 3 | Accounts vouchers + loan schedule + JV + voucher reports + DayBook | **Delivered** |
+| 4 | PayrollEngine, salary sheets, posting/locking, payslips, salary reports, unit tests | Next |
 | 5 | Dashboard, audit log viewer, rate settings, hardening, Hostinger deployment guide | — |
 
 The **full database schema for every module** is already in place (`migrations/001`–`005`), so later batches only add code.
@@ -203,15 +203,69 @@ Approved leave (L / LW) ──────────────────�
 
 ### Batch 2 decisions to confirm
 
-- **Half day (HD) in payroll.** Sheets show HD separately. Should an HD count as ½ work day in *Paid Days* (batch 4)?
+- **Half day (HD) in payroll.** Decided: no fixed ½ day. Short days are paid on the actual hours logged (see *Payroll decisions* below).
 - **Break deduction.** The break is deducted only when the stay exceeds half the shift span.
 - **Rest-day / holiday work.** All worked time is an OT candidate, and the day stays R/H (still paid as rest/holiday).
 - **Joining day.** The joining date shows **S** when the employee punched, and **A** when they didn't.
 - **Overtime approval.** HR approves by default (granted in `008_attendance_permissions.sql`). Change this in Roles & Permissions if a separate supervisor role is wanted.
 
+## Batch 3 — Accounts
+
+### Vouchers
+
+| Voucher | Purpose | On posting | Used by payroll (batch 4) |
+|---|---|---|---|
+| **Advance** (ADV) | Salary advance paid to an employee | Dr Employee Advances / Cr Cash or Bank (*Paid from*) | Deducted **in full** from the salary of its *salary month* |
+| **Loan** (LOAN) | Amount, monthly installment, first deduction month → installment schedule | Dr Employee Loans / Cr Cash or Bank | The installment due that month is deducted; the remaining balance is tracked |
+| **Incentive** (INC) | Bonus / incentive | — (booked in the salary JV) | Added to that month's salary |
+| **Penalty** (PEN) | Fine / penalty | — (booked in the salary JV) | Deducted from that month's salary |
+| **Overtime** (OT) | Extra OT hours (paid at the employee's OT rate) and/or a fixed amount | — (booked in the salary JV) | Added to that month's OT |
+| **Journal** (JV) | Free double entry; salary posting will create system JVs | Lines must balance (Dr = Cr), checked on save and on post | — |
+
+- **Life cycle.** A **Draft** can be edited or deleted. **Post** locks it, and only posted vouchers reach payroll. **Unpost** is allowed only while the voucher is not used in a salary sheet, its salary month is not posted, and (for loans) no installment has been deducted. Deleting a posted voucher is a **soft delete**: it is hidden everywhere but kept in the audit trail.
+- **Numbering.** Each type has its own sequence: `ADV-0001`, `LN-0001`, `INC-…`, `PEN-…`, `OT-…`, `JV-…`.
+- **Amounts** are whole rupees. The employee must be employed on the voucher date. The salary month can't be before the voucher month, and can't be a month whose salary is already posted.
+- **Loan schedule.** There are *n* equal installments with the remainder in the last one. **Skip** a month and the balance moves to the end. **Adjust** a month to any amount up to the remaining balance and the rest is re-spread. **Reset** undoes either. Deducted months are locked. Because the schedule is rebuilt around deducted, adjusted and skipped months, a short deduction (salary too low) also rolls forward automatically. Covered by `tests/AccountsTest.php`.
+- **Chart of accounts.** Codes 1001–5003 are seeded. Accounts with a *system key* (cash, bank, employee advances/loans, salary payable, EOBI/SS/tax payable, expenses) are used by automatic postings and can't be deleted or deactivated.
+
+### Reports
+
+All have Print/PDF and Excel/CSV. **Advance Salary**, **Incentive**, **Penalty** and **Overtime voucher** reports are grouped by department with totals, filtered by salary month or date range. **Loan Report** lists outstanding balances, next due month and installments left, optionally with each schedule. **JV Report** shows lines, totals and an account filter. **Day Book** shows every voucher by date, with journal lines for ADV/LOAN/JV and salary adjustments for INC/PEN/OT, plus day totals and a summary by type. The **Voucher slip** (F9 on any voucher) prints the amount in figures and in words (lakh/crore) with signature blocks, and includes the repayment schedule for loans and the lines for JVs.
+
+### API endpoints added in batch 3
+
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/api/vouchers/{adv\|inc\|pen\|ot}?month=&from=&to=&status=&q=&employee_id=` · `/api/vouchers/{type}/{id}` | vouchers.view |
+| POST / PUT | `/api/vouchers/{type}` · `/api/vouchers/{type}/{id}` `{vr_date, employee_id, deduct_month (YYYY-MM), amount, ot_hours?, pay_account_id?, remarks, post?}` | vouchers.add / edit |
+| GET | `/api/loans?status=&q=` · `/api/loans/{voucher id}` (summary, installments, journal) | loans.view |
+| POST / PUT | `/api/loans` · `/api/loans/{id}` `{vr_date, employee_id, amount, installment, start_month, pay_account_id, remarks, post?}` | loans.add / edit |
+| POST | `/api/loans/{id}/installments/{iid}` `{action: skip\|adjust\|reset, amount?}` | loans.edit |
+| GET / POST / PUT | `/api/journal` · `/api/journal/{id}` `{vr_date, remarks, lines:[{account_id, employee_id?, debit, credit, narration}], post?}` | journal.* |
+| POST | `/api/voucher-actions/{id}/post` · `/api/voucher-actions/{id}/unpost` | `<type module>.post` |
+| DELETE | `/api/voucher-actions/{id}` (draft: delete, posted: soft delete) | `<type module>.delete` |
+| GET | `/api/voucher-nav/{TYPE}?vr_no=&dir=prev\|next` | `<type module>.view` |
+| CRUD | `/api/accounts` | journal.* |
+| GET | `report.php?r=vouchers&type=ADV\|INC\|PEN\|OT` · `r=loans` · `r=journal` · `r=daybook` · `r=voucher&id=` | vouchers / loans / journal .print |
+
+### Manual test checklist (batch 3)
+
+1. Run `php migrations/migrate.php --seed`. The demo includes 3 advances, 2 incentives, 1 penalty, 1 OT voucher, 2 loans and 1 JV.
+2. **Advance Voucher**: F5, employee code `0006` + Enter, amount 7500, then *Save & Post*. You get `ADV-0005`, posted. Edit is disabled and **Unpost** re-enables it. A decimal amount (50.5) is rejected. **F9** prints the slip with "Rupees Seven Thousand Five Hundred Only".
+3. **Loan Voucher**: open `LN-0002`. Skip Oct 2026 and the balance moves to Apr/May 2027. Adjust Dec to 10,000 and later months are re-spread. Adjust to more than the balance and it's refused. Reset puts the month back. A new loan of 10,000 at 3,000 previews "4 installment(s), last Rs 1,000".
+4. **Journal Voucher**: two lines with 1,200 Dr / 1,000 Cr show "Difference 200.00 Dr" and saving is refused. Fix the credit to 1,200 and *Save & Post*.
+5. **Incentive / Penalty / Overtime vouchers**: pick a salary month and post. The OT voucher accepts hours only, a fixed amount only, or both.
+6. **Chart of Accounts**: deleting `1001 Cash in Hand` is refused (system account). A new account can be added and deleted while it has no entries.
+7. Delete a posted advance → soft delete: it disappears from lists and reports, and the deletion is recorded in `audit_log` (the viewer arrives in batch 5).
+8. Reports → Accounts: **Day Book** for 01-09-2026 → today (debits = credits, salary adjustments in their own column), **Loan Report** with schedule, Advance/Incentive/Penalty reports for Sep 2026, JV report.
+9. As `hr`: vouchers and loans are view/print only. As `accounts`: everything in Accounts.
+10. `php tests/run.php` → 26 passed.
+
 ## Notes and open questions
 
-- **Allowances.** Salary Info stores a fixed monthly *allowances* amount, but the specified formula is `Gross = Work Pay + Overtime`, so allowances are **not** added to gross. Should allowances be added to gross, prorated by paid days, or only displayed? This is decided before batch 4.
+- **Payroll decisions (confirmed for batch 4):**
+  - **Paid days from actual hours.** A full Present day counts as 1 day, so the verified examples still hold (e.g. 9,000 ÷ 28 × 14 = 4,500). A half day or short day counts as `worked minutes ÷ shift net minutes`, capped at 1, instead of a fixed ½.
+  - **Allowances** are added to gross and prorated the same way: `Allowance pay = Allowances ÷ days in month × paid days`. Gross = Work Pay + Allowance pay + Overtime.
 - **Statutory rates and tax slabs** in `006_base_data.sql` are clearly marked *samples* (EOBI 1%/5% of minimum wage, PESSI/SESSI employer 6%, FY 2025-26 salaried slabs). They are effective-dated rows that admins can edit; check them against current notifications.
 - Islamic holidays in the demo data are approximate (moon sighting).
 - The default weekly rest day is **Sunday**. It can be changed under Holidays or Company Settings, and per shift group.

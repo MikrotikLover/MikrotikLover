@@ -12,6 +12,11 @@ declare(strict_types=1);
  *   report.php?r=overtime&from=&to=&status=approved&mode=detail|summary
  *   report.php?r=late_comers&from=&to=&min_late=&department_id=
  *   report.php?r=leave_register&year=&status=&leave_type_id=
+ *   report.php?r=vouchers&type=ADV|INC|PEN|OT&from=&to=|month=&status=&department_id=
+ *   report.php?r=loans&status=active|closed&detail=1
+ *   report.php?r=journal&from=&to=&account_id=&id=
+ *   report.php?r=daybook&from=&to=&types=ADV,LOAN,...&include_drafts=1
+ *   report.php?r=voucher&id=   (printable voucher slip)
  */
 require dirname(__DIR__) . '/app/bootstrap.php';
 
@@ -30,6 +35,11 @@ const REPORTS = [
     'overtime'            => Reports\OvertimeReport::class,
     'late_comers'         => Reports\LateComersReport::class,
     'leave_register'      => Reports\LeaveReport::class,
+    'vouchers'            => Reports\VoucherListReport::class,
+    'loans'               => Reports\LoanReport::class,
+    'journal'             => Reports\JournalReport::class,
+    'daybook'             => Reports\DayBookReport::class,
+    'voucher'             => Reports\VoucherSlipReport::class,
 ];
 
 Http::noStore();
@@ -52,17 +62,21 @@ if (!$class) {
 try {
     /** @var Reports\Report $report */
     $report = new $class();
+    $report->load(new Request()); // some reports derive their permission from the request (voucher slip)
     [$module, $action] = $report->permission();
     if (!Auth::can($module, $action) && !(Auth::can('reports', 'print') && Auth::can($module, 'view'))) {
         http_response_code(403);
         exit('You do not have permission to print this report.');
     }
-    $report->load(new Request());
     if (($_GET['format'] ?? '') === 'csv' && $report->supportsCsv()) {
         $report->outputCsv($key . '_' . date('Ymd_His') . '.csv');
     }
     header('Content-Type: text/html; charset=utf-8');
     echo $report->renderHtml();
+} catch (App\ApiException $e) {
+    http_response_code($e->status());
+    header('Content-Type: text/plain; charset=utf-8');
+    echo $e->getMessage();
 } catch (Throwable $e) {
     error_log('[report] ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
     http_response_code(500);

@@ -3,7 +3,7 @@
 import { h, openReport, today, TYPES } from '../core/dom.js';
 import { Form } from '../core/form.js';
 import { setKeys } from '../core/keys.js';
-import { can, opt } from '../core/store.js';
+import { can, lookups, opt } from '../core/store.js';
 
 const month = () => today().slice(0, 7);
 const firstOfMonth = () => today().slice(0, 8) + '01';
@@ -58,6 +58,27 @@ const REPORTS = [
     fields: [{ name: 'year', label: 'Year', type: 'number', required: true, span: 3, min: 2000, max: 2100 }, dept(),
       { name: 'status', label: 'Status', type: 'select', span: 3, blankLabel: 'All', options: ['approved', 'pending', 'rejected', 'cancelled'].map((s) => ({ value: s, label: s[0].toUpperCase() + s.slice(1) })) }],
     defaults: () => ({ year: Number(today().slice(0, 4)), status: 'approved' }) },
+  { group: 'Accounts', key: 'vouchers', title: 'Advance / Incentive / Penalty / Overtime Vouchers', perm: ['vouchers', 'print'], csv: true,
+    desc: 'Vouchers grouped by department with totals. Pick the salary month, or leave it empty and use the date range.',
+    fields: [{ name: 'type', label: 'Voucher', type: 'select', required: true, span: 3,
+      options: [{ value: 'ADV', label: 'Advance salary' }, { value: 'INC', label: 'Incentive' }, { value: 'PEN', label: 'Penalty' }, { value: 'OT', label: 'Overtime voucher' }] },
+      { name: 'month', label: 'Salary month', type: 'month', span: 3 }, ...range.map((f) => ({ ...f, span: 3 })), dept(),
+      { name: 'status', label: 'Status', type: 'select', span: 3, blankLabel: 'All', options: [{ value: 'posted', label: 'Posted' }, { value: 'draft', label: 'Draft' }] }],
+    defaults: () => ({ type: 'ADV', month: month(), status: 'posted', from: firstOfMonth(), to: today() }) },
+  { group: 'Accounts', key: 'loans', title: 'Loan Report (outstanding balances)', perm: ['loans', 'print'], csv: true,
+    desc: 'Posted loans with amount, installment, deducted, balance, next due month; optional installment schedule per loan.',
+    fields: [{ name: 'status', label: 'Loans', type: 'select', span: 3, blankLabel: 'All', options: [{ value: 'active', label: 'Active (outstanding)' }, { value: 'closed', label: 'Closed' }] }, dept(),
+      { name: 'detail', label: 'Show installment schedule', type: 'checkbox', span: 3 }],
+    defaults: { status: 'active' } },
+  { group: 'Accounts', key: 'journal', title: 'Journal Voucher Report', perm: ['journal', 'print'], csv: true,
+    desc: 'Journal vouchers with their debit / credit lines and totals.',
+    fields: [...range, { name: 'account_id', label: 'Account', type: 'select', span: 3, blankLabel: 'All', options: () => lookups.accounts.map((a) => ({ value: a.id, label: `${a.code} - ${a.name}` })) },
+      { name: 'status', label: 'Status', type: 'select', span: 3, blankLabel: 'All', options: [{ value: 'posted', label: 'Posted' }, { value: 'draft', label: 'Draft' }] }],
+    defaults: () => ({ from: firstOfMonth(), to: today(), status: 'posted' }) },
+  { group: 'Accounts', key: 'daybook', title: 'Day Book', perm: ['vouchers', 'print'], csv: true,
+    desc: 'Every voucher by date: journal lines for advances, loans and JVs; salary adjustments for incentives, penalties and overtime.',
+    fields: [...range, { name: 'include_drafts', label: 'Include drafts', type: 'checkbox', span: 3 }],
+    defaults: () => ({ from: firstOfMonth(), to: today() }) },
 ];
 
 export function canAnyReport() {
@@ -78,7 +99,7 @@ export default {
       form.values = typeof r.defaults === 'function' ? r.defaults() : (r.defaults || {});
       const params = () => {
         const v = form.values;
-        if (v.include_inactive === 0) delete v.include_inactive;
+        for (const k of ['include_inactive', 'include_drafts', 'detail']) if (v[k] === 0) delete v[k];
         return v;
       };
       const show = () => openReport(r.key, params());

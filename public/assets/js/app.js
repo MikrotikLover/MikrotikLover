@@ -28,6 +28,15 @@ const NAV = [
     { path: '/attendance/import', label: 'Machine Log Import', ico: '⇩', perm: ['attendance', 'add'] },
     { path: '/devices', label: 'Devices, Kiosk & TV', ico: '⌁', perm: ['devices', 'view'] },
   ] },
+  { group: 'Accounts', items: [
+    { path: '/vouchers/adv', label: 'Advance Voucher', ico: '₨', perm: ['vouchers', 'view'] },
+    { path: '/loans', label: 'Loan Voucher', ico: '⧉', perm: ['loans', 'view'] },
+    { path: '/vouchers/inc', label: 'Incentive Voucher', ico: '+', perm: ['vouchers', 'view'] },
+    { path: '/vouchers/pen', label: 'Penalty Voucher', ico: '−', perm: ['vouchers', 'view'] },
+    { path: '/vouchers/ot', label: 'Overtime Voucher', ico: '⏲', perm: ['vouchers', 'view'] },
+    { path: '/journal', label: 'Journal Voucher', ico: '⇄', perm: ['journal', 'view'] },
+    { path: '/accounts', label: 'Chart of Accounts', ico: '☷', perm: ['journal', 'view'] },
+  ] },
   { group: 'Reports', items: [
     { path: '/reports', label: 'Reports & ID Cards', ico: '⎙', perm: ['reports', 'view'] },
   ] },
@@ -57,6 +66,10 @@ route('/attendance/import', page('attendance-import'), { title: 'Machine Log Imp
 route('/overtime', page('overtime'), { title: 'Overtime Approval', perm: ['overtime', 'view'] });
 route('/leaves', page('leave'), { title: 'Employee Leave Register', perm: ['leave', 'view'] });
 route('/leave-types', page('masters'), { title: 'Leave Types', perm: ['leave', 'view'], kind: 'leave_types' });
+route('/vouchers/:type', page('vouchers'), { title: 'Voucher', perm: ['vouchers', 'view'] });
+route('/loans', page('loans'), { title: 'Loan Voucher', perm: ['loans', 'view'] });
+route('/journal', page('journal'), { title: 'Journal Voucher', perm: ['journal', 'view'] });
+route('/accounts', page('masters'), { title: 'Chart of Accounts', perm: ['journal', 'view'], kind: 'accounts' });
 route('/devices', page('masters'), { title: 'Attendance Devices, Kiosk & TV', perm: ['devices', 'view'], kind: 'devices' });
 route('/users', page('users'), { title: 'Users', perm: ['users', 'view'] });
 route('/roles', page('roles'), { title: 'Roles & Permissions', perm: ['users', 'view'] });

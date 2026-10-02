@@ -18,6 +18,7 @@ final class LookupController
             'shifts'       => Database::all('SELECT id, code, name, start_time, end_time, is_overnight, break_minutes, duration_minutes, is_active FROM shifts ORDER BY start_time'),
             'shift_groups' => Database::all('SELECT id, code, name, is_active FROM shift_groups ORDER BY name'),
             'roles'        => Database::all('SELECT id, name FROM roles ORDER BY id'),
+            'accounts'     => Database::all('SELECT id, code, name, account_type, system_key, is_active FROM accounts ORDER BY code'),
             'settings'     => [
                 'weekly_rest_days' => Settings::get('weekly_rest_days', [0]),
                 'salary_day_basis' => Settings::get('salary_day_basis', 'calendar'),

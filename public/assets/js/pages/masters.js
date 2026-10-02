@@ -167,6 +167,25 @@ KINDS.leave_types = {
   ],
   defaults: { is_active: 1, is_paid: 1, yearly_quota: 0 },
 };
+KINDS.accounts = {
+  endpoint: 'accounts', module: 'journal', singular: 'Account',
+  columns: [
+    { key: 'code', label: 'Code', sortable: true },
+    { key: 'name', label: 'Account', sortable: true },
+    { key: 'account_type', label: 'Type', sortable: true, render: (r) => r.account_type[0].toUpperCase() + r.account_type.slice(1) },
+    { key: 'system_key', label: 'Used by', render: (r) => (r.system_key ? h('span', { class: 'badge info' }, r.system_key.replace(/_/g, ' ')) : ''), print: (r) => r.system_key || '' },
+    { key: 'balance', label: 'Balance (Dr+/Cr−)', align: 'right', render: (r) => Number(r.balance).toLocaleString('en-PK', { maximumFractionDigits: 0 }) },
+    { key: 'is_active', label: 'Status', render: (r) => yesNo(r.is_active), print: (r) => (Number(r.is_active) ? 'Active' : 'Inactive') },
+  ],
+  fields: [
+    { name: 'code', label: 'Code', required: true, span: 3, maxlength: 20 },
+    { name: 'name', label: 'Account name', required: true, span: 6, maxlength: 100 },
+    { name: 'is_active', label: 'Active', type: 'checkbox', span: 3 },
+    { name: 'account_type', label: 'Type', type: 'select', required: true, span: 4,
+      options: ['asset', 'liability', 'equity', 'income', 'expense'].map((t) => ({ value: t, label: t[0].toUpperCase() + t.slice(1) })) },
+  ],
+  defaults: { is_active: 1, account_type: 'expense' },
+};
 KINDS.devices = {
   endpoint: 'devices', module: 'devices', singular: 'Device',
   columns: [

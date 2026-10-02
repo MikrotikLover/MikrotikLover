@@ -13,24 +13,28 @@ use App\ApiException;
 use App\Auth;
 use App\Http;
 use App\Request;
+use App\Controllers\AccountController;
 use App\Controllers\AttendanceController;
 use App\Controllers\AttendanceVoucherController;
 use App\Controllers\AuthController;
 use App\Controllers\DeviceController;
 use App\Controllers\LeaveController;
 use App\Controllers\LeaveTypeController;
+use App\Controllers\LoanController;
 use App\Controllers\OvertimeController;
 use App\Controllers\DashboardController;
 use App\Controllers\DepartmentController;
 use App\Controllers\DesignationController;
 use App\Controllers\EmployeeController;
 use App\Controllers\HolidayController;
+use App\Controllers\JournalController;
 use App\Controllers\LookupController;
 use App\Controllers\RoleController;
 use App\Controllers\SettingsController;
 use App\Controllers\ShiftController;
 use App\Controllers\ShiftGroupController;
 use App\Controllers\UserController;
+use App\Controllers\VoucherController;
 
 /** Standard CRUD routes for a master table. */
 function resource(string $base, string $controller, string $module): array
@@ -95,6 +99,28 @@ $routes = array_merge(
         ['POST',   '/overtime/decide',   [OvertimeController::class, 'decide'],  'overtime.post'],
         ['DELETE', '/overtime/{id}',     [OvertimeController::class, 'destroy'], 'overtime.delete'],
 
+        // Accounts: shared voucher actions (permission checked per voucher type in the controller)
+        ['POST',   '/voucher-actions/{id}/post',   [VoucherController::class, 'post'],     'auth'],
+        ['POST',   '/voucher-actions/{id}/unpost', [VoucherController::class, 'unpost'],   'auth'],
+        ['DELETE', '/voucher-actions/{id}',        [VoucherController::class, 'destroy'],  'auth'],
+        ['GET',    '/voucher-nav/{type}',          [VoucherController::class, 'neighbor'], 'auth'],
+        // Employee vouchers: type = adv | inc | pen | ot
+        ['GET',    '/vouchers/{type}',      [VoucherController::class, 'index'],  'vouchers.view'],
+        ['GET',    '/vouchers/{type}/{id}', [VoucherController::class, 'show'],   'vouchers.view'],
+        ['POST',   '/vouchers/{type}',      [VoucherController::class, 'store'],  'vouchers.add'],
+        ['PUT',    '/vouchers/{type}/{id}', [VoucherController::class, 'update'], 'vouchers.edit'],
+        // Loans ({id} = loan voucher id)
+        ['GET',    '/loans',                         [LoanController::class, 'index'],       'loans.view'],
+        ['GET',    '/loans/{id}',                    [LoanController::class, 'show'],        'loans.view'],
+        ['POST',   '/loans',                         [LoanController::class, 'store'],       'loans.add'],
+        ['PUT',    '/loans/{id}',                    [LoanController::class, 'update'],      'loans.edit'],
+        ['POST',   '/loans/{id}/installments/{iid}', [LoanController::class, 'installment'], 'loans.edit'],
+        // Journal vouchers
+        ['GET',    '/journal',      [JournalController::class, 'index'],  'journal.view'],
+        ['GET',    '/journal/{id}', [JournalController::class, 'show'],   'journal.view'],
+        ['POST',   '/journal',      [JournalController::class, 'store'],  'journal.add'],
+        ['PUT',    '/journal/{id}', [JournalController::class, 'update'], 'journal.edit'],
+
         ['GET',    '/leaves/balance',    [LeaveController::class, 'balance'],    'leave.view'],
         ['POST',   '/leaves/{id}/status', [LeaveController::class, 'status'],    'leave.post'],
     ],
@@ -106,6 +132,7 @@ $routes = array_merge(
     resource('/holidays',     HolidayController::class,     'holidays'),
     resource('/users',        UserController::class,        'users'),
     resource('/devices',      DeviceController::class,      'devices'),
+    resource('/accounts',     AccountController::class,     'journal'),
     resource('/leave-types',  LeaveTypeController::class,   'leave'),
     resource('/leaves',       LeaveController::class,       'leave'),
     resource('/roles',        RoleController::class,        'users'),
