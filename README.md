@@ -8,8 +8,8 @@ Timezone **Asia/Karachi**, currency **PKR**.
 
 | Batch | Scope | Status |
 |---|---|---|
-| 1 | DB schema, folder structure, auth & roles, `enterNav.js` | ✅ this delivery |
-| 2 | Master data CRUD, design library, ink master | pending |
+| 1 | DB schema, folder structure, auth & roles, `enterNav.js` | ✅ delivered |
+| 2 | Master data CRUD, design library, ink master | ✅ delivered |
 | 3 | Inward Gate Pass, Stock Transfer, Stock Consumption, Ink Loading | pending |
 | 4 | Estimation, BOM Production, Manual Production | pending |
 | 5 | Delivery Chalan + print layouts | pending |
@@ -28,15 +28,20 @@ public_html/                 ← deploy folder (this repository)
 │   ├── routes.php           route table (auth, perm, csrf per route)
 │   ├── core/                Config, DB (PDO), Router, Request, Response,
 │   │                        Session, Csrf, Auth, Audit, Validator, Lang, Logger
-│   └── controllers/         Auth, Setup, User, Role, Audit, Health
+│   ├── controllers/         Auth, Setup, User, Role, Audit, Health,
+│   │                        MasterController (base) → Party, Warehouse, Unit, Item,
+│   │                        InkColour, Machine, Design; Settings, Lookup
+│   └── services/            Settings, InkService (ink ml/m + ink cost per meter)
 ├── assets/
 │   ├── css/app.css
 │   └── js/
 │       ├── app.js           boot + hash router + top bar + WhatsApp button
-│       ├── core/            enterNav.js, searchSelect.js, api.js, i18n.js,
-│       │                    session.js, ui.js, icons.js
+│       ├── core/            enterNav.js, searchSelect.js, lineGrid.js, formKit.js,
+│       │                    lookups.js, api.js, i18n.js, session.js, ui.js, icons.js
 │       ├── i18n/            en.js, ur.js
-│       └── views/           login, setup, home, users, userForm, roles, audit, profile
+│       └── views/           login, setup, home, users, userForm, roles, audit, profile,
+│                            masterList / masterForm + masters/config.js, designs,
+│                            designForm, settings
 ├── database/schema.sql      full schema for ALL batches (33 tables + stock view)
 ├── database/seed.sql        roles, permission matrix, units, warehouses, ink colours, settings
 └── tests/                   api_smoke.sh, enternav.html + enternav.test.cjs, app_e2e.test.cjs
@@ -78,6 +83,27 @@ No CLI, cron, `proc_open` or queues are used.
   failed logins, password changes and permission changes — written in the same DB transaction.
 - Soft delete (`deleted_at`, `deleted_by`) on masters and users; vouchers also have
   `status = cancelled` with reason.
+
+## Master data (Batch 2)
+
+| Screen | Route | Notes |
+|---|---|---|
+| Parties | `#/m/parties` | customer / supplier / fabric owner (job work) flags, Urdu name |
+| Items | `#/m/items` | type-dependent fields: fabric (quality, GSM, width), ink, paper, chemical, other |
+| Ink master | `#/m/inks` | ink items: colour, brand, type, liter/ml unit, **rate per liter**, reorder level |
+| Ink colours | `#/m/ink_colours` | C, M, Y, K + specials with swatch colour |
+| Machines | `#/m/machines` | type, speed m/hr, hourly running cost, floor warehouse |
+| Warehouses / Units | `#/m/warehouses`, `#/m/units` | unit conversion factor to base unit |
+| Design library | `#/designs` | image (stored in `fabric_private/uploads/designs`, served only to logged-in users), repeat size, ink per colour, BOM per meter, live costing |
+| Settings | `#/settings` | company details, WhatsApp number, ink calculation constants |
+
+- Codes left blank are numbered automatically (`P0001`, `WH0001`, `GF0001`, `INK0001`, `D0001` …).
+- Delete is a soft delete and is refused (409) while a record is referenced; mark it inactive instead.
+- **Ink per design:** `ml/m = ml_per_m²_at_100% × coverage% × width(m) × GSM ÷ reference GSM`
+  (constants in Settings). Tick *Manual* on a colour to enter ml/m measured on the machine.
+  Ink cost per meter uses the chosen ink item, or the active ink of that colour for the
+  design's process. `InkService::designInkCost()` is reused by estimation/production costing.
+- Images are re-encoded with GD (strips metadata), resized to ≤ 2400 px, 360 px JPEG thumbnail.
 
 ## Database rules (implemented in schema, used from Batch 3)
 
@@ -122,4 +148,6 @@ php -S 127.0.0.1:8080 -t .                       # with FPMS_PRIVATE_DIR pointin
 SETUP_KEY=... tests/api_smoke.sh                 # 34 API checks (fresh DB)
 NODE_PATH=$(npm root -g) node tests/enternav.test.cjs        # 34 keyboard checks (Playwright)
 SETUP_KEY=... NODE_PATH=$(npm root -g) node tests/app_e2e.test.cjs  # 24 SPA end-to-end checks (fresh DB)
+ADMIN_PASS=... tests/api_masters.sh               # 58 master-data / design / image API checks
+ADMIN_PASS=... NODE_PATH=$(npm root -g) node tests/masters_e2e.test.cjs  # 32 keyboard-driven UI checks
 ```

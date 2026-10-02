@@ -19,6 +19,12 @@ import userFormView from './views/userForm.js';
 import rolesView from './views/roles.js';
 import auditView from './views/audit.js';
 import profileView from './views/profile.js';
+import designsView from './views/designs.js';
+import designFormView from './views/designForm.js';
+import settingsView from './views/settings.js';
+import { MASTERS } from './views/masters/config.js';
+import { masterListView } from './views/masterList.js';
+import { masterFormView } from './views/masterForm.js';
 
 const routes = [
   { path: '/login', view: loginView, public: true },
@@ -30,6 +36,16 @@ const routes = [
   { path: '/roles', view: rolesView, perm: 'roles.manage' },
   { path: '/audit', view: auditView, perm: 'audit.view' },
   { path: '/profile', view: profileView },
+  { path: '/designs', view: designsView, perm: 'designs.view' },
+  { path: '/designs/new', view: designFormView, perm: 'designs.manage' },
+  { path: '/designs/:id', view: designFormView, perm: 'designs.view' },
+  { path: '/settings', view: settingsView, perm: 'settings.manage' },
+  // Master data: #/m/<key>, #/m/<key>/new, #/m/<key>/<id>
+  ...Object.entries(MASTERS).flatMap(([key, cfg]) => [
+    { path: `/m/${key}`, view: masterListView(key, cfg), perm: cfg.perm.view },
+    { path: `/m/${key}/new`, view: masterFormView(key, cfg), perm: cfg.perm.manage },
+    { path: `/m/${key}/:id`, view: masterFormView(key, cfg), perm: cfg.perm.manage },
+  ]),
 ];
 
 const appEl = document.getElementById('app');

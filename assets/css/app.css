@@ -357,6 +357,92 @@ html[lang="ur"] .kb-hint { font-family: var(--font-ur), var(--font); }
   .filter-form { grid-template-columns: repeat(5, 1fr); }
 }
 
+
+/* =====================================================================
+   Batch 2 — master data, line grids, design library
+   ===================================================================== */
+
+.swatch { flex: none; width: 44px; height: 44px; border-radius: 12px; border: 1px solid rgba(0,0,0,.12); box-shadow: inset 0 0 0 3px rgba(255,255,255,.6); }
+.link-chip { display: inline-flex; align-items: center; gap: 4px; margin: 0 4px 12px; font-size: .92rem; color: var(--accent); text-decoration: none; }
+.field-check { justify-content: center; }
+fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 12px; }
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.design-form, .settings-form { display: grid; gap: 12px; }
+.design-form .form-grid, .settings-form .form-grid { display: grid; gap: 14px; }
+input[type="color"] { padding: 4px; height: var(--tap); cursor: pointer; }
+
+/* ---- line grid (table on wide screens, stacked cards on phones) */
+.grid-wrap { display: grid; gap: 8px; min-width: 0; }
+.line-grid { width: 100%; border-collapse: collapse; }
+.line-grid th { font-size: .8rem; font-weight: 600; color: var(--muted); text-align: start; padding: 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.line-grid td { padding: 4px; vertical-align: top; }
+.line-grid tbody tr + tr td { border-top: 1px dashed var(--line); }
+.line-grid .num, .line-grid .num input { text-align: end; }
+.line-grid .ln { width: 28px; color: var(--muted); font-size: .85rem; padding-top: 16px; text-align: center; }
+.line-grid .act { width: 48px; }
+.line-grid output { display: block; padding: 12px 6px; min-height: var(--tap); font-variant-numeric: tabular-nums; }
+.line-grid td input[type="checkbox"] { margin: 13px auto; display: block; }
+.line-grid tfoot td { border-top: 2px solid var(--line); padding: 10px 6px; }
+.line-grid td .field-error { margin-top: 2px; }
+.grid-add { justify-self: start; }
+
+@media (max-width: 719px) {
+  .line-grid thead { display: none; }
+  .line-grid, .line-grid tbody, .line-grid tfoot { display: block; }
+  .line-grid tr { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; padding: 12px 0; position: relative; }
+  .line-grid tbody tr + tr { border-top: 1px dashed var(--line); }
+  .line-grid tbody tr + tr td { border-top: 0; }
+  .line-grid td { padding: 0; }
+  .line-grid td[data-label]::before { content: attr(data-label); display: block; font-size: .78rem; color: var(--muted); margin-bottom: 2px; }
+  .line-grid td.ln { position: absolute; inset-inline-end: 44px; top: 4px; padding: 0; width: auto; }
+  .line-grid td.act { position: absolute; inset-inline-end: 0; top: -2px; width: auto; }
+  .line-grid td[data-label]:first-of-type, .line-grid td.col-item_id, .line-grid td.col-ink_colour_id { grid-column: 1 / -1; padding-inline-end: 72px; }
+  .line-grid td.col-item_id { padding-inline-end: 0; }
+  .line-grid output { min-height: 0; padding: 10px 0; }
+  .line-grid td input[type="checkbox"] { margin: 10px 0; }
+  .line-grid .num, .line-grid td[data-label]::before { text-align: start; }
+  .line-grid .num input { text-align: start; }
+  .line-grid tfoot tr { border-top: 2px solid var(--line); grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); padding: 10px 0; }
+  .line-grid tfoot td { border-top: 0; padding: 0; }
+  .line-grid tfoot td.ln, .line-grid tfoot td.act, .line-grid tfoot td:not([data-label]):not(:nth-child(2)) { display: none; }
+}
+
+/* ---- design library */
+.toolbar-wide { grid-template-columns: 1fr; }
+.gallery { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+.design-card { position: relative; overflow: hidden; display: flex; flex-direction: column; }
+.design-card.is-muted { opacity: .6; }
+.design-thumb { display: block; aspect-ratio: 4 / 3; background: var(--icon-bg); }
+.design-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb-empty { display: grid; place-items: center; height: 100%; color: var(--muted); }
+.design-body { padding: 10px 12px 12px; }
+.design-body .row-title { font-size: .95rem; }
+.design-del { position: absolute; top: 6px; inset-inline-end: 6px; background: rgba(255,255,255,.9); min-width: 40px; min-height: 40px; }
+
+.image-box { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.image-preview { width: 140px; height: 105px; border-radius: 12px; background: var(--icon-bg); display: grid; place-items: center; color: var(--muted); overflow: hidden; border: 1px solid var(--line); }
+.image-preview img { width: 100%; height: 100%; object-fit: cover; }
+.image-actions { display: grid; gap: 6px; justify-items: start; }
+.file-btn { cursor: pointer; }
+
+.cost-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cost-summary div { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: var(--radius-sm); background: #f8fafc; border: 1px solid var(--line); }
+.cost-summary span { font-size: .8rem; color: var(--muted); }
+.cost-summary strong { font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+.cost-summary .total { grid-column: 1 / -1; background: var(--primary); color: #fff; border-color: var(--primary); }
+.cost-summary .total span { color: #cbd5e1; }
+
+@media (min-width: 640px) {
+  .design-form .form-grid, .settings-form .form-grid { grid-template-columns: 1fr 1fr; }
+  .toolbar-wide { grid-template-columns: 1fr auto auto auto auto; align-items: center; }
+  .cost-summary { grid-template-columns: repeat(5, 1fr); }
+  .cost-summary .total { grid-column: auto; }
+  .gallery { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+}
+@media (min-width: 960px) {
+  .design-form .form-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
 @media print {
   .topbar, .wa-fab, #toasts, .lang-fab, .kb-hint, .form-actions, .row-actions, .pager { display: none !important; }
   body { background: #fff; }

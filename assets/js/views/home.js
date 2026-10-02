@@ -31,16 +31,18 @@ const REPORTS = [
 ];
 
 const SETUP = [
+  { key: 'parties', icon: 'briefcase', perm: 'parties.view', href: '#/m/parties' },
+  { key: 'items', icon: 'box', perm: 'items.view', href: '#/m/items' },
+  { key: 'designs', icon: 'image', perm: 'designs.view', href: '#/designs' },
+  { key: 'inks', icon: 'drop', perm: ['inks.view', 'items.view'], href: '#/m/inks' },
+  { key: 'ink_colours', icon: 'drop', perm: 'inks.view', href: '#/m/ink_colours' },
+  { key: 'machines', icon: 'printer', perm: 'machines.view', href: '#/m/machines' },
+  { key: 'warehouses', icon: 'warehouse', perm: 'warehouses.view', href: '#/m/warehouses' },
+  { key: 'units', icon: 'ruler', perm: 'units.view', href: '#/m/units' },
   { key: 'users', icon: 'users', perm: 'users.view', href: '#/users' },
   { key: 'roles', icon: 'shield', perm: 'roles.manage', href: '#/roles' },
+  { key: 'settings', icon: 'wrench', perm: 'settings.manage', href: '#/settings' },
   { key: 'audit', icon: 'history', perm: 'audit.view', href: '#/audit' },
-  { key: 'parties', icon: 'briefcase', perm: 'parties.view', batch: 2 },
-  { key: 'warehouses', icon: 'warehouse', perm: 'warehouses.view', batch: 2 },
-  { key: 'items', icon: 'box', perm: 'items.view', batch: 2 },
-  { key: 'units', icon: 'ruler', perm: 'units.view', batch: 2 },
-  { key: 'designs', icon: 'image', perm: 'designs.view', batch: 2 },
-  { key: 'machines', icon: 'printer', perm: 'machines.view', batch: 2 },
-  { key: 'inks', icon: 'drop', perm: 'inks.view', batch: 2 },
 ];
 
 function card({ href, iconName, title, desc, batch }) {

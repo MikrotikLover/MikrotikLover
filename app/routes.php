@@ -34,4 +34,28 @@ $r->put('roles/{id}/permissions', [RoleController::class, 'updatePermissions'], 
 // --- Audit --------------------------------------------------------------
 $r->get('audit', [AuditController::class, 'index'], ['perm' => 'audit.view']);
 
+// --- Master data (Batch 2) ---------------------------------------------
+$crud = static function (Router $r, string $path, string $class, string|array $view, string|array $manage): void {
+    $r->get($path, [$class, 'index'], ['perm' => $view]);
+    $r->post($path, [$class, 'store'], ['perm' => $manage]);
+    $r->get("$path/{id}", [$class, 'show'], ['perm' => $view]);
+    $r->put("$path/{id}", [$class, 'update'], ['perm' => $manage]);
+    $r->delete("$path/{id}", [$class, 'destroy'], ['perm' => $manage]);
+};
+$crud($r, 'units', UnitController::class, 'units.view', 'units.manage');
+$crud($r, 'warehouses', WarehouseController::class, 'warehouses.view', 'warehouses.manage');
+$crud($r, 'parties', PartyController::class, 'parties.view', 'parties.manage');
+$crud($r, 'machines', MachineController::class, 'machines.view', 'machines.manage');
+$crud($r, 'ink-colours', InkColourController::class, 'inks.view', 'inks.manage');
+// Items double as the Ink Master (item_type=ink); ink-vs-other rights are checked per record.
+$crud($r, 'items', ItemController::class, ['items.view', 'inks.view'], ['items.manage', 'inks.manage']);
+$crud($r, 'designs', DesignController::class, 'designs.view', 'designs.manage');
+$r->get('designs/{id}/image', [DesignController::class, 'image'], ['perm' => 'designs.view']);
+$r->post('designs/{id}/image', [DesignController::class, 'uploadImage'], ['perm' => 'designs.manage']);
+$r->delete('designs/{id}/image', [DesignController::class, 'deleteImage'], ['perm' => 'designs.manage']);
+
+$r->get('lookups', [LookupController::class, 'index']);
+$r->get('settings', [SettingsController::class, 'index'], ['perm' => 'settings.manage']);
+$r->put('settings', [SettingsController::class, 'update'], ['perm' => 'settings.manage']);
+
 return $r;

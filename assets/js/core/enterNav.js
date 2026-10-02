@@ -368,8 +368,8 @@ class EnterNavController {
       const bracket = parts[0] + parts.slice(1).map((p) => `[${p}]`).join('');
       el = f.querySelector(`[name="${esc(bracket)}"]`);
       if (!el && /^\d+$/.test(parts[1] || '')) {
-        // grid convention: row index + column name inside [data-row]
-        const grid = f.querySelector(this.opts.gridSelector);
+        // grid convention "<grid>.<row>.<column>": grid by data-grid-name (else the first grid)
+        const grid = f.querySelector(`${this.opts.gridSelector}[data-grid-name="${esc(parts[0])}"]`) || f.querySelector(this.opts.gridSelector);
         const row = grid ? this._rows(grid)[Number(parts[1])] : null;
         if (row && parts[2]) el = row.querySelector(`[name="${esc(parts[2])}"], [data-col="${esc(parts[2])}"]`);
       }

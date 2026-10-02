@@ -30,7 +30,7 @@ export function onApiEvent(name, fn) {
   handlers[name] = fn;
 }
 
-async function request(method, route, { body, query, retry = true } = {}) {
+async function request(method, route, { body, query, form, retry = true } = {}) {
   const params = new URLSearchParams({ r: route });
   if (query) {
     for (const [k, v] of Object.entries(query)) {
@@ -39,7 +39,7 @@ async function request(method, route, { body, query, retry = true } = {}) {
   }
   const headers = { Accept: 'application/json', 'X-Lang': getLang() };
   if (csrf) headers['X-CSRF-Token'] = csrf;
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (body !== undefined && !form) headers['Content-Type'] = 'application/json';
 
   let res;
   try {
@@ -48,7 +48,7 @@ async function request(method, route, { body, query, retry = true } = {}) {
       headers,
       credentials: 'same-origin',
       cache: 'no-store',
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: form || (body !== undefined ? JSON.stringify(body) : undefined),
     });
   } catch {
     throw new ApiError(t('error.network'), 0, null, 'network');
@@ -68,7 +68,7 @@ async function request(method, route, { body, query, retry = true } = {}) {
 
   if (res.status === 419 && retry) {
     await refreshCsrf();
-    return request(method, route, { body, query, retry: false });
+    return request(method, route, { body, query, form, retry: false });
   }
   if (res.status === 401 && !route.startsWith('auth/') && route !== 'setup/admin') {
     handlers.unauthorized?.(json?.message);
@@ -88,6 +88,8 @@ export const api = {
   post: (route, body = {}) => request('POST', route, { body }),
   put: (route, body = {}) => request('PUT', route, { body }),
   del: (route) => request('DELETE', route, { body: {} }),
+  /** multipart/form-data upload (FormData), e.g. design images */
+  upload: (route, formData) => request('POST', route, { form: formData }),
 };
 
 export default api;

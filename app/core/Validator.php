@@ -8,7 +8,7 @@ declare(strict_types=1);
  * Rules (pipe separated):
  *   required, nullable, string, integer, numeric, bool, email, date,
  *   min:N / max:N (string length), gte:N / lte:N (numeric value),
- *   in:a,b,c, regex:/pattern/, username, password,
+ *   in:a,b,c, regex:/pattern/ (may appear anywhere), username, password,
  *   unique:table,column[,ignoreId], exists:table,column[,soft]
  *
  * Cleaning: strings are trimmed; empty optional values become null;
@@ -154,12 +154,31 @@ final class Validator
     private static function parse(string $ruleString): array
     {
         $rules = [];
-        // regex may contain "|" so it must be the last rule if used.
-        if (preg_match('/(^|\|)regex:(.*)$/', $ruleString, $m, PREG_OFFSET_CAPTURE)) {
-            $rules['regex'] = $m[2][0];
-            $ruleString = substr($ruleString, 0, $m[0][1]);
-        }
-        foreach (array_filter(explode('|', $ruleString)) as $rule) {
+        $len = strlen($ruleString);
+        $i = 0;
+        while ($i < $len) {
+            // regex:/pattern/flags may contain "|" or ":" — read it up to its closing delimiter.
+            if (substr_compare($ruleString, 'regex:', $i, 6) === 0) {
+                $start = $i + 6;
+                $delim = $ruleString[$start] ?? '/';
+                $j = $start + 1;
+                while ($j < $len && !($ruleString[$j] === $delim && $ruleString[$j - 1] !== '\\')) {
+                    $j++;
+                }
+                $j++;
+                while ($j < $len && ctype_alpha($ruleString[$j])) {
+                    $j++; // flags
+                }
+                $rules['regex'] = substr($ruleString, $start, $j - $start);
+                $i = $j + 1; // skip the "|" separator
+                continue;
+            }
+            $next = strpos($ruleString, '|', $i);
+            $rule = $next === false ? substr($ruleString, $i) : substr($ruleString, $i, $next - $i);
+            $i = $next === false ? $len : $next + 1;
+            if ($rule === '') {
+                continue;
+            }
             [$name, $arg] = array_pad(explode(':', $rule, 2), 2, true);
             $rules[$name] = $arg;
         }
