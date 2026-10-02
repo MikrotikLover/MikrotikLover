@@ -10,7 +10,7 @@ Timezone **Asia/Karachi**, currency **PKR**.
 |---|---|---|
 | 1 | DB schema, folder structure, auth & roles, `enterNav.js` | ✅ delivered |
 | 2 | Master data CRUD, design library, ink master | ✅ delivered |
-| 3 | Inward Gate Pass, Stock Transfer, Stock Consumption, Ink Loading | pending |
+| 3 | Inward Gate Pass, Stock Transfer, Stock Consumption, Ink Loading | ✅ delivered |
 | 4 | Estimation, BOM Production, Manual Production | pending |
 | 5 | Delivery Chalan + print layouts | pending |
 | 6 | Reports, exports, dashboard | pending |
@@ -31,17 +31,21 @@ public_html/                 ← deploy folder (this repository)
 │   ├── controllers/         Auth, Setup, User, Role, Audit, Health,
 │   │                        MasterController (base) → Party, Warehouse, Unit, Item,
 │   │                        InkColour, Machine, Design; Settings, Lookup
-│   └── services/            Settings, InkService (ink ml/m + ink cost per meter)
+│   │                        VoucherController (base) → InwardGatePass, StockTransfer,
+│   │                        StockConsumption, InkLoad; Stock (balances)
+│   └── services/            Settings, InkService, Stock (ledger), VoucherNumber
 ├── assets/
 │   ├── css/app.css
 │   └── js/
 │       ├── app.js           boot + hash router + top bar + WhatsApp button
 │       ├── core/            enterNav.js, searchSelect.js, lineGrid.js, formKit.js,
-│       │                    lookups.js, api.js, i18n.js, session.js, ui.js, icons.js
+│       │                    lookups.js, stockCache.js, print.js, api.js, i18n.js,
+│       │                    session.js, ui.js, icons.js
 │       ├── i18n/            en.js, ur.js
 │       └── views/           login, setup, home, users, userForm, roles, audit, profile,
 │                            masterList / masterForm + masters/config.js, designs,
-│                            designForm, settings
+│                            designForm, settings, voucherList / voucherForm /
+│                            voucherView + vouchers/defs.js
 ├── database/schema.sql      full schema for ALL batches (33 tables + stock view)
 ├── database/seed.sql        roles, permission matrix, units, warehouses, ink colours, settings
 └── tests/                   api_smoke.sh, enternav.html + enternav.test.cjs, app_e2e.test.cjs
@@ -105,6 +109,29 @@ No CLI, cron, `proc_open` or queues are used.
   design's process. `InkService::designInkCost()` is reused by estimation/production costing.
 - Images are re-encoded with GD (strips metadata), resized to ≤ 2400 px, 360 px JPEG thumbnail.
 
+## Stock vouchers (Batch 3)
+
+| Voucher | Number | Route | Stock effect |
+|---|---|---|---|
+| Inward Gate Pass | `IGP-2627-00001` | `#/v/igp` | IN to the receiving warehouse (default Grey Store); job-work fabric records the party as lot owner |
+| Stock Transfer | `STV-…` | `#/v/transfer` | OUT of source, IN to destination (default Grey Store → Printing Floor) |
+| Stock Consumption | `SCV-…` | `#/v/consumption` | OUT (inks, paper, chemicals — not fabric) charged to machine / design / party; rate defaults to item rate |
+| Ink Loading | `INK-…` | `#/v/ink_load` | OUT of the machine's floor warehouse; ml converted to the ink's unit (750 ml → 0.75 l) |
+
+- Home → Transactions opens a **new** voucher directly; *All vouchers* opens the register
+  (date range, status, search by number / party / vehicle).
+- Grids show **available stock** (per lot for lot-tracked items) and suggest lots that have stock.
+- After save: toast, the form clears for the next voucher, and a *Last saved · Print* link appears.
+- View: Print (A4 with company header and signature lines), Edit, Cancel (with reason).
+- Edit replaces the voucher's lines and stock rows; Cancel reverses its stock rows and keeps
+  the voucher marked *Cancelled*. Both are refused when stock already used by later
+  vouchers would go negative (e.g. cancelling an IGP whose fabric was transferred).
+- Negative stock is impossible: items are locked `FOR UPDATE` during a save and balances are
+  re-checked after posting, so parallel saves cannot oversell a lot (tested with 6 parallel requests).
+- Lot numbers: only items with *Track lot numbers* keep lots in the ledger; their outflows
+  require a lot. Other items' lot field is skipped by ENTER.
+- Voucher dates cannot be in the future (Asia/Karachi).
+
 ## Database rules (implemented in schema, used from Batch 3)
 
 - `stock_movements` is the only stock ledger (`item, warehouse, lot, qty_in, qty_out,
@@ -150,4 +177,7 @@ NODE_PATH=$(npm root -g) node tests/enternav.test.cjs        # 34 keyboard check
 SETUP_KEY=... NODE_PATH=$(npm root -g) node tests/app_e2e.test.cjs  # 24 SPA end-to-end checks (fresh DB)
 ADMIN_PASS=... tests/api_masters.sh               # 58 master-data / design / image API checks
 ADMIN_PASS=... NODE_PATH=$(npm root -g) node tests/masters_e2e.test.cjs  # 32 keyboard-driven UI checks
+ADMIN_PASS=... tests/api_vouchers.sh              # 52 voucher / stock / concurrency checks
+ADMIN_PASS=... NODE_PATH=$(npm root -g) node tests/vouchers_e2e.test.cjs # 33 voucher UI checks
+# Use PHP_CLI_SERVER_WORKERS=6 with php -S so the concurrency test really runs in parallel.
 ```

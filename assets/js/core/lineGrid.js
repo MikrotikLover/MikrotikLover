@@ -88,7 +88,14 @@ export function lineGrid({ name, columns, minRows = 1, onChange = null, addLabel
           if (c.type === 'display') {
             const out = row.input(c.key);
             if (out) out.textContent = c.format ? c.format(row) ?? '' : '';
-          } else if (typeof c.readonly === 'function' && c.type !== 'lookup') {
+          }
+          if (c.datalist) {
+            const dl = tr.querySelector(`[data-col="${CSS.escape(c.key)}"] + datalist`);
+            const opts = c.datalist(row) || [];
+            const html = opts.map((o) => `<option value="${esc(o.value)}">${esc(o.label || '')}</option>`).join('');
+            if (dl && dl.innerHTML !== html) dl.innerHTML = html;
+          }
+          if (typeof c.readonly === 'function' && c.type !== 'lookup' && c.type !== 'display') {
             const el = row.input(c.key);
             const ro = !!c.readonly(row);
             if (c.type === 'checkbox') el.disabled = ro;
@@ -121,10 +128,11 @@ export function lineGrid({ name, columns, minRows = 1, onChange = null, addLabel
         td.innerHTML = `<input type="checkbox" name="${esc(c.key)}" data-col="${esc(c.key)}" aria-label="${esc(c.label || c.key)}">`;
       } else {
         const num = c.type === 'number';
-        td.innerHTML = `<input ${num ? `type="number" inputmode="decimal" step="${esc(c.step || 'any')}"` : 'type="text"'}
+        const listId = c.datalist ? `dl-${name}-${c.key}-${++dlSeq}` : '';
+        td.innerHTML = `<input ${num ? `type="number" inputmode="decimal" step="${esc(c.step || 'any')}"` : 'type="text"'} ${listId ? `list="${listId}" autocomplete="off"` : ''}
           ${c.min !== undefined ? `min="${esc(c.min)}"` : ''} ${c.max !== undefined ? `max="${esc(c.max)}"` : ''}
           ${c.maxlength ? `maxlength="${esc(c.maxlength)}"` : ''} ${c.required ? 'required' : ''}
-          name="${esc(c.key)}" data-col="${esc(c.key)}" aria-label="${esc(c.label || c.key)}" ${num ? 'dir="ltr"' : ''}>`;
+          name="${esc(c.key)}" data-col="${esc(c.key)}" aria-label="${esc(c.label || c.key)}" ${num || c.ltr ? 'dir="ltr"' : ''}>${listId ? `<datalist id="${listId}"></datalist>` : ''}`;
       }
     });
     columns.forEach((c) => { if (data[c.key] !== undefined && data[c.key] !== null) row.set(c.key, data[c.key]); });
@@ -142,6 +150,8 @@ export function lineGrid({ name, columns, minRows = 1, onChange = null, addLabel
     });
     return row;
   }
+
+  let dlSeq = 0;
 
   function renumber() {
     rows.forEach((r, i) => { r.tr.querySelector('.ln').textContent = String(i + 1); });
@@ -181,9 +191,9 @@ export function lineGrid({ name, columns, minRows = 1, onChange = null, addLabel
     changed();
   }
 
-  /** Non-empty rows as plain objects. */
+  /** Non-empty rows as plain objects; `_row` = grid row index (server errors use it). */
   function getRows() {
-    return rows.filter((r) => !r.isEmpty()).map((r) => r.values());
+    return rows.map((r, i) => ({ r, i })).filter(({ r }) => !r.isEmpty()).map(({ r, i }) => ({ ...r.values(), _row: i }));
   }
 
   /** Rebuild lookup options (e.g. after a header filter changed). */

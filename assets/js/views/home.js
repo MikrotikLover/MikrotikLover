@@ -9,10 +9,10 @@ import { icon } from '../core/icons.js';
  * (so the layout is complete) but not clickable until their batch lands.
  */
 const TRANSACTIONS = [
-  { key: 'igp', icon: 'gate_in', perm: 'igp.view', batch: 3 },
-  { key: 'transfer', icon: 'transfer', perm: 'transfer.view', batch: 3 },
-  { key: 'consumption', icon: 'beaker', perm: 'consumption.view', batch: 3 },
-  { key: 'ink_load', icon: 'drop', perm: 'ink_load.view', batch: 3 },
+  { key: 'igp', icon: 'gate_in', perm: 'igp.view' },
+  { key: 'transfer', icon: 'transfer', perm: 'transfer.view' },
+  { key: 'consumption', icon: 'beaker', perm: 'consumption.view' },
+  { key: 'ink_load', icon: 'drop', perm: 'ink_load.view' },
   { key: 'estimation', icon: 'calculator', perm: 'estimation.view', batch: 4 },
   { key: 'bom_production', icon: 'layers', perm: 'bom_production.view', batch: 4 },
   { key: 'manual_production', icon: 'wrench', perm: 'manual_production.view', batch: 4 },
@@ -75,7 +75,11 @@ export default {
       <section class="section" aria-labelledby="h-tx">
         <h2 class="section-title" id="h-tx">${esc(t('home.transactions'))}</h2>
         <ul class="tile-list card">
-          ${tx.map((x) => card({ href: `#/${x.key}`, iconName: x.icon, title: t(`tx.${x.key}`), desc: t(`tx.${x.key}.desc`), batch: x.batch })).join('')}
+          ${tx.map((x) => card({
+            // Data-entry users land straight on a new voucher; view-only users on the register.
+            href: can(x.perm.replace('.view', '.create')) ? `#/v/${x.key}/new` : `#/v/${x.key}`,
+            iconName: x.icon, title: t(`tx.${x.key}`), desc: t(`tx.${x.key}.desc`), batch: x.batch,
+          })).join('')}
         </ul>
       </section>` : ''}
 

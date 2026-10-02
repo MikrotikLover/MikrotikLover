@@ -86,7 +86,7 @@ final class DesignController extends MasterController
             if (!is_array($line) || self::blank($line['ink_colour_id'] ?? null)) {
                 continue; // empty grid row
             }
-            $p = "inks.$i.";
+            $p = 'inks.' . (isset($line['_row']) && is_numeric($line['_row']) ? (int) $line['_row'] : $i) . '.';
             $colourId = filter_var($line['ink_colour_id'], FILTER_VALIDATE_INT);
             if ($colourId === false || !DB::value('SELECT 1 FROM ink_colours WHERE id = :id AND deleted_at IS NULL', ['id' => $colourId])) {
                 $errors[$p . 'ink_colour_id'] = Lang::t('validation.exists');
@@ -153,7 +153,7 @@ final class DesignController extends MasterController
             if (!is_array($line) || self::blank($line['item_id'] ?? null)) {
                 continue;
             }
-            $p = "bom.$i.";
+            $p = 'bom.' . (isset($line['_row']) && is_numeric($line['_row']) ? (int) $line['_row'] : $i) . '.';
             $itemId = filter_var($line['item_id'], FILTER_VALIDATE_INT);
             $type = $itemId ? DB::value('SELECT item_type FROM items WHERE id = :id AND deleted_at IS NULL', ['id' => $itemId]) : null;
             if ($type === null) {

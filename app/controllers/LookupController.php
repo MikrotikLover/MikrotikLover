@@ -36,7 +36,7 @@ final class LookupController
                 ),
                 'items' => $this->rows(
                     'SELECT i.id, i.code, i.name, i.name_ur, i.item_type, i.unit_id, u.code AS unit_code, u.to_base AS unit_to_base,
-                            u.dimension AS unit_dimension, i.ink_colour_id, i.process_type, i.rate, i.gsm, i.width_inch
+                            u.dimension AS unit_dimension, u.decimals AS unit_decimals, i.ink_colour_id, i.process_type, i.rate, i.gsm, i.width_inch, i.track_lots
                      FROM items i JOIN units u ON u.id = i.unit_id
                      WHERE i.is_active = 1 AND i.deleted_at IS NULL ORDER BY i.item_type, i.name',
                     fn ($r) => ['sub' => $r['code'] . ' · ' . $r['unit_code']]

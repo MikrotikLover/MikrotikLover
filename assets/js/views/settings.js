@@ -49,6 +49,7 @@ export default {
           session.app.name = res.company_name;
           session.app.name_ur = res.company_name_ur;
           session.app.whatsapp = res.whatsapp_support;
+          Object.assign(session.app, { address: res.company_address, phone: res.company_phone, ntn: res.company_ntn });
           ctx.snapshot();
           return res;
         },

@@ -443,8 +443,86 @@ input[type="color"] { padding: 4px; height: var(--tap); cursor: pointer; }
   .design-form .form-grid { grid-template-columns: repeat(3, 1fr); }
 }
 
+
+/* =====================================================================
+   Batch 3 — vouchers (entry, register, view) and print layout
+   ===================================================================== */
+
+.voucher-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.voucher-bar .spacer { flex: 1; }
+.last-saved { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: .9rem; color: var(--muted); }
+.last-saved a:not(.btn) { color: var(--accent); font-weight: 600; }
+.voucher-form { gap: 16px; }
+.voucher-form .form-grid { display: grid; gap: 14px; }
+.voucher-toolbar { grid-template-columns: 1fr; }
+.row-link { text-decoration: none; color: inherit; display: block; }
+.danger-text { color: var(--danger); }
+
+.voucher-doc { padding: 16px; display: grid; gap: 14px; }
+.vd-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.vd-fields { display: grid; grid-template-columns: 1fr; gap: 8px 16px; margin: 0; }
+.vd-fields div { display: flex; flex-direction: column; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+.vd-fields dt { font-size: .8rem; color: var(--muted); }
+.vd-fields dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.table-scroll { overflow-x: auto; }
+.vd-lines { width: 100%; border-collapse: collapse; font-size: .92rem; }
+.vd-lines th, .vd-lines td { padding: 8px 6px; border-bottom: 1px solid var(--line); text-align: start; white-space: nowrap; }
+.vd-lines th { font-size: .8rem; color: var(--muted); }
+.vd-lines .num { text-align: end; font-variant-numeric: tabular-nums; }
+.vd-lines tfoot td { border-bottom: 0; border-top: 2px solid var(--line); }
+.vd-remarks { color: var(--text); }
+
+@media (min-width: 640px) {
+  .voucher-form .form-grid { grid-template-columns: repeat(2, 1fr); }
+  .vd-fields { grid-template-columns: repeat(2, 1fr); }
+  .voucher-toolbar { grid-template-columns: 1fr auto auto auto auto; align-items: center; }
+}
+@media (min-width: 960px) {
+  .voucher-form .form-grid { grid-template-columns: repeat(4, 1fr); }
+  .voucher-form .form-grid .span-all { grid-column: 1 / -1; }
+  .vd-fields { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* ---- printed voucher (A4) */
+#print-root { display: none; }
+@page { size: A4; margin: 12mm; }
+@media print {
+  body.printing #app, body.printing #toasts, body.printing .wa-fab, body.printing dialog { display: none !important; }
+  body.printing #print-root { display: block; }
+  body.printing { background: #fff; }
+}
+.pdoc { font: 11pt/1.4 var(--font); color: #000; position: relative; }
+html[lang="ur"] .pdoc { font-family: var(--font-ur), var(--font); line-height: 1.9; }
+.pdoc-head { display: flex; justify-content: space-between; gap: 16px; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 10px; }
+.pdoc-head h1 { font-size: 16pt; }
+.pdoc-head p { margin: 0; font-size: 9.5pt; }
+.pdoc-title { text-align: end; }
+.pdoc-title h2 { font-size: 14pt; text-transform: uppercase; letter-spacing: .03em; }
+html[lang="ur"] .pdoc-title h2 { text-transform: none; letter-spacing: 0; }
+.pdoc-no { font-size: 12pt; font-weight: 700; }
+.pdoc-stamp { border: 2px solid #b91c1c; color: #b91c1c; font-weight: 700; padding: 4px 10px; display: inline-block; margin-bottom: 8px; transform: rotate(-2deg); }
+.pdoc-fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 16px; margin: 0 0 10px; }
+.pdoc-fields div { display: flex; gap: 6px; }
+.pdoc-fields dt { color: #444; white-space: nowrap; }
+.pdoc-fields dt::after { content: ":"; }
+.pdoc-fields dd { margin: 0; font-weight: 600; }
+.pdoc-lines { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+.pdoc-lines th, .pdoc-lines td { border: 1px solid #000; padding: 4px 6px; text-align: start; }
+.pdoc-lines th { background: #eee; font-size: 9.5pt; }
+.pdoc-lines .num { text-align: end; }
+.pdoc-lines tfoot td { font-weight: 700; }
+.pdoc-remarks { margin-bottom: 8px; }
+.pdoc-signs { display: flex; justify-content: space-between; gap: 24px; margin-top: 48px; }
+.pdoc-signs div { flex: 1; text-align: center; font-size: 9.5pt; }
+.pdoc-signs span { display: block; border-top: 1px solid #000; margin-bottom: 4px; }
+.pdoc-meta { font-size: 8pt; color: #555; margin-top: 12px; }
+.pdoc.is-cancelled .pdoc-lines { opacity: .6; }
+
 @media print {
   .topbar, .wa-fab, #toasts, .lang-fab, .kb-hint, .form-actions, .row-actions, .pager { display: none !important; }
   body { background: #fff; }
   .card { box-shadow: none; border-color: #999; }
 }
+
+/* Codes typed in lowercase are stored upper-case; show them that way while typing. */
+input[data-upper] { text-transform: uppercase; }

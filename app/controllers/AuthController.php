@@ -107,7 +107,7 @@ final class AuthController
         $settings = [];
         try {
             foreach (DB::all("SELECT setting_key, setting_value FROM settings
-                              WHERE setting_key IN ('company_name','company_name_ur','whatsapp_support')") as $row) {
+                              WHERE setting_key IN ('company_name','company_name_ur','whatsapp_support','company_address','company_phone','company_ntn')") as $row) {
                 $settings[$row['setting_key']] = (string) $row['setting_value'];
             }
         } catch (PDOException) {
@@ -117,6 +117,9 @@ final class AuthController
             'name'      => ($settings['company_name'] ?? '') ?: Config::get('app.name'),
             'name_ur'   => $settings['company_name_ur'] ?? '',
             'whatsapp'  => preg_replace('/\D+/', '', ($settings['whatsapp_support'] ?? '') ?: (string) Config::get('app.whatsapp_number')),
+            'address'   => $settings['company_address'] ?? '',
+            'phone'     => $settings['company_phone'] ?? '',
+            'ntn'       => $settings['company_ntn'] ?? '',
             'currency'  => Config::get('app.currency', 'PKR'),
             'timezone'  => 'Asia/Karachi',
             'today'     => date('Y-m-d'),

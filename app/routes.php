@@ -58,4 +58,21 @@ $r->get('lookups', [LookupController::class, 'index']);
 $r->get('settings', [SettingsController::class, 'index'], ['perm' => 'settings.manage']);
 $r->put('settings', [SettingsController::class, 'update'], ['perm' => 'settings.manage']);
 
+// --- Stock vouchers (Batch 3) ------------------------------------------
+$voucher = static function (Router $r, string $path, string $class, string $perm): void {
+    $r->get($path, [$class, 'index'], ['perm' => "$perm.view"]);
+    $r->post($path, [$class, 'store'], ['perm' => "$perm.create"]);
+    $r->get("$path/{id}", [$class, 'show'], ['perm' => "$perm.view"]);
+    $r->put("$path/{id}", [$class, 'update'], ['perm' => "$perm.edit"]);
+    $r->post("$path/{id}/cancel", [$class, 'cancel'], ['perm' => "$perm.cancel"]);
+};
+$voucher($r, 'igp', InwardGatePassController::class, 'igp');
+$voucher($r, 'transfers', StockTransferController::class, 'transfer');
+$voucher($r, 'consumptions', StockConsumptionController::class, 'consumption');
+$voucher($r, 'ink-loads', InkLoadController::class, 'ink_load');
+$r->get('stock/balance', [StockController::class, 'balance'], ['perm' => [
+    'igp.create', 'igp.edit', 'transfer.create', 'transfer.edit', 'consumption.create', 'consumption.edit',
+    'ink_load.create', 'ink_load.edit', 'reports.stock',
+]]);
+
 return $r;

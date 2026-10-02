@@ -25,6 +25,10 @@ import settingsView from './views/settings.js';
 import { MASTERS } from './views/masters/config.js';
 import { masterListView } from './views/masterList.js';
 import { masterFormView } from './views/masterForm.js';
+import { VOUCHERS } from './views/vouchers/defs.js';
+import { voucherListView } from './views/voucherList.js';
+import { voucherFormView } from './views/voucherForm.js';
+import { voucherViewView } from './views/voucherView.js';
 
 const routes = [
   { path: '/login', view: loginView, public: true },
@@ -45,6 +49,13 @@ const routes = [
     { path: `/m/${key}`, view: masterListView(key, cfg), perm: cfg.perm.view },
     { path: `/m/${key}/new`, view: masterFormView(key, cfg), perm: cfg.perm.manage },
     { path: `/m/${key}/:id`, view: masterFormView(key, cfg), perm: cfg.perm.manage },
+  ]),
+  // Vouchers: #/v/<key> (list), /new, /<id> (view + print), /<id>/edit
+  ...Object.entries(VOUCHERS).flatMap(([key, def]) => [
+    { path: `/v/${key}`, view: voucherListView(key, def), perm: `${def.perm}.view` },
+    { path: `/v/${key}/new`, view: voucherFormView(key, def), perm: `${def.perm}.create` },
+    { path: `/v/${key}/:id`, view: voucherViewView(key, def), perm: `${def.perm}.view` },
+    { path: `/v/${key}/:id/edit`, view: voucherFormView(key, def), perm: `${def.perm}.edit` },
   ]),
 ];
 
