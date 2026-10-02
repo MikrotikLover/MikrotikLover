@@ -1,0 +1,43 @@
+# ----------------------------------------------------------------------
+#  Fabric Printing Management — Apache / LiteSpeed (Hostinger)
+# ----------------------------------------------------------------------
+Options -Indexes
+DirectoryIndex index.html
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Backend code, SQL, tests and docs are never web-accessible.
+    RewriteRule ^(app|database|tests|docs)(/|$) - [F,L]
+    RewriteRule ^(config\.sample\.php|README\.md|\.git.*)$ - [F,L]
+
+    # LiteSpeed Cache: never cache the API (PHP also sends X-LiteSpeed-Cache-Control: no-cache).
+    RewriteRule ^api/ - [E=Cache-Control:no-cache]
+</IfModule>
+
+<FilesMatch "\.(sql|md|log|sh|lock|ini|bak)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+</FilesMatch>
+
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set Referrer-Policy "same-origin"
+    Header always set Permissions-Policy "camera=(), microphone=(), geolocation=()"
+
+    # The SPA shell must always be revalidated so deploys show up immediately.
+    <FilesMatch "^index\.html$">
+        Header set Cache-Control "no-cache, must-revalidate"
+    </FilesMatch>
+    # JS/CSS: revalidate with ETag (cheap 304s, never stale after a redeploy).
+    <FilesMatch "\.(js|css)$">
+        Header set Cache-Control "no-cache"
+    </FilesMatch>
+</IfModule>
+
+<IfModule mod_mime.c>
+    AddType text/javascript .js .mjs
+    AddCharset utf-8 .js .css .html
+</IfModule>

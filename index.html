@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Fabric Printing Management</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu:wght@400;600&display=swap">
+  <link rel="stylesheet" href="assets/css/app.css?v=1.0.0-b1">
+  <script>
+    // Apply the saved language before first paint (avoids an LTR→RTL flash).
+    try { if (localStorage.getItem('fpms.lang') === 'ur') { document.documentElement.lang = 'ur'; document.documentElement.dir = 'rtl'; } } catch (e) {}
+  </script>
+</head>
+<body>
+  <div id="app" aria-live="polite"></div>
+  <div id="toasts" aria-live="assertive"></div>
+  <noscript><p style="padding:24px">This application requires JavaScript.</p></noscript>
+  <!-- No ?v= on the entry module: views import ../app.js and the URL must match exactly. -->
+  <script type="module" src="assets/js/app.js"></script>
+</body>
+</html>

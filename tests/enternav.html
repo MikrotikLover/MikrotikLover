@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>enterNav test harness</title>
+  <link rel="stylesheet" href="../assets/css/app.css">
+</head>
+<body>
+<main class="view">
+  <form id="f" class="card form">
+    <div class="field"><label class="field-label">A</label><input name="a" id="a" required></div>
+    <div class="field"><label class="field-label">B</label>
+      <select name="b" id="b"><option value="1">One</option><option value="2">Two</option></select></div>
+    <div class="field"><label class="field-label">C (searchable, required)</label><div id="c-host"></div></div>
+    <div class="field"><label class="field-label">D readonly</label><input name="d" id="d" readonly value="ro"></div>
+    <div class="field"><label class="field-label">E disabled</label><input name="e" id="e" disabled></div>
+    <div class="field" style="display:none"><label class="field-label">F hidden</label><input name="f" id="f-hidden"></div>
+    <input type="hidden" name="h" value="x">
+    <div class="field"><label class="field-label">G</label><input name="g" id="g"></div>
+
+    <table data-enter-grid id="grid">
+      <thead><tr><th>Item</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead>
+      <tbody data-rows></tbody>
+    </table>
+
+    <div class="field"><label class="field-label">Remarks</label><textarea name="remarks" id="remarks"></textarea></div>
+    <div class="form-actions"><button type="submit" class="btn btn-primary" id="save">Save</button></div>
+  </form>
+</main>
+<div id="toasts"></div>
+<script type="module">
+  import EnterNav from '../assets/js/core/enterNav.js';
+  import { searchSelect } from '../assets/js/core/searchSelect.js';
+  import { toast } from '../assets/js/core/ui.js';
+
+  EnterNav.configure({ toast });
+  window.saveCalls = [];
+  window.toasts = [];
+  const origToast = toast;
+  EnterNav.configure({ toast: (m, t) => { window.toasts.push([m, t]); origToast(m, t); } });
+
+  const items = [
+    { value: 'grey', label: 'Grey Lawn 60x60', sub: 'GL-60' },
+    { value: 'paper', label: 'Sublimation Paper', sub: 'SP-90' },
+    { value: 'ink-c', label: 'Ink Cyan', sub: 'INK-C' },
+  ];
+  const c = searchSelect({ name: 'c', required: true, options: items });
+  document.getElementById('c-host').replaceWith(c.el);
+  c.input.id = 'c';
+
+  const grid = document.getElementById('grid');
+  const tbody = grid.querySelector('[data-rows]');
+  const rowCombos = [];
+  function addRow() {
+    const tr = document.createElement('tr');
+    tr.dataset.row = '';
+    const ss = searchSelect({ name: 'item', options: items, rowKey: true });
+    rowCombos.push(ss);
+    tr.innerHTML = '<td class="i"></td><td><input name="qty" type="number" step="0.001" min="0"></td><td><input name="rate" type="number" step="0.01"></td><td><input name="amount" readonly></td>';
+    tr.querySelector('.i').appendChild(ss.el);
+    tr.addEventListener('input', () => {
+      tr.querySelector('[name=amount]').value = (Number(tr.querySelector('[name=qty]').value) * Number(tr.querySelector('[name=rate]').value)) || '';
+    });
+    tbody.appendChild(tr);
+    return tr;
+  }
+  grid.enterNavAddRow = addRow;
+  addRow();
+
+  window.nav = EnterNav.attach(document.getElementById('f'), {
+    successMessage: 'Saved!',
+    collect: (form) => ({
+      a: form.a.value, b: form.b.value, c: form.querySelector('input[name=c]').value, g: form.g.value, remarks: form.remarks.value,
+      lines: [...tbody.querySelectorAll('[data-row]')].map((r) => ({
+        item: r.querySelector('[name=item]').value, qty: r.querySelector('[name=qty]').value, rate: r.querySelector('[name=rate]').value,
+      })).filter((l) => l.item),
+    }),
+    onSave: async (data) => {
+      window.saveCalls.push(data);
+      await new Promise((r) => setTimeout(r, 300));
+      if (data.a === 'servererr') {
+        const err = new Error('Validation failed');
+        err.errors = { g: 'Server says no', 'lines.0.qty': 'Qty too high' };
+        throw err;
+      }
+      return { id: 1 };
+    },
+    onReset: () => {
+      tbody.innerHTML = '';
+      addRow();
+    },
+  });
+  window.ready = true;
+</script>
+</body>
+</html>

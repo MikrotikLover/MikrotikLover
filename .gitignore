@@ -1,0 +1,8 @@
+# Private runtime data lives outside the deploy folder; never commit it.
+fabric_private/
+config.php
+app/config.local.php
+*.log
+node_modules/
+tests/output/
+.DS_Store
