@@ -165,4 +165,41 @@ HTML;
     {
         return $d ? date('d-m-Y', strtotime($d)) : '';
     }
+
+    /** Minutes as h:mm ('' for 0 when $blankZero). */
+    protected static function hm(mixed $minutes, bool $blankZero = true): string
+    {
+        $m = (int)$minutes;
+        if ($m === 0 && $blankZero) {
+            return '';
+        }
+        return sprintf('%d:%02d', intdiv($m, 60), $m % 60);
+    }
+
+    protected static function time(?string $dt): string
+    {
+        return $dt ? date('H:i', strtotime($dt)) : '';
+    }
+
+    /** Validated date from the query string (Y-m-d) or default. */
+    protected function qDate(string $key, string $default): string
+    {
+        $v = (string)$this->request->query($key, '');
+        return preg_match('/^\d{4}-\d{2}-\d{2}$/', $v) && strtotime($v) ? $v : $default;
+    }
+
+    /** "Department: X" style filter line pieces. */
+    protected function filterLabel(string $table, ?int $id, string $label): ?string
+    {
+        if (!$id || !in_array($table, ['departments', 'designations', 'shifts', 'leave_types'], true)) {
+            return null;
+        }
+        $name = \App\Database::value("SELECT name FROM `$table` WHERE id = ?", [$id]);
+        return $name ? "$label: " . self::e((string)$name) : null;
+    }
+
+    public const STATUS_NAMES = [
+        'P' => 'Present', 'A' => 'Absent', 'L' => 'Leave', 'LW' => 'Leave w/o pay', 'S' => 'Joined',
+        'R' => 'Rest day', 'H' => 'Holiday', 'HD' => 'Half day', 'O' => 'Off',
+    ];
 }

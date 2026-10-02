@@ -11,11 +11,14 @@ AddType font/woff2 .woff2
     # Never let LiteSpeed Cache store API, file, report or device responses
     <IfModule LiteSpeed>
         RewriteRule ^(api|iclock)(/.*)?$ - [E=Cache-Control:no-cache]
-        RewriteRule ^(api|file|report|migrate)\.php - [E=Cache-Control:no-cache]
+        RewriteRule ^(api|file|report|migrate|iclock|kiosk|tv)\.php - [E=Cache-Control:no-cache]
     </IfModule>
 
     # JSON API
     RewriteRule ^api(/.*)?$ api.php [QSA,L]
+
+    # ZKTeco ADMS push (device -> server). Devices usually speak plain HTTP: do not force HTTPS here.
+    RewriteRule ^iclock(/.*)?$ iclock.php [QSA,L]
 </IfModule>
 
 <IfModule mod_headers.c>

@@ -13,7 +13,13 @@ use App\ApiException;
 use App\Auth;
 use App\Http;
 use App\Request;
+use App\Controllers\AttendanceController;
+use App\Controllers\AttendanceVoucherController;
 use App\Controllers\AuthController;
+use App\Controllers\DeviceController;
+use App\Controllers\LeaveController;
+use App\Controllers\LeaveTypeController;
+use App\Controllers\OvertimeController;
 use App\Controllers\DashboardController;
 use App\Controllers\DepartmentController;
 use App\Controllers\DesignationController;
@@ -66,6 +72,31 @@ $routes = array_merge(
         ['PUT',    '/settings/rest-days', [SettingsController::class, 'restDays'],     'holidays.edit'],
 
         ['GET',    '/roles/modules',     [RoleController::class, 'modules'],           'users.view'],
+        ['GET',    '/employees/lookup',  [EmployeeController::class, 'lookup'],        'auth'],
+
+        // Attendance
+        ['GET',    '/attendance/vouchers',        [AttendanceVoucherController::class, 'index'],   'attendance.view'],
+        ['GET',    '/attendance/vouchers/load',   [AttendanceVoucherController::class, 'load'],    'attendance.view'],
+        ['POST',   '/attendance/vouchers',        [AttendanceVoucherController::class, 'save'],    'attendance.add'],
+        ['DELETE', '/attendance/vouchers/{id}',   [AttendanceVoucherController::class, 'destroy'], 'attendance.delete'],
+        ['POST',   '/attendance/post',            [AttendanceController::class, 'post'],           'attendance_post.post'],
+        ['GET',    '/attendance/punch-status',    [AttendanceController::class, 'punchStatus'],    'attendance_post.view'],
+        ['GET',    '/attendance/daily',           [AttendanceController::class, 'daily'],          'attendance.view'],
+        ['PUT',    '/attendance/daily/{id}',      [AttendanceController::class, 'updateDaily'],    'attendance.edit'],
+        ['DELETE', '/attendance/daily/{id}',      [AttendanceController::class, 'destroyDaily'],   'attendance.delete'],
+        ['GET',    '/attendance/punches',         [AttendanceController::class, 'punches'],        'attendance.view'],
+        ['POST',   '/attendance/import',          [AttendanceController::class, 'import'],         'attendance.add'],
+        ['GET',    '/attendance/live',            [AttendanceController::class, 'live'],           'attendance.view'],
+        ['GET',    '/attendance/screens',         [AttendanceController::class, 'screens'],        'devices.view'],
+        ['POST',   '/attendance/screens/regenerate', [AttendanceController::class, 'regenerate'],  'devices.edit'],
+
+        ['GET',    '/overtime',          [OvertimeController::class, 'index'],   'overtime.view'],
+        ['POST',   '/overtime',          [OvertimeController::class, 'store'],   'overtime.add'],
+        ['POST',   '/overtime/decide',   [OvertimeController::class, 'decide'],  'overtime.post'],
+        ['DELETE', '/overtime/{id}',     [OvertimeController::class, 'destroy'], 'overtime.delete'],
+
+        ['GET',    '/leaves/balance',    [LeaveController::class, 'balance'],    'leave.view'],
+        ['POST',   '/leaves/{id}/status', [LeaveController::class, 'status'],    'leave.post'],
     ],
     resource('/employees',    EmployeeController::class,    'employees'),
     resource('/departments',  DepartmentController::class,  'departments'),
@@ -74,6 +105,9 @@ $routes = array_merge(
     resource('/shift-groups', ShiftGroupController::class,  'shift_groups'),
     resource('/holidays',     HolidayController::class,     'holidays'),
     resource('/users',        UserController::class,        'users'),
+    resource('/devices',      DeviceController::class,      'devices'),
+    resource('/leave-types',  LeaveTypeController::class,   'leave'),
+    resource('/leaves',       LeaveController::class,       'leave'),
     resource('/roles',        RoleController::class,        'users'),
 );
 

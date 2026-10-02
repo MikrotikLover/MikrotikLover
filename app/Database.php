@@ -87,6 +87,30 @@ final class Database
         return (int)self::pdo()->lastInsertId();
     }
 
+    /**
+     * INSERT ... ON DUPLICATE KEY UPDATE. Returns the row id (inserted or existing).
+     * @param string[] $updateCols columns to overwrite when the unique key already exists
+     */
+    public static function upsert(string $table, array $data, array $updateCols): int
+    {
+        $cols = array_keys($data);
+        $sets = ['`id` = LAST_INSERT_ID(`id`)'];
+        $params = $data;
+        foreach ($updateCols as $c) {
+            $sets[] = "`$c` = :u_$c";
+            $params["u_$c"] = $data[$c] ?? null;
+        }
+        $sql = sprintf(
+            'INSERT INTO `%s` (%s) VALUES (%s) ON DUPLICATE KEY UPDATE %s',
+            $table,
+            implode(', ', array_map(fn($c) => "`$c`", $cols)),
+            implode(', ', array_map(fn($c) => ":$c", $cols)),
+            implode(', ', $sets)
+        );
+        self::run($sql, $params);
+        return (int)self::pdo()->lastInsertId();
+    }
+
     public static function update(string $table, array $data, string $where, array $whereParams = []): int
     {
         if (!$data) {

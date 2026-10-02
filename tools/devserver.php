@@ -6,4 +6,8 @@ if (preg_match('#^/api(/|$)#', $path)) {
     require __DIR__ . '/../public/api.php';
     return true;
 }
+if (preg_match('#^/iclock(/|$)#', $path)) {
+    require __DIR__ . '/../public/iclock.php';
+    return true;
+}
 return false; // serve static files / php files from public/

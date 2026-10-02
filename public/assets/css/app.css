@@ -211,3 +211,26 @@ table.matrix tr.grp td { background: #f3f4f6; font-weight: 700; font-size: 12px;
   .shell { display: block; height: auto; }
   .main { overflow: visible; padding: 0; }
 }
+
+/* ---------- attendance grid ---------- */
+table.att td { white-space: nowrap; }
+table.att td:not(.sr):not(.act):not(.hrs) { padding: 0; }
+table.att td:nth-child(2), table.att td:nth-child(3), table.att td:nth-child(4) { padding: 0 6px; }
+table.att td.hrs { padding: 0 6px; }
+table.att td.hrs.bad { color: var(--danger); font-weight: 700; }
+table.att input:disabled, table.att select:disabled { color: #6b7280; background: transparent; }
+table.att tr.st-A td { background: #fef2f2; }
+table.att tr.st-L td, table.att tr.st-LW td { background: #fffbeb; }
+table.att tr.st-R td, table.att tr.st-H td, table.att tr.st-O td { background: #f3f4f6; }
+table.att tr.st-HD td { background: #fff7ed; }
+table.att tr.st-none td:nth-child(6) { background: #fef9c3; }
+table.att tr.dirty td.sr { background: #dbeafe; color: var(--accent); font-weight: 700; }
+table.att tr.locked td { opacity: .6; }
+table.att tr.error td { outline: 2px solid var(--danger); outline-offset: -2px; }
+.stat-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin: 10px 0; }
+.stat-cards .card .v { font-size: 20px; }
+table.ot td { padding: 2px 6px !important; }
+table.ot td input, table.ot td select { height: 26px; }
+table.ot tr.ot-approved td { background: #f0fdf4; }
+table.ot tr.ot-rejected td { color: #9ca3af; }
+table.ot tr.dirty td:first-child { box-shadow: inset 3px 0 0 var(--accent); }

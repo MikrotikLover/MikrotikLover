@@ -226,6 +226,22 @@ final class EmployeeController
         return $next ? $this->load((int)$next) : null;
     }
 
+    /** Exact lookup by employee code (keyboard pickers). */
+    public function lookup(Request $r): ?array
+    {
+        $code = (string)$r->query('code', '');
+        if ($code === '') {
+            return null;
+        }
+        return Database::one(
+            'SELECT e.id, e.code, e.name, e.name_ur, e.status, e.emp_type, e.joining_date, e.leaving_date, e.department_id,
+                    d.name AS department, g.name AS designation
+               FROM employees e JOIN departments d ON d.id = e.department_id JOIN designations g ON g.id = e.designation_id
+              WHERE e.code = ?',
+            [$code]
+        );
+    }
+
     public function nextCode(Request $r): array
     {
         $max = Database::value("SELECT MAX(CAST(code AS UNSIGNED)) FROM employees WHERE code REGEXP '^[0-9]+$'");

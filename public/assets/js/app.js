@@ -19,8 +19,17 @@ const NAV = [
     { path: '/holidays', label: 'Holidays & Rest Days', ico: '☀', perm: ['holidays', 'view'] },
     { path: '/settings/company', label: 'Company Settings', ico: '⚙', perm: ['settings', 'view'] },
   ] },
+  { group: 'Attendance', items: [
+    { path: '/attendance/voucher', label: 'Attendance Voucher', ico: '✓', perm: ['attendance', 'view'] },
+    { path: '/attendance/post', label: 'Daily Attendance Post', ico: '⇪', perm: ['attendance_post', 'view'] },
+    { path: '/overtime', label: 'Overtime Approval', ico: '⏱', perm: ['overtime', 'view'] },
+    { path: '/leaves', label: 'Leave Register', ico: '✈', perm: ['leave', 'view'] },
+    { path: '/leave-types', label: 'Leave Types', ico: '≡', perm: ['leave', 'view'] },
+    { path: '/attendance/import', label: 'Machine Log Import', ico: '⇩', perm: ['attendance', 'add'] },
+    { path: '/devices', label: 'Devices, Kiosk & TV', ico: '⌁', perm: ['devices', 'view'] },
+  ] },
   { group: 'Reports', items: [
-    { path: '/reports', label: 'Reports & ID Cards', ico: '⎙', perm: ['employees', 'print'] },
+    { path: '/reports', label: 'Reports & ID Cards', ico: '⎙', perm: ['reports', 'view'] },
   ] },
   { group: 'Administration', items: [
     { path: '/users', label: 'Users', ico: '☺', perm: ['users', 'view'] },
@@ -41,7 +50,14 @@ route('/shifts', page('masters'), { title: 'Shift Info', perm: ['shifts', 'view'
 route('/shift-groups', page('masters'), { title: 'Shift Groups', perm: ['shift_groups', 'view'], kind: 'shift_groups' });
 route('/holidays', page('masters'), { title: 'Holidays & Weekly Rest Days', perm: ['holidays', 'view'], kind: 'holidays' });
 route('/settings/company', page('settings'), { title: 'Company Settings', perm: ['settings', 'view'] });
-route('/reports', page('reports'), { title: 'Reports & ID Cards', perm: ['employees', 'print'] });
+route('/reports', page('reports'), { title: 'Reports & ID Cards', perm: ['reports', 'view'] });
+route('/attendance/voucher', page('attendance-voucher'), { title: 'Manual Attendance Voucher', perm: ['attendance', 'view'] });
+route('/attendance/post', page('attendance-post'), { title: 'Daily Attendance Post', perm: ['attendance_post', 'view'] });
+route('/attendance/import', page('attendance-import'), { title: 'Machine Log Import (CSV / Excel)', perm: ['attendance', 'add'] });
+route('/overtime', page('overtime'), { title: 'Overtime Approval', perm: ['overtime', 'view'] });
+route('/leaves', page('leave'), { title: 'Employee Leave Register', perm: ['leave', 'view'] });
+route('/leave-types', page('masters'), { title: 'Leave Types', perm: ['leave', 'view'], kind: 'leave_types' });
+route('/devices', page('masters'), { title: 'Attendance Devices, Kiosk & TV', perm: ['devices', 'view'], kind: 'devices' });
 route('/users', page('users'), { title: 'Users', perm: ['users', 'view'] });
 route('/roles', page('roles'), { title: 'Roles & Permissions', perm: ['users', 'view'] });
 

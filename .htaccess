@@ -6,7 +6,8 @@ Options -Indexes
 </FilesMatch>
 <IfModule mod_rewrite.c>
     RewriteEngine On
-    RewriteRule ^(app|api|migrations|storage|tools|tests)(/|$) - [F,L]
+    # (/api/* is the JSON API URL, so the api/ code folder is protected by its own .htaccess instead)
+    RewriteRule ^(app|migrations|storage|tools|tests)(/|$) - [F,L]
     RewriteCond %{ENV:REDIRECT_STATUS} ^$
     RewriteRule ^(.*)$ public/$1 [L]
 </IfModule>

@@ -15,7 +15,7 @@ final class LookupController
         return [
             'departments'  => Database::all('SELECT id, code, name, name_ur, is_active FROM departments ORDER BY name'),
             'designations' => Database::all('SELECT id, code, name, name_ur, is_active FROM designations ORDER BY name'),
-            'shifts'       => Database::all('SELECT id, code, name, start_time, end_time, is_overnight, duration_minutes, is_active FROM shifts ORDER BY start_time'),
+            'shifts'       => Database::all('SELECT id, code, name, start_time, end_time, is_overnight, break_minutes, duration_minutes, is_active FROM shifts ORDER BY start_time'),
             'shift_groups' => Database::all('SELECT id, code, name, is_active FROM shift_groups ORDER BY name'),
             'roles'        => Database::all('SELECT id, name FROM roles ORDER BY id'),
             'settings'     => [

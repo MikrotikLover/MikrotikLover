@@ -89,19 +89,19 @@ $out[] = "INSERT INTO holidays (holiday_date, name, name_ur, holiday_type) VALUE
 // code, name, name_ur, father, father_ur, relation, gender, dept, desig, type, join, group, shift_date, status, leaving, basic, daily, city, increment(basic or daily)
 $emps = [
     ['0001', 'Muhammad Aslam',     'محمد اسلم',      'Ghulam Rasool',   'غلام رسول',    'S/O', 'M', 6, 1, 'permanent',   '2015-03-01', 1, '2015-03-01', 'active', null, 145000, 0,    'Lahore',     160000],
-    ['0002', 'Rashid Mehmood',     'راشد محمود',     'Abdul Majeed',    'عبدالمجید',    'S/O', 'M', 1, 2, 'permanent',   '2017-06-15', 2, '2026-08-31', 'active', null, 72000,  0,    'Lahore',     80000],
-    ['0003', 'Shahid Iqbal',       'شاہد اقبال',     'Muhammad Iqbal',  'محمد اقبال',   'S/O', 'M', 1, 5, 'permanent',   '2019-01-10', 2, '2026-08-31', 'active', null, 45000,  0,    'Kasur',      null],
-    ['0004', 'Naveed Akhtar',      'نوید اختر',      'Akhtar Ali',      'اختر علی',     'S/O', 'M', 1, 5, 'permanent',   '2020-09-01', 3, '2026-08-31', 'active', null, 43000,  0,    'Lahore',     null],
-    ['0005', 'Zahid Hussain',      'زاہد حسین',      'Fazal Hussain',   'فضل حسین',     'S/O', 'M', 2, 3, 'permanent',   '2018-04-20', 2, '2026-08-31', 'active', null, 48000,  0,    'Sheikhupura', 52000],
-    ['0006', 'Imran Khan',         'عمران خان',      'Sher Khan',       'شیر خان',      'S/O', 'M', 2, 3, 'permanent',   '2021-02-01', 3, '2026-08-31', 'active', null, 42000,  0,    'Lahore',     null],
+    ['0002', 'Rashid Mehmood',     'راشد محمود',     'Abdul Majeed',    'عبدالمجید',    'S/O', 'M', 1, 2, 'permanent',   '2017-06-15', 2, '2026-08-30', 'active', null, 72000,  0,    'Lahore',     80000],
+    ['0003', 'Shahid Iqbal',       'شاہد اقبال',     'Muhammad Iqbal',  'محمد اقبال',   'S/O', 'M', 1, 5, 'permanent',   '2019-01-10', 2, '2026-08-30', 'active', null, 45000,  0,    'Kasur',      null],
+    ['0004', 'Naveed Akhtar',      'نوید اختر',      'Akhtar Ali',      'اختر علی',     'S/O', 'M', 1, 5, 'permanent',   '2020-09-01', 3, '2026-08-30', 'active', null, 43000,  0,    'Lahore',     null],
+    ['0005', 'Zahid Hussain',      'زاہد حسین',      'Fazal Hussain',   'فضل حسین',     'S/O', 'M', 2, 3, 'permanent',   '2018-04-20', 2, '2026-08-30', 'active', null, 48000,  0,    'Sheikhupura', 52000],
+    ['0006', 'Imran Khan',         'عمران خان',      'Sher Khan',       'شیر خان',      'S/O', 'M', 2, 3, 'permanent',   '2021-02-01', 3, '2026-08-30', 'active', null, 42000,  0,    'Lahore',     null],
     ['0007', 'Kashif Ali',         'کاشف علی',       'Liaqat Ali',      'لیاقت علی',    'S/O', 'M', 2, 4, 'daily_wages', '2024-11-05', 1, '2024-11-05', 'active', null, 0,      1500, 'Raiwind',    null],
     ['0008', 'Sajida Parveen',     'ساجدہ پروین',    'Muhammad Ashraf', 'محمد اشرف',    'W/O', 'F', 3, 6, 'permanent',   '2016-08-08', 1, '2016-08-08', 'active', null, 46000,  0,    'Lahore',     50000],
     ['0009', 'Nasreen Bibi',       'نسرین بی بی',    'Allah Ditta',     'اللہ دتہ',     'D/O', 'F', 3, 6, 'permanent',   '2022-03-15', 1, '2022-03-15', 'active', null, 40000,  0,    'Lahore',     null],
     ['0010', 'Rubina Kausar',      'روبینہ کوثر',    'Nazir Ahmed',     'نذیر احمد',    'W/O', 'F', 3, 6, 'daily_wages', '2025-01-20', 1, '2025-01-20', 'active', null, 0,      1450, 'Kasur',      null],
     ['0011', 'Tariq Mehmood',      'طارق محمود',     'Sardar Muhammad', 'سردار محمد',   'S/O', 'M', 4, 2, 'permanent',   '2014-11-01', 1, '2014-11-01', 'active', null, 68000,  0,    'Lahore',     75000],
     ['0012', 'Asif Raza',          'آصف رضا',        'Raza Muhammad',   'رضا محمد',     'S/O', 'M', 4, 4, 'daily_wages', '2026-09-14', 1, '2026-09-14', 'active', null, 0,      1400, 'Lahore',     null],
-    ['0013', 'Waqas Ahmad',        'وقاص احمد',      'Bashir Ahmad',    'بشیر احمد',    'S/O', 'M', 5, 3, 'contract',    '2025-07-01', 2, '2026-08-31', 'active', null, 44000,  0,    'Lahore',     null],
-    ['0014', 'Faisal Nawaz',       'فیصل نواز',      'Haq Nawaz',       'حق نواز',      'S/O', 'M', 5, 4, 'permanent',   '2023-05-02', 3, '2026-08-31', 'inactive', '2026-09-20', 39000, 0, 'Okara',  null],
+    ['0013', 'Waqas Ahmad',        'وقاص احمد',      'Bashir Ahmad',    'بشیر احمد',    'S/O', 'M', 5, 3, 'contract',    '2025-07-01', 2, '2026-08-30', 'active', null, 44000,  0,    'Lahore',     null],
+    ['0014', 'Faisal Nawaz',       'فیصل نواز',      'Haq Nawaz',       'حق نواز',      'S/O', 'M', 5, 4, 'permanent',   '2023-05-02', 3, '2026-08-30', 'inactive', '2026-09-20', 39000, 0, 'Okara',  null],
     ['0015', 'Muhammad Akram',     'محمد اکرم',      'Noor Muhammad',   'نور محمد',     'S/O', 'M', 6, 8, 'permanent',   '2012-01-01', 1, '2012-01-01', 'active', null, 40000,  0,    'Lahore',     null],
 ];
 

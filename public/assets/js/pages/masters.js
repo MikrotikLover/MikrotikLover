@@ -1,7 +1,7 @@
 // Master data screens (Department, Designation, Shift, Shift Group, Holidays & weekly rest days):
 // list on the left, entry form on the right, desktop function keys.
 import { get, post, put, del } from '../core/api.js';
-import { h, toast, confirmDialog, printTable, fdate, debounce, WEEKDAYS, today } from '../core/dom.js';
+import { h, toast, confirmDialog, printTable, fdate, fdatetime, debounce, WEEKDAYS, today } from '../core/dom.js';
 import { Form } from '../core/form.js';
 import { EditGrid, DataGrid } from '../core/grid.js';
 import { setKeys } from '../core/keys.js';
@@ -147,6 +147,71 @@ const KINDS = {
   },
 };
 KINDS.designations.columns = KINDS.departments.columns;
+KINDS.leave_types = {
+  endpoint: 'leave-types', module: 'leave', singular: 'Leave type',
+  columns: [
+    { key: 'code', label: 'Code', sortable: true },
+    { key: 'name', label: 'Leave type', sortable: true },
+    { key: 'name_ur', label: 'اردو', urdu: true },
+    { key: 'yearly_quota', label: 'Quota / year', align: 'right', render: (r) => Number(r.yearly_quota) || '—', print: (r) => Number(r.yearly_quota) || '' },
+    { key: 'is_paid', label: 'Paid', render: (r) => (Number(r.is_paid) ? 'Yes (L)' : 'No (LW)'), print: (r) => (Number(r.is_paid) ? 'Yes' : 'No') },
+    { key: 'is_active', label: 'Status', render: (r) => yesNo(r.is_active), print: (r) => (Number(r.is_active) ? 'Active' : 'Inactive') },
+  ],
+  fields: [
+    { name: 'code', label: 'Code', required: true, span: 3, maxlength: 10 },
+    { name: 'name', label: 'Leave type', required: true, span: 5, maxlength: 60 },
+    { name: 'name_ur', label: 'اردو نام (Urdu)', urdu: true, span: 4, maxlength: 60 },
+    { name: 'yearly_quota', label: 'Yearly quota (days)', type: 'number', required: true, span: 4, min: 0, help: '0 = no limit' },
+    { name: 'is_paid', label: 'Paid leave (marks L, else LW)', type: 'checkbox', span: 5 },
+    { name: 'is_active', label: 'Active', type: 'checkbox', span: 3 },
+  ],
+  defaults: { is_active: 1, is_paid: 1, yearly_quota: 0 },
+};
+KINDS.devices = {
+  endpoint: 'devices', module: 'devices', singular: 'Device',
+  columns: [
+    { key: 'serial_no', label: 'Serial no.', sortable: true },
+    { key: 'name', label: 'Name', sortable: true },
+    { key: 'location', label: 'Location' },
+    { key: 'last_seen_at', label: 'Last seen', render: (r) => fdatetime(r.last_seen_at), print: (r) => fdatetime(r.last_seen_at) },
+    { key: 'punch_count', label: 'Punches', align: 'right' },
+    { key: 'is_active', label: 'Status', render: (r) => yesNo(r.is_active), print: (r) => (Number(r.is_active) ? 'Active' : 'Inactive') },
+  ],
+  fields: [
+    { name: 'serial_no', label: 'Serial number (SN)', required: true, span: 5, maxlength: 50, help: 'Menu → System Info → Device Info on the ZKTeco device' },
+    { name: 'name', label: 'Name', required: true, span: 4, maxlength: 60 },
+    { name: 'is_active', label: 'Active (accept punches)', type: 'checkbox', span: 3 },
+    { name: 'location', label: 'Location', span: 12, maxlength: 100 },
+  ],
+  defaults: { is_active: 1 },
+  top() {
+    const box = h('div', { class: 'panel-body' }, 'Loading…');
+    const render = (s) => {
+      const abs = (u) => new URL(u, location.href).href;
+      const link = (label, url, which) => h('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px' },
+        h('b', { style: 'width:150px' }, label),
+        h('input', { class: 'input', readonly: true, value: abs(url), style: 'flex:1;min-width:260px', onclick: (e) => e.target.select() }),
+        h('a', { class: 'btn sm', href: abs(url), target: '_blank' }, 'Open'),
+        h('button', { class: 'btn sm', type: 'button', onclick: () => navigator.clipboard?.writeText(abs(url)).then(() => toast('Link copied.')) }, 'Copy'),
+        can('devices', 'edit') ? h('button', { class: 'btn sm danger', type: 'button', onclick: async () => {
+          if (!(await confirmDialog(`Create a new ${label} link? The old link stops working immediately.`, { ok: 'Regenerate', danger: true }))) return;
+          render(await post('attendance/screens/regenerate', { which }));
+          toast('New link created.');
+        } }, 'Regenerate') : null);
+      box.replaceChildren(
+        link('Barcode kiosk', s.kiosk_url, 'kiosk'),
+        link('Live TV screen', s.tv_url, 'tv'),
+        h('div', { class: 'muted', style: 'font-size:12px;margin-top:8px;line-height:1.6' },
+          h('b', null, 'ZKTeco push (ADMS) setup: '), 'on the device open Comm. → Cloud Server Setting: Server address = ',
+          h('code', null, location.hostname), ', port 80 (443 only if the model supports HTTPS), Domain name mode on, proxy off. ',
+          'The device calls ', h('code', null, abs('iclock/cdata')), '. A new device appears below as inactive — tick Active to accept its punches. ',
+          'Enter each employee\'s enrollment number as Machine ID on the employee record. Set the device clock / timezone to Pakistan (UTC+5).'));
+    };
+    get('attendance/screens').then(render).catch((e) => { box.textContent = e.message; });
+    return h('div', { class: 'panel', style: 'margin-bottom:10px' }, h('div', { class: 'panel-head' }, h('h2', null, 'Kiosk, TV screen & machine push')), box);
+  },
+};
+
 
 export default {
   async mount(root, params, meta) {
@@ -195,7 +260,7 @@ export default {
       page.form.values = rec || cfg.defaults || {};
       cfg.load?.(page, rec);
       cfg.onChange?.(page.form);
-      recLabel.textContent = rec ? `Editing: ${rec.code || fdate(rec.holiday_date)} — ${rec.name}` : `New ${cfg.singular.toLowerCase()}`;
+      recLabel.textContent = rec ? `Editing: ${rec.code || rec.serial_no || fdate(rec.holiday_date)} — ${rec.name}` : `New ${cfg.singular.toLowerCase()}`;
       btnSave.disabled = rec ? !canEdit : !canAdd;
       btnDel.disabled = !rec || !canDel;
       page.form.setReadonly(rec ? !canEdit : !canAdd);
