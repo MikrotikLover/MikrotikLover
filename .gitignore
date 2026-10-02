@@ -1,0 +1,6 @@
+/config.php
+/storage/*
+!/storage/.htaccess
+!/storage/README.md
+.DS_Store
+*.log

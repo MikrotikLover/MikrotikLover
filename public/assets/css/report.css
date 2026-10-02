@@ -1,0 +1,52 @@
+/* Print-ready report pages (A4). Screen view shows a paper-like preview with a toolbar. */
+* { box-sizing: border-box; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body { margin: 0; font: 9pt/1.35 Arial, "Helvetica Neue", sans-serif; color: #000; background: #e9ecef; }
+.urdu, .urdu-h { font-family: "Noto Nastaliq Urdu", "Jameel Noori Nastaleeq", serif; direction: rtl; unicode-bidi: isolate; line-height: 1.9; }
+.urdu-h { text-align: right; }
+
+.rpt-toolbar { position: sticky; top: 0; z-index: 5; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  padding: 8px 16px; background: #1f2937; color: #e5e7eb; font-size: 13px; }
+.rpt-toolbar .hint { opacity: .75; font-size: 12px; }
+.btn { display: inline-block; padding: 6px 14px; border: 1px solid #9ca3af; border-radius: 4px; background: #fff; color: #111;
+  font: 600 13px Arial, sans-serif; text-decoration: none; cursor: pointer; }
+.btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+
+.rpt { background: #fff; margin: 16px auto; padding: 10mm 8mm; box-shadow: 0 1px 6px rgba(0,0,0,.2); }
+body.portrait .rpt { width: 210mm; min-height: 297mm; }
+body.landscape .rpt { width: 297mm; min-height: 210mm; }
+
+.rpt-head { display: flex; gap: 12px; align-items: center; border-bottom: 2px solid #000; padding-bottom: 6px; margin-bottom: 8px; }
+.rpt-logo { max-height: 18mm; max-width: 40mm; object-fit: contain; }
+.rpt-head-text { flex: 1; text-align: center; }
+.rpt-company { font-size: 15pt; font-weight: 700; letter-spacing: .3px; }
+.rpt-company-ur { font-size: 12pt; }
+.rpt-address { font-size: 8.5pt; color: #333; }
+.rpt-title { font-size: 12pt; margin: 4px 0 2px; text-transform: uppercase; letter-spacing: 1px; }
+.rpt-sub { font-size: 8.5pt; color: #222; }
+
+.rpt-table { width: 100%; border-collapse: collapse; }
+.rpt-table th, .rpt-table td { border: 1px solid #555; padding: 2px 4px; vertical-align: middle; }
+.rpt-table thead th { background: #d9d9d9; font-weight: 700; text-align: left; font-size: 8.5pt; }
+.rpt-table thead { display: table-header-group; }
+.rpt-table tfoot { display: table-row-group; }
+.rpt-table tr { page-break-inside: avoid; break-inside: avoid; }
+.rpt-table .num { text-align: right; white-space: nowrap; }
+.rpt-table .nowrap { white-space: nowrap; }
+.rpt-table td.urdu { text-align: right; font-size: 9pt; line-height: 1.6; padding-top: 0; padding-bottom: 0; }
+.rpt-table tr.group td { background: #efefef; font-weight: 700; font-size: 9.5pt; }
+.rpt-table tr.subtotal td { font-weight: 700; background: #fafafa; }
+.rpt-table tr.grandtotal td { font-weight: 700; background: #d9d9d9; border-top: 2px solid #000; }
+.rpt-table tr.inactive td { color: #666; font-style: italic; }
+.rpt-table td.sign { min-width: 22mm; }
+.empty { padding: 20mm; text-align: center; font-size: 12pt; color: #666; }
+.rpt-printed { margin-top: 6mm; font-size: 7.5pt; color: #555; }
+
+@media print {
+  body { background: #fff; }
+  .no-print, .screen-only { display: none !important; }
+  .rpt { margin: 0; padding: 0; box-shadow: none; width: auto !important; min-height: 0 !important; }
+}
+@media screen and (max-width: 900px) {
+  .rpt { width: auto !important; margin: 8px; padding: 12px; overflow-x: auto; }
+}

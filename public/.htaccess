@@ -1,0 +1,34 @@
+# Payroll & HR - Apache / LiteSpeed rules
+Options -Indexes
+DirectoryIndex index.php
+AddDefaultCharset UTF-8
+AddType application/javascript .js
+AddType font/woff2 .woff2
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Never let LiteSpeed Cache store API, file, report or device responses
+    <IfModule LiteSpeed>
+        RewriteRule ^(api|iclock)(/.*)?$ - [E=Cache-Control:no-cache]
+        RewriteRule ^(api|file|report|migrate)\.php - [E=Cache-Control:no-cache]
+    </IfModule>
+
+    # JSON API
+    RewriteRule ^api(/.*)?$ api.php [QSA,L]
+</IfModule>
+
+<IfModule mod_headers.c>
+    <FilesMatch "\.(js|css)$">
+        Header set Cache-Control "no-cache"
+    </FilesMatch>
+    <FilesMatch "\.(woff2|png|svg|ico)$">
+        Header set Cache-Control "public, max-age=604800"
+    </FilesMatch>
+    Header always set X-Content-Type-Options "nosniff"
+</IfModule>
+
+# Block access to hidden and backup files
+<FilesMatch "(^\.|\.(bak|sql|log|ini|sh|md)$)">
+    Require all denied
+</FilesMatch>

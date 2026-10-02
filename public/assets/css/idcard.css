@@ -1,0 +1,54 @@
+/* Employee ID card, CR80: 85.6mm x 54mm (landscape) */
+body.idcards { background: #e9ecef; }
+.idcard { width: 85.6mm; height: 54mm; overflow: hidden; position: relative; background: #fff; color: #111;
+  border-radius: 3mm; border: .2mm solid #bbb; font: 6.6pt/1.25 Arial, sans-serif; display: flex; flex-direction: column;
+  break-inside: avoid; page-break-inside: avoid; }
+.idcard.blank { border-color: transparent; background: transparent; }
+
+/* ---- front ---- */
+.c-head { display: flex; align-items: center; gap: 2mm; height: 11mm; padding: 1mm 2.5mm; background: #0f4c81; color: #fff; }
+.c-logo { height: 8.5mm; max-width: 14mm; object-fit: contain; background: #fff; border-radius: 1mm; padding: .4mm; }
+.c-company { flex: 1; text-align: center; overflow: hidden; }
+.c-co-en { font-size: 8pt; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.c-co-ur { font-size: 6.6pt; line-height: 1.7; margin-top: -.6mm; white-space: nowrap; }
+.c-body { display: flex; gap: 2.5mm; padding: 1.8mm 2.5mm .5mm; flex: 1; min-height: 0; }
+.c-photo { width: 19mm; flex: none; text-align: center; }
+.c-photo img, .c-nophoto { width: 19mm; height: 25.3mm; object-fit: cover; border: .3mm solid #0f4c81; border-radius: 1mm; display: block; }
+.c-nophoto { display: flex; align-items: center; justify-content: center; color: #aaa; font-size: 6pt; }
+.c-code { margin-top: .8mm; font-weight: 700; font-size: 8pt; letter-spacing: .5px; color: #0f4c81; }
+.c-info { flex: 1; min-width: 0; }
+.c-name { font-size: 9pt; font-weight: 700; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.c-name-ur { font-size: 8pt; line-height: 1.75; margin-top: -.5mm; white-space: nowrap; overflow: hidden; }
+.c-info table { border-collapse: collapse; width: 100%; margin-top: .4mm; }
+.c-info th { text-align: left; font-weight: 700; color: #0f4c81; width: 9mm; padding: .15mm 0; vertical-align: top; }
+.c-info td { padding: .15mm 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 50mm; }
+.c-info td .urdu { font-size: 6pt; line-height: 1.4; }
+.c-foot { display: flex; justify-content: space-between; align-items: flex-end; padding: .6mm 2.5mm 1.2mm; font-size: 5.8pt;
+  border-top: .2mm solid #ddd; }
+.c-sign { border-top: .2mm solid #333; padding-top: .3mm; min-width: 22mm; text-align: center; }
+
+/* ---- back ---- */
+.idcard.back { padding: 2.2mm 3mm 1.5mm; border-top: 1.6mm solid #0f4c81; }
+.b-info { border-collapse: collapse; width: 100%; }
+.b-info th { text-align: left; width: 12mm; color: #0f4c81; padding: .2mm 0; vertical-align: top; }
+.b-info td { padding: .2mm 0; }
+.b-barcode { margin: 1mm auto 0; width: 52mm; text-align: center; }
+.b-barcode svg { width: 52mm; height: 9mm; display: block; }
+.b-code { font: 700 7pt monospace; letter-spacing: 1px; }
+.b-note { font-size: 5.6pt; color: #444; text-align: center; margin-top: .6mm; }
+.b-company { margin-top: auto; font-size: 5.8pt; text-align: center; border-top: .2mm solid #ddd; padding-top: .5mm; }
+
+/* ---- layouts ---- */
+.card-sheet { display: grid; grid-template-columns: repeat(2, 85.6mm); grid-auto-rows: 54mm; gap: 4mm 6mm;
+  justify-content: center; align-content: start; width: 194mm; min-height: 281mm; margin: 12px auto; padding: 0;
+  background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.2); page-break-after: always; break-after: page; }
+.card-sheet:last-child { page-break-after: auto; break-after: auto; }
+.cr80-page { width: 85.6mm; height: 54mm; margin: 12px auto; page-break-after: always; break-after: page; }
+.cr80-page .idcard { border-radius: 0; border: 0; }
+
+@media print {
+  body.idcards { background: #fff; }
+  .card-sheet { margin: 0; box-shadow: none; min-height: 0; }
+  .cr80-page { margin: 0; }
+  .layout-sheet .idcard { border: .2mm dashed #999; } /* cutting guide */
+}
