@@ -249,3 +249,35 @@ table.salgrid td.warn-cell { cursor: help; }
 .btn.ok { background: var(--ok); border-color: var(--ok); color: #fff; }
 .btn.ok:disabled { opacity: .5; }
 .sal-list { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* Dashboard (batch 5) */
+.card.link { color: inherit; text-decoration: none; }
+.card.link:hover { border-color: var(--accent); }
+.md + .dash-grid, .md { margin-bottom: 12px; }
+.dash-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
+.viz-plot { position: relative; }
+svg.trend { width: 100%; height: auto; display: block; }
+svg.trend .gridline { stroke: var(--line-soft); stroke-width: 1; }
+svg.trend .tick { font-size: 10px; fill: var(--muted); }
+svg.trend g.hover path { filter: brightness(.92); }
+.viz-legend { display: flex; gap: 10px; font-size: 12px; color: #374151; }
+.viz-legend i, .viz-tip i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.viz-tip { position: absolute; top: 4px; transform: translateX(-50%); background: #fff; border: 1px solid var(--line); border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.12); padding: 6px 9px; font-size: 12px; pointer-events: none; white-space: nowrap; z-index: 2; }
+.todo { display: grid; gap: 6px; }
+.todo-item { display: grid; grid-template-columns: 48px 1fr auto; align-items: center; gap: 8px; text-align: left; padding: 8px 10px;
+  border: 1px solid var(--line-soft); border-radius: var(--radius); background: #fff; cursor: pointer; font: inherit; color: inherit; }
+.todo-item:hover { border-color: var(--accent); background: var(--accent-soft); }
+.todo-item b { font-size: 18px; text-align: right; color: var(--accent); }
+
+/* Audit / rates / system */
+.diff { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.diff th, .diff td { border: 1px solid var(--line-soft); padding: 4px 6px; text-align: left; vertical-align: top; word-break: break-word; }
+.diff th { background: #f3f4f6; width: 22%; }
+.diff td.old { background: #fef2f2; }
+.diff td.new { background: #f0fdf4; }
+.checks { display: grid; gap: 4px; }
+.check { display: grid; grid-template-columns: 70px 220px 1fr; gap: 8px; align-items: baseline; font-size: 13px; padding: 4px 0; border-bottom: 1px solid var(--line-soft); }
+.lock-note { font-size: 12px; color: var(--muted); }
+.dash-grid > .panel, .md > .panel { min-width: 0; }
+.dash-grid .panel-body, .rates-wrap { overflow-x: auto; }

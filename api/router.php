@@ -15,6 +15,7 @@ use App\Http;
 use App\Request;
 use App\Controllers\AccountController;
 use App\Controllers\AttendanceController;
+use App\Controllers\AuditController;
 use App\Controllers\AttendanceVoucherController;
 use App\Controllers\AuthController;
 use App\Controllers\DeviceController;
@@ -29,11 +30,13 @@ use App\Controllers\EmployeeController;
 use App\Controllers\HolidayController;
 use App\Controllers\JournalController;
 use App\Controllers\LookupController;
+use App\Controllers\RatesController;
 use App\Controllers\RoleController;
 use App\Controllers\SalaryController;
 use App\Controllers\SettingsController;
 use App\Controllers\ShiftController;
 use App\Controllers\ShiftGroupController;
+use App\Controllers\SystemController;
 use App\Controllers\UserController;
 use App\Controllers\VoucherController;
 
@@ -121,6 +124,19 @@ $routes = array_merge(
         ['GET',    '/journal/{id}', [JournalController::class, 'show'],   'journal.view'],
         ['POST',   '/journal',      [JournalController::class, 'store'],  'journal.add'],
         ['PUT',    '/journal/{id}', [JournalController::class, 'update'], 'journal.edit'],
+
+        // Rates (statutory + tax slabs), audit trail, system health
+        ['GET',    '/rates',                  [RatesController::class, 'index'],             'settings.view'],
+        ['POST',   '/rates/statutory',        [RatesController::class, 'storeStatutory'],    'settings.edit'],
+        ['PUT',    '/rates/statutory/{id}',   [RatesController::class, 'updateStatutory'],   'settings.edit'],
+        ['DELETE', '/rates/statutory/{id}',   [RatesController::class, 'destroyStatutory'],  'settings.edit'],
+        ['PUT',    '/rates/tax-slabs',        [RatesController::class, 'saveTaxSlabs'],      'settings.edit'],
+        ['DELETE', '/rates/tax-slabs',        [RatesController::class, 'destroyTaxSlabs'],   'settings.edit'],
+        ['GET',    '/audit',                  [AuditController::class, 'index'],             'audit.view'],
+        ['GET',    '/audit/facets',           [AuditController::class, 'facets'],            'audit.view'],
+        ['GET',    '/audit/logins',           [AuditController::class, 'logins'],            'audit.view'],
+        ['GET',    '/audit/{id}',             [AuditController::class, 'show'],              'audit.view'],
+        ['GET',    '/system/status',          [SystemController::class, 'status'],           'settings.edit'],
 
         // Salary sheets: type = permanent | daily_wages
         ['GET',    '/salary/sheets',                [SalaryController::class, 'index'],    'salary.view'],

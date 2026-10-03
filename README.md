@@ -12,7 +12,7 @@ Web-based payroll and HR system for Pakistani factories. It rebuilds the workflo
 | 2 | Attendance: manual voucher, barcode kiosk, ZKTeco ADMS push + CSV/Excel import, daily post, OT approval, leave register, attendance reports, live TV screen | **Delivered** |
 | 3 | Accounts vouchers + loan schedule + JV + voucher reports + DayBook | **Delivered** |
 | 4 | PayrollEngine, salary sheets, posting/locking, payslips, salary reports, unit tests | **Delivered** |
-| 5 | Dashboard, audit log viewer, rate settings, hardening, Hostinger deployment guide | Next |
+| 5 | Dashboard, audit log viewer, rate settings, hardening, Hostinger deployment guide | **Delivered** |
 
 The **full database schema for every module** is already in place (`migrations/001`–`005`), so later batches only add code.
 
@@ -44,6 +44,8 @@ php tests/run.php
 Log in with **admin / admin123**. You'll be asked to change the password on first login. Demo users (password `demo1234`): `hr`, `operator`, `accounts`, `viewer`.
 
 Hosts without SSH: set `security.setup_key` in `config.php`, open `/migrate.php?key=…` (add `&seed=1` for demo data), then clear the key.
+
+**Production on Hostinger: follow [DEPLOY.md](DEPLOY.md)** (upload, config outside `public_html`, migrations from the browser, devices, backups, security checklist).
 
 ## Key design points
 
@@ -348,6 +350,84 @@ Migration `010_payroll_lines.sql` makes day counts fractional, adds allowance, h
 8. **Daily Wages** sheet for September: 3 employees, Pay = rate × work days. Rest days are not paid.
 9. Try an overlapping period (26-09 → 25-10) for Permanent → refused.
 10. As `hr`: view and print only (no Save / Post). As `accounts`: full access.
+
+## Batch 5 — Dashboard, audit, rates, hardening, deployment
+
+### What was added
+
+- **Dashboard.** Every section is shown only to users who may see that module.
+  - Headcount and today's attendance.
+  - **Attendance for the last 14 days:** stacked bars with a hover tooltip, a legend and a *Table* toggle.
+  - **Needs attention:** punches not posted, unknown machine IDs, overtime to approve, pending leave, draft vouchers and draft salary sheets. Each is a link to its screen.
+  - Salary sheets of the last 6 months, loans outstanding, this month's vouchers, employees by department and upcoming holidays.
+- **EOBI / PESSI & Tax Slabs** (Setup).
+  - Effective-dated statutory rates: method, employee and employer share, minimum wage, wage ceiling.
+  - Income tax slab sets per tax year, with *Copy as new year*.
+  - Slabs are validated: they start at 0, are continuous, and only the last one is open-ended (`app/Rates.php`, `tests/RatesTest.php`).
+  - **Locking:** a rate or slab set is locked once a salary sheet that covers its effective date has been posted while the row existed. Add a new row instead. New rows may be back-dated (late notifications); they apply to sheets not yet posted, and posted sheets keep their stored amounts.
+- **Company Settings** now also has salary **rounding** (half up / up / down), the **OT multiplier** and the **default shift hours** used for the OT rate.
+- **Audit Log** (Administration).
+  - Filter by date, user, record type, action, and free text in the values or IP.
+  - 100 entries per page; PgUp/PgDn change pages.
+  - Double-click an entry to see the changed fields side by side (before / after).
+  - *Login attempts* lists the last 30 days of successful and failed logins.
+- **System Health** (Administration, admins).
+  - Checks: PHP version and extensions, HTTPS, debug, setup key, storage writable / outside the web root / outside the deploy folder, DB version, time zone, pending migrations, default admin password, upload limits, table sizes.
+  - **Download database backup** (`backup.php`): a gzip SQL dump in pure PHP, streamed table by table. Admins only, and audit-logged. Verified by restoring into an empty database with identical table checksums.
+- **Deployment guide:** [DEPLOY.md](DEPLOY.md).
+
+### Hardening
+
+- **Content-Security-Policy.**
+  - The SPA allows only same-origin scripts plus a per-request nonce for its one inline script.
+  - Print, kiosk and TV pages allow inline scripts but nothing external.
+  - JSON responses send `default-src 'none'`.
+  - Also sent: `Permissions-Policy`, `Cross-Origin-Opener-Policy`, and HSTS on HTTPS.
+- The DOM helper no longer accepts raw HTML (`html:`) or inline `on…=` handler strings. All text is inserted as text.
+- JSON request bodies are capped at 4 MB (413).
+- Auto-registration of unknown ZKTeco serial numbers is capped (10 new inactive devices per day; serials up to 40 characters).
+- **Config location.** Config can live in `../payroll-config.php`, outside the deploy folder, so Git redeploys can't wipe it or expose it. Storage should also live outside, and System Health warns if it doesn't.
+- Removed two files committed by mistake (an empty curl cookie file `-b`, and a Python wheel).
+- **Already in place from batch 1:**
+  - Login throttling (5 attempts per user + IP in 15 minutes) and session regeneration on login.
+  - HttpOnly / SameSite / Secure cookies, idle timeout, CSRF on every write.
+  - Prepared statements everywhere; uploads stored outside the web root and served through PHP.
+  - Root and folder `.htaccess` deny rules; `Cache-Control: no-store` on the API.
+
+### API endpoints added in batch 5
+
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/api/dashboard/summary` (now with trend, pending, payroll, loans) | dashboard.view (+ module view per section) |
+| GET | `/api/rates` → `{locked_until, statutory, tax_sets}` | settings.view |
+| POST / PUT / DELETE | `/api/rates/statutory` · `/api/rates/statutory/{id}` `{code, effective_from, calc_method, employee_share, employer_share, min_wage?, wage_ceiling?, remarks?}` | settings.edit |
+| PUT | `/api/rates/tax-slabs` `{tax_year, effective_from, original_effective_from?, slabs:[{income_from, income_to\|null, fixed_amount, rate_percent}]}` | settings.edit |
+| DELETE | `/api/rates/tax-slabs?effective_from=` | settings.edit |
+| GET | `/api/audit?from=&to=&user_id=&entity=&action=&entity_id=&q=&page=` · `/api/audit/{id}` · `/api/audit/facets` · `/api/audit/logins` | audit.view |
+| GET | `/api/system/status` | settings.edit |
+| GET | `backup.php` (download `.sql.gz`) | settings.edit |
+
+### Manual test checklist (batch 5)
+
+1. `php tests/run.php` → 47 passed.
+2. **Dashboard** as admin:
+   - 14 bars; hovering a bar shows the day's present / absent / leave / late, and *Table* shows the same numbers.
+   - *Needs attention* lists unposted punches and draft vouchers, and each item opens its screen.
+   - Log in as `operator`: only the attendance parts are shown (payroll, loans and voucher panels are hidden).
+3. **Rates.** With September salary posted:
+   - editing or deleting the 2025-07-01 EOBI row or the 2025-26 slabs is refused with the name of the posted period;
+   - *New rate* EOBI from 01-10-2026 with minimum wage 42,000 saves, and without a minimum wage it is refused;
+   - a slab set with a gap (0–600,000 then 700,000–) is refused, saying which boundary is wrong;
+   - *Copy as new year* → 2026-27 from 01-07-2026 saves, and can be edited and deleted while no posted salary used it.
+4. **Company Settings:** change the OT multiplier to 1.5 → Show (F7) on a month that is **not posted** uses the new OT rate (October, `0011`: 75,000 ÷ 31 ÷ 7 × 1.5 = 518.43). Posted months keep their stored amounts. Set it back to 2.
+5. **Audit Log:**
+   - the changes from steps 3–4 appear, and double-click shows before/after;
+   - filter by user, record type `statutory_rates` and action;
+   - *Login attempts* shows a failed login you made on purpose;
+   - as `hr`, the menu item is hidden and `/api/audit` returns 403.
+6. **System Health:** locally, *Debug* shows ✕ when `debug` is true. **Download database backup** produces `payroll-backup-….sql.gz`; importing it into an empty database gives the same data.
+7. View the page source of the app: the response has a `Content-Security-Policy` header with a nonce. The browser console shows no CSP errors on the dashboard, employee photo cropper, reports, kiosk and TV.
+8. Follow DEPLOY.md on a Hostinger test subdomain: `/app/`, `/migrations/` and `/config.php` return 403; `migrate.php?key=` works until the key is cleared.
 
 ## Notes and open questions
 

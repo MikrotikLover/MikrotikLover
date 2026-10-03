@@ -15,6 +15,7 @@ use App\Storage;
 
 Http::noStore();
 Http::securityHeaders();
+Http::csp();
 $token = (string)($_GET['token'] ?? '');
 if (!LiveAttendance::checkToken('tv_token', $token)) {
     http_response_code(403);

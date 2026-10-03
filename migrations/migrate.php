@@ -62,6 +62,14 @@ final class Migrator
         return $out;
     }
 
+    /** @return string[] migrations not yet applied (seeds excluded) */
+    public function pending(): array
+    {
+        $this->ensureTable();
+        $applied = Database::column('SELECT migration FROM schema_migrations');
+        return array_values(array_diff(array_keys($this->files(false)), $applied));
+    }
+
     public function status(bool $seed): void
     {
         $this->ensureTable();

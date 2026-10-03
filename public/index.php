@@ -9,6 +9,8 @@ use App\Http;
 
 Http::noStore();
 Http::securityHeaders();
+$nonce = Http::nonce();
+Http::csp($nonce);
 header('Content-Type: text/html; charset=utf-8');
 
 // Cache-buster for static assets: newest mtime under assets/
@@ -34,7 +36,7 @@ $appName = Http::e((string)Config::get('app_name', 'Payroll & HR'));
 <body>
 <div id="app"><div style="padding:40px;text-align:center;color:#6b7280">Loading…</div></div>
 <noscript>This application requires JavaScript.</noscript>
-<script>window.APP = { name: <?= json_encode((string)Config::get('app_name', 'Payroll & HR')) ?>, version: <?= $ver ?> };</script>
+<script nonce="<?= $nonce ?>">window.APP = { name: <?= json_encode((string)Config::get('app_name', 'Payroll & HR')) ?>, version: <?= $ver ?> };</script>
 <script type="module" src="assets/js/app.js?v=<?= $ver ?>"></script>
 </body>
 </html>

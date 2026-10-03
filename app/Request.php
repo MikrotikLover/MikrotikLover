@@ -5,6 +5,9 @@ namespace App;
 
 final class Request
 {
+    /** Largest JSON body accepted (a full salary sheet of ~2,000 employees is well below this). */
+    private const MAX_JSON = 4 * 1024 * 1024;
+
     public readonly string $method;
     public readonly string $path;
     /** @var array<string,string> route parameters */
@@ -36,7 +39,13 @@ final class Request
         if ($this->body === null) {
             $type = $_SERVER['CONTENT_TYPE'] ?? '';
             if (str_contains($type, 'application/json')) {
-                $raw = file_get_contents('php://input') ?: '';
+                if ((int)($_SERVER['CONTENT_LENGTH'] ?? 0) > self::MAX_JSON) {
+                    throw new ApiException('Request is too large.', 413);
+                }
+                $raw = file_get_contents('php://input', false, null, 0, self::MAX_JSON + 1) ?: '';
+                if (strlen($raw) > self::MAX_JSON) {
+                    throw new ApiException('Request is too large.', 413);
+                }
                 $decoded = $raw === '' ? [] : json_decode($raw, true);
                 if (!is_array($decoded)) {
                     throw new ApiException('Invalid JSON body.', 400);

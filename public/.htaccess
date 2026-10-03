@@ -11,7 +11,7 @@ AddType font/woff2 .woff2
     # Never let LiteSpeed Cache store API, file, report or device responses
     <IfModule LiteSpeed>
         RewriteRule ^(api|iclock)(/.*)?$ - [E=Cache-Control:no-cache]
-        RewriteRule ^(api|file|report|migrate|iclock|kiosk|tv)\.php - [E=Cache-Control:no-cache]
+        RewriteRule ^(api|file|report|migrate|backup|iclock|kiosk|tv)\.php - [E=Cache-Control:no-cache]
     </IfModule>
 
     # JSON API

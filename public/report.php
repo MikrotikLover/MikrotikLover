@@ -48,6 +48,7 @@ const REPORTS = [
 
 Http::noStore();
 Http::securityHeaders();
+Http::csp();
 Auth::startSession();
 
 $user = Auth::user();

@@ -43,6 +43,13 @@ try {
 
     $device = Database::one('SELECT * FROM devices WHERE serial_no = ?', [$sn]);
     if (!$device) {
+        // Cap auto-registration so random serial numbers cannot flood the devices table.
+        if ((int)Database::value('SELECT COUNT(*) FROM devices WHERE is_active = 0 AND created_at > NOW() - INTERVAL 1 DAY') >= 10) {
+            iclock_reply('ERROR: unknown device', 403);
+        }
+        if (strlen($sn) > 40) {
+            iclock_reply('ERROR: invalid SN', 400);
+        }
         Database::insert('devices', ['serial_no' => $sn, 'name' => 'New device ' . $sn, 'location' => 'Auto-registered, activate to accept punches', 'is_active' => 0]);
         $device = Database::one('SELECT * FROM devices WHERE serial_no = ?', [$sn]);
     }

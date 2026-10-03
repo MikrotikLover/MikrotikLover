@@ -1,10 +1,11 @@
 <?php
 /**
- * Copy this file to config.php and edit the values.
- *
- * On Hostinger, keep config.php OUTSIDE public_html, or keep it in the
- * project root (one level above /public) which is never web-served.
- * You can also point PAYROLL_CONFIG (environment variable) to an absolute path.
+ * Copy this file and edit the values. The app looks for, in order:
+ *   1. the file named by the PAYROLL_CONFIG environment variable
+ *   2. ../payroll-config.php   one level above the app folder (recommended on Hostinger:
+ *                              outside public_html, survives Git redeploys)
+ *   3. config.php              in the app folder (local development; never web-served)
+ * See DEPLOY.md.
  */
 return [
     'app_name' => 'Payroll & HR',

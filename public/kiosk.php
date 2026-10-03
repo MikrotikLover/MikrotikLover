@@ -21,6 +21,7 @@ use App\Storage;
 
 Http::noStore();
 Http::securityHeaders();
+Http::csp();
 $token = (string)($_GET['token'] ?? '');
 if (!LiveAttendance::checkToken('kiosk_token', $token)) {
     http_response_code(403);

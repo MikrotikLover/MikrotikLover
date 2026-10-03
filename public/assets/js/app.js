@@ -18,6 +18,7 @@ const NAV = [
     { path: '/shift-groups', label: 'Shift Groups', ico: '⟳', perm: ['shift_groups', 'view'] },
     { path: '/holidays', label: 'Holidays & Rest Days', ico: '☀', perm: ['holidays', 'view'] },
     { path: '/settings/company', label: 'Company Settings', ico: '⚙', perm: ['settings', 'view'] },
+    { path: '/settings/rates', label: 'EOBI / PESSI & Tax Slabs', ico: '%', perm: ['settings', 'view'] },
   ] },
   { group: 'Attendance', items: [
     { path: '/attendance/voucher', label: 'Attendance Voucher', ico: '✓', perm: ['attendance', 'view'] },
@@ -47,6 +48,8 @@ const NAV = [
   { group: 'Administration', items: [
     { path: '/users', label: 'Users', ico: '☺', perm: ['users', 'view'] },
     { path: '/roles', label: 'Roles & Permissions', ico: '⚿', perm: ['users', 'view'] },
+    { path: '/audit', label: 'Audit Log', ico: '⌕', perm: ['audit', 'view'] },
+    { path: '/system', label: 'System Health', ico: '♥', perm: ['settings', 'edit'] },
   ] },
 ];
 
@@ -77,6 +80,9 @@ route('/accounts', page('masters'), { title: 'Chart of Accounts', perm: ['journa
 route('/devices', page('masters'), { title: 'Attendance Devices, Kiosk & TV', perm: ['devices', 'view'], kind: 'devices' });
 route('/salary/permanent', page('salary'), { title: 'Salary Sheet — Permanent', perm: ['salary', 'view'], kind: 'permanent' });
 route('/salary/daily', page('salary'), { title: 'Salary Sheet — Daily Wages', perm: ['salary', 'view'], kind: 'daily_wages' });
+route('/settings/rates', page('rates'), { title: 'EOBI / PESSI / SESSI & Income Tax Slabs', perm: ['settings', 'view'] });
+route('/audit', page('audit'), { title: 'Audit Log', perm: ['audit', 'view'] });
+route('/system', page('system'), { title: 'System Health', perm: ['settings', 'edit'] });
 route('/users', page('users'), { title: 'Users', perm: ['users', 'view'] });
 route('/roles', page('roles'), { title: 'Roles & Permissions', perm: ['users', 'view'] });
 

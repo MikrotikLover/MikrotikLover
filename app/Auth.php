@@ -16,8 +16,7 @@ final class Auth
         if (session_status() === PHP_SESSION_ACTIVE) {
             return;
         }
-        $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-            || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+        $https = Http::isHttps();
         session_name((string)Config::get('session.name', 'PAYROLLSESSID'));
         session_set_cookie_params([
             'lifetime' => 0,

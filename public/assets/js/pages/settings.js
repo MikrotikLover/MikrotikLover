@@ -1,4 +1,5 @@
-// Company settings: name/address (English + Urdu), logo, salary-month day basis, rest days, ID card options.
+// Company settings: name/address (English + Urdu), logo, payroll basis (day basis, rounding, OT), rest days, ID card options.
+// Statutory rates and tax slabs have their own screen (rates.js).
 import { get, put, del, api } from '../core/api.js';
 import { h, toast, confirmDialog, WEEKDAYS } from '../core/dom.js';
 import { Form } from '../core/form.js';
@@ -24,6 +25,12 @@ export default {
       { name: 'social_security', label: 'Social security scheme', type: 'select', required: true, span: 4,
         options: [{ value: 'PESSI', label: 'PESSI (Punjab)' }, { value: 'SESSI', label: 'SESSI (Sindh)' }] },
       { name: 'max_daily_hours', label: 'Flag attendance above (hours/day)', type: 'number', required: true, span: 4, min: 1, max: 24 },
+      { name: 'rounding_rule', label: 'Salary rounding (whole rupees)', type: 'select', required: true, span: 4,
+        options: [{ value: 'half_up', label: 'Nearest rupee (half up)' }, { value: 'up', label: 'Always up' }, { value: 'down', label: 'Always down' }] },
+      { name: 'ot_multiplier', label: 'Overtime multiplier', type: 'number', required: true, span: 4, min: 1, max: 5, step: 0.25,
+        help: 'OT rate = basic ÷ days ÷ shift hours × multiplier' },
+      { name: 'default_shift_hours', label: 'Default shift hours (for OT rate)', type: 'number', required: true, span: 4, min: 1, max: 24, step: 0.5,
+        help: 'Used when an employee has no shift' },
       { name: 'weekly_rest_days', label: 'Weekly rest days', type: 'checks', span: 12, options: WEEKDAYS.map((d, i) => ({ value: i, label: d })) },
       { type: 'section', label: 'ID card' },
       { name: 'id_card_valid_months', label: 'Card validity (months)', type: 'number', required: true, span: 3, min: 1, max: 120 },
