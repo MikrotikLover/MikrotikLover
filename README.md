@@ -13,6 +13,7 @@ Web-based payroll and HR system for Pakistani factories. It rebuilds the workflo
 | 3 | Accounts vouchers + loan schedule + JV + voucher reports + DayBook | **Delivered** |
 | 4 | PayrollEngine, salary sheets, posting/locking, payslips, salary reports, unit tests | **Delivered** |
 | 5 | Dashboard, audit log viewer, rate settings, hardening, Hostinger deployment guide | **Delivered** |
+| + | Salary increment module: single / bulk increments, effective-dated salary, pro-rata salary sheet, OT at the salary of each date, history + 2 reports (see below) | **Delivered** |
 
 The **full database schema for every module** is already in place (`migrations/001`–`005`), so later batches only add code.
 
@@ -458,6 +459,137 @@ An independent security review and a payroll-correctness review of the whole sys
 - **Posting consumes vouchers and OT with guarded updates** (`salary_sheet_id IS NULL`, still posted / approved). A concurrent change makes posting stop instead of silently using stale data.
 
 Tests: `php tests/run.php` → 49 passed (adds the fixed-basis cases).
+
+## Salary increment module
+
+Admins enter every increment by hand; nothing is applied automatically. Increments can be **percentage**, **fixed amount** or a **direct new salary**, and each takes effect from an effective date. Payroll and overtime always price a date with the salary effective on that date.
+
+### How it works
+
+- **One source for the pay rate.** `salary_increments` holds the rate over time: the monthly basic for permanent and contract staff, and the rate per day for daily wages. `App\Increments::getSalaryOnDate($employeeId, $date): string` returns the latest `new_salary` with `effective_date <= $date` (ties go to the highest `id`), as a decimal string. Payroll calls it through a per-request cache, so a whole sheet costs one query.
+- **Other salary terms stay where they were.** `employee_salary_history` still holds allowances, OT applicability and the fixed OT rate, the EOBI / PESSI / tax flags, and the payment mode and bank. Its `basic_salary` and `daily_rate` columns are no longer read by payroll. New records store a snapshot of the increment rate there.
+- **`employees.basic_salary`** (new column) is a cached copy of the salary effective **today**. It is refreshed after every increment write and once a day: the first API request of the day, or the optional cron `tools/sync_salaries.php`. A future increment therefore doesn't change it until its date.
+- **Calculation.** New salary = old + old × % / 100, or old + amount, or the value itself. It is rounded half up to a whole rupee. The value must be > 0 and the new salary must be > 0. All increment, pro-rata and OT arithmetic uses integer paisa (`App\Money::toPaisa / divRound`), never float.
+- **Date rules.**
+  - The effective date defaults to today (Asia/Karachi). It must be after the joining date and not after the leaving date.
+  - **Future** dates are allowed. The increment shows as *Scheduled* until its date.
+  - **Past** dates are allowed only if no salary sheet with this employee is posted for that month or any later month. Arrears are not calculated.
+  - Only one increment per employee per date.
+  - A new increment must be dated **after** the employee's latest one. To add an earlier one, delete the later one first. This keeps `old_salary` correct.
+- **Pro-rata.** When an effective date falls inside a salary period, the period is split into segments. Each segment pays `segment salary ÷ days in month × paid days in that segment`. Absent days, leave, half days and unmarked days are counted per segment. Fines are still one amount per row.
+  - On the fixed 30 / 26-day basis, the last segment absorbs the difference between the divisor and the calendar length, so a full month still pays exactly the blended salary.
+  - Daily wages pay each segment's rate × its present days.
+  - The row gets **▲ inc** on screen (hover for the split) and **▲** plus a footnote on the printed sheet. The split is stored in `salary_sheet_lines.increment_note`.
+- **Overtime.** Each approved OT row is priced with the salary effective on its `ot_date`, and each OT-voucher hour with the salary on its voucher date. The rate is `salary ÷ (days in month × shift hours) × multiplier` (daily wages: `rate ÷ shift hours × multiplier`). The multiplier comes from Company Settings → *Overtime multiplier* (1, 1.5, 2…). If OT falls on both sides of an increment, the sheet shows a blended rate (so hours × rate = amount), and the note lists each rate. An employee's fixed OT rate, if set, still overrides all of this.
+- **Deleting.**
+  - Only the employee's latest increment can be deleted, and never the joining row.
+  - It can't be deleted if a salary sheet is posted for its month or later.
+  - `employees.basic_salary` is recalculated afterwards.
+  - There is no edit. To correct an increment, delete it and add it again.
+- **Permissions.**
+  - Add, bulk-apply and delete: admin-role users only (the router's `'admin'` permission).
+  - History and both reports: anyone with `employees.view` / `employees.print`.
+  - Every write is in a DB transaction and audit-logged (`salary_increments` create / delete / bulk; joining-row moves).
+
+### Screens
+
+- **Payroll → Salary Increment** (`#/increments[/{employee id}]`): pick the employee (code + Enter, or F2).
+  - The screen shows the current salary and any scheduled increments.
+  - Choose the type, value, effective date, approver and reason. A live server preview shows old salary → new salary, the change and %, Applied / Scheduled, and any rule that blocks it. **F10** saves.
+  - The history grid below has *Delete* on the latest row. **F9** prints the employee's history.
+- **Payroll → Bulk Increment** (`#/increments/bulk`, admins only): choose a department or shift group, optionally monthly or daily-wages staff only, then a percentage or fixed amount, date and reason.
+  - **Preview (F7)** lists every employee with old / new salary. Employees who fail a rule are greyed out with the reason.
+  - Untick employees to exclude them, then **Confirm & Apply (F10)**.
+  - Everything is saved in one transaction: if any ticked employee fails a rule at save time, nothing is saved.
+- **Employee Info → Increment History** tab: date, type, value, old / new salary, reason, approved by, created by, and status (Applied / Scheduled, plus *Posted* when locked).
+- **Reports → Employees:**
+  - **Increment Register:** date range and department; grouped by department, with old vs new salary cost per department and in total; CSV.
+  - **Employee Increment History:** one employee's timeline from joining, with current, joining and scheduled salary; CSV.
+
+### API endpoints
+
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/api/employees/{id}/increments` → `{employee (current_salary), rows}` | employees.view |
+| GET | `/api/increments/meta` → approvers, `can_manage` | employees.view |
+| GET | `/api/increments/preview?employee_id=&increment_type=&increment_value=&effective_date=` | admin |
+| POST | `/api/increments` `{employee_id, increment_type: percentage\|fixed\|new_salary, increment_value: "10.5", effective_date, reason?, approved_by?}` | admin |
+| POST | `/api/increments/bulk/preview` `{scope: department\|shift_group, scope_id, emp_group?: monthly\|daily, increment_type: percentage\|fixed, increment_value, effective_date}` | admin |
+| POST | `/api/increments/bulk` (same + `employee_ids: [...]` = the ticked employees, `reason?`, `approved_by?`) | admin |
+| DELETE | `/api/increments/{id}` | admin |
+| GET | `report.php?r=increment_register&from=&to=&department_id=&include_joining=1` · `r=employee_increments&employee_id=\|code=` (+ `&format=csv`) | employees.print |
+
+### Files
+
+**New**
+- `migrations/012_salary_increments.sql`: the table (spec DDL with `INT UNSIGNED` + foreign keys to match `employees` / `users`); backfill from salary history; `employees.basic_salary`; `salary_sheet_lines.increment_note`.
+- `migrations/seeds/120_demo_increments.sql`: the same backfill for the demo seed, which loads employees after 012.
+- `app/Increments.php`: `getSalaryOnDate`, segments, formulas, date rules, add / bulk / delete, `basic_salary` sync.
+- `api/controllers/IncrementController.php`
+- `app/Reports/IncrementRegisterReport.php`, `app/Reports/EmployeeIncrementReport.php`
+- `public/assets/js/pages/increments.js`: single and bulk screens, plus the shared history grid.
+- `tools/sync_salaries.php`: optional hPanel cron.
+- `tests/IncrementsTest.php`
+
+**Changed**
+- `app/Money.php`: integer-paisa helpers (`toPaisa`, `fromPaisa`, `divRound`, `roundRupees`).
+- `app/PayrollEngine.php`: optional `segments` (pro-rata) and `ot_items` (per-date OT pricing) inputs, computed in paisa. Without them the result is exactly as before.
+- `app/Payroll.php`: the rate comes from `getSalaryOnDate`. Attendance is counted per salary segment, and OT rows and OT vouchers are priced by their date. It writes `increment_note`. A sheet with no increment inside its period is unchanged: Jun, Sep and Oct 2026, on calendar, fixed30 and fixed26, were compared line by line with the previous code, all identical.
+- `api/router.php`: increment routes, the `'admin'` route permission, and the daily `basic_salary` sync.
+- `api/controllers/EmployeeController.php`:
+  - a new employee gets a *joining* row (from the basic salary or daily rate typed on the Salary Info tab);
+  - changing the joining date moves that row (refused if an increment or posted salary is in the way);
+  - the list reads `employees.basic_salary`;
+  - salary info records no longer take a typed rate (the server stores the increment snapshot).
+- `app/Reports/EmployeeListReport.php`: salary column from `employees.basic_salary`.
+- `app/Reports/SalarySheetReport.php`: ▲ marker, footnote and CSV column for mid-period increments.
+- `public/report.php`: registers the two reports.
+- `public/assets/js/app.js`: menu items and routes.
+- `public/assets/js/pages/employee.js`:
+  - new *Increment History* tab;
+  - the Salary Info dialog drops the basic / daily rate fields, because the rate is managed by increments (the initial salary of a new employee is still typed there);
+  - tab indexes shifted.
+- `public/assets/js/pages/salary.js`: ▲ inc badge with tooltip, and a formula note.
+- `public/assets/js/pages/reports.js`: the two report cards.
+- `DEPLOY.md`: upgrade note and optional cron.
+
+### Decisions to confirm
+
+- **`employees.basic_salary` didn't exist.** The salary lived only in `employee_salary_history`. It was added as a synced cache, as the spec asked. For daily-wages staff it holds the rate per day.
+- **Backfill uses the full history, not only the current salary.** A single joining row at today's salary would make re-generated old months (e.g. June 2026 for `0001`: 145,000, not 160,000) use the wrong salary. Employees without any salary record get a joining row of 0. Migrated amounts are kept exactly, not rounded.
+- **Changing the employee type** between daily wages and monthly doesn't convert the rate. Add a *new salary* increment from the change date.
+- **Bulk fixed amounts** on mixed groups: the *Employees* filter defaults to *Monthly* so a Rs 3,000 increment doesn't hit daily rates by accident.
+- **Posted-month lock is per employee.** It checks posted sheets that have a line for that employee (salary month ≥ the effective month, or a period reaching the date).
+- **Existing engine deductions** (EOBI / PESSI / tax / loans) still use the batch-4 float code, rounded to whole rupees. Only work pay, OT and increment arithmetic moved to paisa.
+- **Observed, not changed:** the Salary Sheet screen opens on the previous month. When that month is posted, the From / To fields stay read only; open another month from the *Sheets:* buttons.
+
+### Test checklist (increments)
+
+Automated: `php tests/run.php` → 62 passed (13 new in `IncrementsTest.php`). The scenarios below were also run end to end through the HTTP API on a fresh `--seed` database (56 checks, all passing). Today = 03-10-2026 in the examples.
+
+1. **% increment.** `0003` (45,000): 10% from 15-10-2026 → preview 45,000 → 49,500 (+4,500, 10.00%), Scheduled. 7.5% of 75,000 = 80,625; 3.33% of 44,000 = 45,465.20 → **45,465**.
+2. **Fixed increment.** `0004` (43,000): +3,000 from 01-10-2026 → 46,000, *Applied*. The employee list shows 46,000.
+3. **Direct new salary.** `0006`: new salary 47,500.40 from today → 47,500, old salary 42,000.
+4. **Mid-month increment with pro-rata.** Before posting September, `0005` (52,000; LWP on 1 Sep, absent on 30 Sep): +8,000 from 16-09-2026. Show September → work pay **52,267** = 52,000/30×14 + 60,000/30×14. Basic 60,000. The row has **▲ inc** with the split in its tooltip, and the printed sheet has ▲ and a footnote.
+5. **Future-dated increment.** After step 1, `employees.basic_salary` for `0003` stays 45,000 and the history shows *Scheduled*. On 15-10, the first request of the day (or the cron) makes it 49,500. October's draft splits at 15-10.
+6. **Past date in an unposted month (allowed).** Step 2 (01-10-2026 while October isn't posted).
+7. **Past date in a posted month (blocked).** Post September, then try `0009` from 20-09-2026 → "Salary for September 2026 is already posted for this employee…". 01-08-2026 is also refused, because a later month is posted.
+8. **Bulk increment with exclusions.** Bulk → Department *Administration*, Monthly, 5%, 01-11-2026 → Preview shows `0001` 160,000 → 168,000 and `0015` 40,000 → 42,000. Untick `0015` → Apply → only `0001` is saved. Bulk +1,000 from 25-09-2026 on a department after September is posted → refused, **nothing** saved.
+9. **Overtime before and after an increment.** `0005`: approve 2 h OT on 10-09 and 2 h on 17-09 → OT = 2 h × (52,000 ÷ (30 × shift h) × 2) + 2 h × (60,000 ÷ (30 × shift h) × 2). The tooltip lists both rates. Change the multiplier to 1.5 in Company Settings → an unposted month uses the new rate.
+10. **Regenerating an old month's sheet.** August draft for `0005` still uses 52,000. June 2026 for `0001` uses 145,000, not 160,000. A posted September is returned as stored.
+11. **Delete rules.**
+    - The joining row → "cannot be deleted".
+    - A non-latest increment → "Only the latest…".
+    - `0005`'s 16-09 increment (September posted) → refused.
+    - The latest scheduled or applied increment → deleted, and `basic_salary` returns to the old value (`0004` → 43,000).
+    - Re-adding it works (correct = delete + add).
+12. **Validation.** Duplicate date, a date before the latest increment, value 0, a negative value, 3 decimals, before joining, and after the leaving date (`0014`) → each refused with a clear message.
+13. **Permissions.**
+    - As `hr`: the menu shows *Salary Increment* (history only, no form) but not *Bulk Increment*.
+    - As `hr`, `POST /api/increments`, `/bulk` and `DELETE` → 403. `accounts` → 403.
+    - History and reports work.
+14. **New employee.** Create an employee with basic 38,000 joining 01-10-2026 → a *joining* row of 38,000. Change the joining date to 28-09-2026 → the joining row moves.
+15. **Reports.** Increment Register 01-09 → 31-12 (department sub-totals, grand total old vs new, CSV). Employee Increment History for `0001` (145,000 → 160,000 → scheduled 168,000). Both print in A4 with Page X of Y.
 
 ## Notes and open questions
 

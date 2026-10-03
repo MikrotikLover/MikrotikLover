@@ -8,6 +8,7 @@ use App\Audit;
 use App\Auth;
 use App\Config;
 use App\Database;
+use App\Increments;
 use App\Request;
 use App\Storage;
 use App\Validator;
@@ -49,10 +50,15 @@ final class EmployeeController
         'joining_date' => 'Joining date', 'leaving_date' => 'Leaving date',
     ];
 
+    /**
+     * Salary info = the terms (allowances, OT, statutory, payment). The pay rate itself lives in
+     * salary_increments: basic_salary / daily_rate here are only read when a new employee is created
+     * (they become the joining row); on later records they are stored as a snapshot of the increment rate.
+     */
     private const SALARY_RULES = [
         'effective_from'   => 'required|date',
-        'basic_salary'     => 'required|num|min:0|max:99999999',
-        'daily_rate'       => 'required|num|min:0|max:9999999',
+        'basic_salary'     => 'nullable|num|min:0|max:99999999',
+        'daily_rate'       => 'nullable|num|min:0|max:9999999',
         'allowances'       => 'required|num|min:0|max:99999999',
         'ot_applicable'    => 'bool',
         'ot_rate'          => 'nullable|num|min:0|max:999999',
@@ -93,12 +99,8 @@ final class EmployeeController
                        e.department_id, d.name AS department, d.name_ur AS department_ur,
                        e.designation_id, g.name AS designation, g.name_ur AS designation_ur,
                        sg.name AS shift_group, (e.photo_file IS NOT NULL) AS has_photo,
-                       (SELECT h.basic_salary FROM employee_salary_history h
-                         WHERE h.employee_id = e.id AND h.effective_from <= CURDATE()
-                         ORDER BY h.effective_from DESC LIMIT 1) AS basic_salary,
-                       (SELECT h.daily_rate FROM employee_salary_history h
-                         WHERE h.employee_id = e.id AND h.effective_from <= CURDATE()
-                         ORDER BY h.effective_from DESC LIMIT 1) AS daily_rate'
+                       IF(e.emp_type = \'daily_wages\', 0, e.basic_salary) AS basic_salary,
+                       IF(e.emp_type = \'daily_wages\', e.basic_salary, 0) AS daily_rate'
             . $from . " ORDER BY $sort $dir, e.id";
         if ($perPage > 0) {
             $sql .= ' LIMIT ' . $perPage . ' OFFSET ' . (($page - 1) * $perPage);
@@ -325,7 +327,13 @@ final class EmployeeController
             }
             try {
                 $salary = Validator::make($sb, self::SALARY_RULES);
-                $this->checkSalaryTypeFields($salary, $data['emp_type']);
+                $this->checkSalaryTypeFields($salary, $data['emp_type'], true);
+                // the joining salary is kept exactly as typed (decimal string, no float)
+                $raw = $data['emp_type'] === 'daily_wages' ? ($sb['daily_rate'] ?? null) : ($sb['basic_salary'] ?? null);
+                $salary['_joining'] = Increments::decimal($raw)
+                    ?? throw ApiException::validation([$data['emp_type'] === 'daily_wages' ? 'daily_rate' : 'basic_salary' => 'Enter an amount with at most 2 decimals.']);
+                $salary['basic_salary'] ??= 0;
+                $salary['daily_rate'] ??= 0;
             } catch (ApiException $e) {
                 foreach ($e->errors() as $k => $msg) {
                     $errors["salary.$k"] = $msg;
@@ -350,14 +358,19 @@ final class EmployeeController
                 $id = (int)$existing['id'];
                 Database::update('employees', $data + ['updated_by' => Auth::id()], 'id = :id', ['id' => $id]);
                 Audit::log('update', 'employees', $id, $existing, $data);
+                Increments::moveJoining($id, $existing['joining_date'], $data['joining_date']); // the joining row follows the joining date
             } else {
                 $id = Database::insert('employees', $data + ['created_by' => Auth::id()]);
                 Audit::log('create', 'employees', $id, null, $data);
+                $joining = '0.00';
                 if ($salary) {
+                    $joining = $salary['_joining'];
+                    unset($salary['_joining']);
                     $sid = Database::insert('employee_salary_history', $salary + ['employee_id' => $id, 'created_by' => Auth::id(),
                         'reason' => $salary['reason'] ?? 'Appointment']);
                     Audit::log('create', 'employee_salary_history', $sid, null, $salary + ['employee_id' => $id]);
                 }
+                Increments::addJoining($id, $data['joining_date'], $joining); // every employee starts with a 'joining' row
             }
             if ($quals !== null) {
                 Database::run('DELETE FROM employee_qualifications WHERE employee_id = ?', [$id]);
@@ -470,7 +483,7 @@ final class EmployeeController
     public function salaryStore(Request $r): array
     {
         $emp = $this->employeeForSalary($r->id());
-        $data = Validator::make($r->body(), self::SALARY_RULES);
+        $data = $this->snapshotRate($emp, Validator::make($r->body(), self::SALARY_RULES));
         $this->checkSalary($emp, $data, null);
         $sid = Database::transaction(function () use ($emp, $data) {
             $sid = Database::insert('employee_salary_history', $data + ['employee_id' => $emp['id'], 'created_by' => Auth::id()]);
@@ -484,7 +497,7 @@ final class EmployeeController
     {
         $emp = $this->employeeForSalary($r->id());
         $row = $this->salaryRow((int)$emp['id'], $r->id('sid'));
-        $data = Validator::make($r->body(), self::SALARY_RULES);
+        $data = $this->snapshotRate($emp, Validator::make($r->body(), self::SALARY_RULES));
         $this->checkSalary($emp, $data, $row);
         Database::transaction(function () use ($row, $data) {
             Database::update('employee_salary_history', $data + ['updated_by' => Auth::id()], 'id = :id', ['id' => $row['id']]);
@@ -535,12 +548,21 @@ final class EmployeeController
         );
     }
 
-    private function checkSalaryTypeFields(array $data, string $empType): void
+    /** Rate columns of a salary info record = the increment rate on its effective date (never typed in). */
+    private function snapshotRate(array $emp, array $data): array
     {
-        if ($empType === 'daily_wages' && $data['daily_rate'] <= 0) {
+        $rate = Increments::getSalaryOnDate((int)$emp['id'], $data['effective_from']);
+        $data['basic_salary'] = $emp['emp_type'] === 'daily_wages' ? 0 : $rate;
+        $data['daily_rate'] = $emp['emp_type'] === 'daily_wages' ? $rate : 0;
+        return $data;
+    }
+
+    private function checkSalaryTypeFields(array $data, string $empType, bool $rateRequired = false): void
+    {
+        if ($rateRequired && $empType === 'daily_wages' && ($data['daily_rate'] ?? 0) <= 0) {
             throw ApiException::validation(['daily_rate' => 'Daily rate is required for daily wages employees.']);
         }
-        if ($empType !== 'daily_wages' && $data['basic_salary'] <= 0) {
+        if ($rateRequired && $empType !== 'daily_wages' && ($data['basic_salary'] ?? 0) <= 0) {
             throw ApiException::validation(['basic_salary' => 'Basic salary is required.']);
         }
         if ($data['payment_mode'] === 'bank' && !$data['bank_account']) {

@@ -26,6 +26,13 @@ const REPORTS = [
       { name: 'ids', label: 'Employee IDs (optional, comma separated Auto IDs)', span: 6, placeholder: 'e.g. 1,4,9 — blank = filters' },
       { name: 'layout', label: 'Layout', type: 'select', required: true, span: 6, options: [{ value: 'sheet', label: 'A4 sheet (10 per page, duplex backs)' }, { value: 'cr80', label: 'Card printer (one card per page)' }] }],
     defaults: () => ({ status: 'active', layout: 'sheet', issue_date: today() }) },
+  { group: 'Employees', key: 'increment_register', title: 'Increment Register', perm: ['employees', 'print'], csv: true,
+    desc: 'Increments effective in a date range, grouped by department, with old vs new salary cost per department and in total (A4 landscape).',
+    fields: [...range, dept(), { name: 'include_joining', label: 'Include joining rows', type: 'checkbox', span: 3 }],
+    defaults: () => ({ from: today().slice(0, 4) + '-01-01', to: today().slice(0, 4) + '-12-31' }) },
+  { group: 'Employees', key: 'employee_increments', title: 'Employee Increment History', perm: ['employees', 'print'], csv: true,
+    desc: 'One employee\'s salary timeline from joining: every increment with old / new salary, reason, approver and status.',
+    fields: [{ name: 'code', label: 'Employee code', required: true, span: 3 }] },
   { group: 'Attendance', key: 'daily_attendance', title: 'Daily Attendance Report', perm: ['attendance', 'print'], csv: true,
     desc: 'All employees for a date with shift, time in/out, hours, late, early, OT and status, grouped by department.',
     fields: [{ name: 'date', label: 'Date', type: 'date', required: true, span: 3 }, dept(), empType(),
@@ -114,7 +121,7 @@ export default {
       form.values = typeof r.defaults === 'function' ? r.defaults() : (r.defaults || {});
       const params = () => {
         const v = form.values;
-        for (const k of ['include_inactive', 'include_drafts', 'detail']) if (v[k] === 0) delete v[k];
+        for (const k of ['include_inactive', 'include_drafts', 'detail', 'include_joining']) if (v[k] === 0) delete v[k];
         return v;
       };
       const show = () => openReport(r.key, params());

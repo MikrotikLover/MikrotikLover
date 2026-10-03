@@ -10,7 +10,11 @@ namespace App;
  * Sources per employee and period
  *   attendance_daily   P/S = 1 day, HD = worked minutes / shift net minutes, R = rest day, H = paid holiday
  *                      (rest), L = paid leave, LW = leave without pay, A = absent, missing row = unmarked (unpaid)
- *   employee_salary_history  the record effective on the last day of the period
+ *   salary_increments  pay rate (monthly basic / daily rate) via Increments::getSalaryOnDate(): the period is
+ *                      split at increment effective dates and each part is paid pro rata; each OT date
+ *                      is priced with the salary effective on that date
+ *   employee_salary_history  other salary terms (allowances, OT applicability / fixed OT rate, statutory
+ *                      flags, payment mode) from the record effective on the last day of the period
  *   overtime           approved minutes in the period
  *   vouchers           posted ADV / INC / PEN / OT whose salary month = the sheet's month
  *   loan_installments  scheduled / adjusted installments due in the sheet's month (posted, active loans)
@@ -98,7 +102,8 @@ final class Payroll
         $ids = array_map(fn($e) => (int)$e['id'], $emps);
         $in = implode(',', $ids);
 
-        // salary info effective on the last day of the period
+        Increments::prefetch($ids);
+        // salary terms effective on the last day of the period (the rate itself comes from salary_increments)
         $sal = [];
         foreach (Database::all("SELECT * FROM employee_salary_history WHERE employee_id IN ($in) AND effective_from <= ? ORDER BY employee_id, effective_from", [$to]) as $h) {
             $sal[(int)$h['employee_id']] = $h; // later rows overwrite earlier ones
@@ -116,7 +121,7 @@ final class Payroll
         // approved overtime not yet paid
         $ot = [];
         foreach (Database::all(
-            "SELECT id, employee_id, approved_minutes FROM overtime
+            "SELECT id, employee_id, ot_date, approved_minutes FROM overtime
               WHERE employee_id IN ($in) AND status = 'approved' AND ot_date BETWEEN ? AND ? AND (salary_sheet_id IS NULL OR salary_sheet_id = ?)",
             [$from, $to, $sid]
         ) as $o) {
@@ -125,7 +130,7 @@ final class Payroll
         // posted vouchers for this salary month
         $vch = [];
         foreach (Database::all(
-            "SELECT id, employee_id, voucher_type, amount, ot_hours FROM vouchers
+            "SELECT id, employee_id, voucher_type, vr_date, amount, ot_hours FROM vouchers
               WHERE employee_id IN ($in) AND voucher_type IN ('ADV','INC','PEN','OT') AND status = 'posted' AND deleted_at IS NULL
                 AND deduct_month = ? AND (salary_sheet_id IS NULL OR salary_sheet_id = ?)",
             [$month, $sid]
@@ -177,24 +182,42 @@ final class Payroll
         foreach ($emps as $e) {
             $eid = (int)$e['id'];
             $h = $sal[$eid] ?? null;
+            $daily = $type === 'daily_wages';
+            $rateAtEnd = Increments::getSalaryOnDate($eid, $to);
             $warn = [];
             if (!$h) {
-                $warn[] = 'No salary record effective in this period';
+                $warn[] = 'No salary info record effective in this period (allowances, OT and statutory not applied)';
             }
-            // attendance summary
+            // salary segments: the period split at increment effective dates
+            $segs = [];
+            foreach (Increments::segments($eid, $from, $to) as $sg) {
+                $segs[] = $sg + ['work_days' => 0.0, 'rest_days' => 0.0, 'paid_leave' => 0.0, 'unpaid_days' => 0.0, 'len' => 0];
+            }
+            if (Money::toPaisa($rateAtEnd) <= 0 && !array_filter($segs, fn($sg) => Money::toPaisa($sg['salary']) > 0)) {
+                $warn[] = 'No salary effective in this period (add a salary increment)';
+            }
+            // attendance summary (totals in $c; the same counts per salary segment in $segs)
             $c = ['work' => 0.0, 'rest' => 0.0, 'holiday' => 0.0, 'leave' => 0.0, 'lwop' => 0.0, 'absent' => 0.0, 'unmarked' => 0.0];
             $unpaid = 0.0;   // days in the period that earn nothing (used by the fixed 30 / 26 day bases)
             $elsewhere = 0;
             $hdNoTime = 0;
+            $si = 0;
             foreach (Calendar::dates($from, $to) as $d) {
+                while (isset($segs[$si + 1]) && $d >= $segs[$si + 1]['from']) {
+                    $si++;
+                }
+                $seg = &$segs[$si];
+                $seg['len']++;
                 if (!$cal->isEmployed($e, $d)) {
                     $unpaid++;
+                    $seg['unpaid_days']++;
                     continue;
                 }
                 foreach ($paidElsewhere[$eid] ?? [] as $pe) {
                     if ($d >= $pe['period_from'] && $d <= $pe['period_to']) {
                         $elsewhere++;
                         $unpaid++;
+                        $seg['unpaid_days']++;
                         continue 2;
                     }
                 }
@@ -202,12 +225,14 @@ final class Payroll
                 if (!$a) {
                     $c['unmarked']++;
                     $unpaid++;
+                    $seg['unpaid_days']++;
                     continue;
                 }
                 switch ($a['status']) {
                     case 'P':
                     case 'S':
                         $c['work'] += 1;
+                        $seg['work_days'] += 1;
                         break;
                     case 'HD':
                         $shiftMin = (int)($a['duration_minutes'] ?: ($cal->shift($e, $d)['duration_minutes'] ?? 0));
@@ -217,35 +242,45 @@ final class Payroll
                         $fraction = PayrollEngine::dayFraction((int)$a['work_minutes'], $shiftMin);
                         $c['work'] += $fraction;
                         $unpaid += 1 - $fraction;
+                        $seg['work_days'] += $fraction;
+                        $seg['unpaid_days'] += 1 - $fraction;
                         break;
                     case 'R':
                         $c['rest'] += 1;
+                        $seg['rest_days'] += 1;
                         break;
                     case 'H':
                         $hol = $cal->holiday($d);
                         if (!$hol || (int)$hol['is_paid']) {
                             $c['rest'] += 1;
                             $c['holiday'] += 1;
+                            $seg['rest_days'] += 1;
                         } else {
                             $unpaid++;
+                            $seg['unpaid_days']++;
                         }
                         break;
                     case 'L':
                         $c['leave'] += 1;
+                        $seg['paid_leave'] += 1;
                         break;
                     case 'LW':
                         $c['lwop'] += 1;
                         $unpaid++;
+                        $seg['unpaid_days']++;
                         break;
                     case 'A':
                         $c['absent'] += 1;
                         $unpaid++;
+                        $seg['unpaid_days']++;
                         break;
                     case 'O': // outside employment
                         $unpaid++;
+                        $seg['unpaid_days']++;
                         break;
                 }
             }
+            unset($seg);
             if ($c['unmarked'] > 0) {
                 $warn[] = (int)$c['unmarked'] . ' day(s) without attendance (not paid)';
             }
@@ -256,14 +291,20 @@ final class Payroll
                 $warn[] = "$hdNoTime half day(s) without times (paid 0 h — enter times in attendance)";
             }
             // overtime & vouchers
-            $otMin = array_sum(array_map(fn($o) => (int)$o['approved_minutes'], $ot[$eid] ?? []));
+            // each OT date is priced with the salary effective on that date
+            $otItems = [];
+            foreach ($ot[$eid] ?? [] as $o) {
+                $otItems[] = ['minutes' => (int)$o['approved_minutes'], 'hours' => 0, 'salary' => Increments::getSalaryOnDate($eid, $o['ot_date'])];
+            }
             $sum = ['ADV' => 0.0, 'INC' => 0.0, 'PEN' => 0.0, 'OT' => 0.0, 'OTH' => 0.0];
             foreach ($vch[$eid] ?? [] as $v) {
                 $sum[$v['voucher_type']] += (float)$v['amount'];
                 if ($v['voucher_type'] === 'OT') {
                     $sum['OTH'] += (float)$v['ot_hours'];
+                    $otItems[] = ['minutes' => 0, 'hours' => (float)$v['ot_hours'], 'salary' => Increments::getSalaryOnDate($eid, $v['vr_date'])];
                 }
             }
+            $otItems[] = ['minutes' => 0, 'hours' => 0, 'salary' => $rateAtEnd]; // reference rate when there is no OT
             $planned = array_sum(array_map(fn($i) => (float)$i['scheduled_amount'], $inst[$eid] ?? []));
             $shift = $cal->shift($e, $from);
             $shiftHours = $shift && (int)$shift['duration_minutes'] > 0 ? (int)$shift['duration_minutes'] / 60 : null;
@@ -271,15 +312,29 @@ final class Payroll
 
             $r = $engine->calculate([
                 'type' => $type, 'days' => $days, 'basis' => $basis, 'unpaid_days' => round($unpaid, 2),
-                'basic' => (float)($h['basic_salary'] ?? 0), 'daily_rate' => (float)($h['daily_rate'] ?? 0), 'allowances' => (float)($h['allowances'] ?? 0),
+                'basic' => $daily ? 0 : $rateAtEnd, 'daily_rate' => $daily ? $rateAtEnd : 0, 'allowances' => (float)($h['allowances'] ?? 0),
                 'work_days' => $c['work'], 'rest_days' => $c['rest'], 'paid_leave' => $c['leave'],
+                'segments' => $segs, 'ot_items' => $otItems,
                 'ot_applicable' => $h ? (bool)(int)$h['ot_applicable'] : false, 'ot_rate' => $h['ot_rate'] ?? null, 'shift_hours' => $shiftHours,
-                'ot_minutes' => $otMin, 'ot_voucher_hours' => $sum['OTH'], 'ot_voucher_amount' => $sum['OT'],
+                'ot_voucher_amount' => $sum['OT'],
                 'incentive' => $sum['INC'], 'penalty' => $sum['PEN'], 'fine' => $fine, 'advance' => $sum['ADV'], 'loan_planned' => $planned,
                 'eobi_rate' => $h && (int)$h['eobi_applicable'] ? ($rates['EOBI'] ?? null) : null,
                 'pessi_rate' => $h && (int)$h['pessi_applicable'] ? ($rates[$ss] ?? null) : null,
                 'tax_slabs' => $h && (int)$h['tax_applicable'] ? $slabs : null,
             ]);
+
+            // mid-period increment: which salary paid which days (shown as a marker / tooltip on the sheet)
+            $note = [];
+            if (count($segs) > 1) {
+                foreach ($segs as $i => $sg) {
+                    $note[] = date('d-m', strtotime($sg['from'])) . ' to ' . date('d-m', strtotime($sg['to'])) . ' @ '
+                        . number_format((float)$sg['salary']) . ($daily ? '/day' : '') . ' (' . $r['segment_paid_days'][$i] . ' paid d)';
+                }
+                $note = ['Increment in period: ' . implode('; ', $note)];
+            }
+            if (count($r['ot_rates']) > 1) {
+                $note[] = 'OT: ' . implode(' + ', array_map(fn($x) => $x['hours'] . ' h @ ' . number_format($x['rate'], 2), $r['ot_rates']));
+            }
 
             // allocate the loan deduction over this month's installments, in loan order
             $left = $r['loan_deduction'];
@@ -295,7 +350,7 @@ final class Payroll
                 'employee_id' => $eid, 'code' => $e['code'], 'name' => $e['name'], 'name_ur' => $e['name_ur'],
                 'department_id' => (int)$e['department_id'], 'department' => $e['department'], 'department_ur' => $e['department_ur'],
                 'designation_id' => (int)$e['designation_id'], 'designation' => $e['designation'], 'emp_type' => $e['emp_type'],
-                'basic_salary' => (float)($h['basic_salary'] ?? 0), 'daily_rate' => (float)($h['daily_rate'] ?? 0), 'allowances' => (float)($h['allowances'] ?? 0),
+                'basic_salary' => $daily ? 0.0 : (float)$rateAtEnd, 'daily_rate' => $daily ? (float)$rateAtEnd : 0.0, 'allowances' => (float)($h['allowances'] ?? 0),
                 'absent_days' => $c['absent'], 'leave_wp_days' => $c['leave'], 'leave_wop_days' => $c['lwop'], 'rest_days' => $c['rest'],
                 'holiday_days' => $c['holiday'], 'unmarked_days' => $c['unmarked'], 'work_days' => round($c['work'], 2),
                 'paid_days' => $r['paid_days'], 'work_pay' => $r['work_pay'], 'allowance_pay' => $r['allowance_pay'],
@@ -306,6 +361,7 @@ final class Payroll
                 'payment_mode' => $h['payment_mode'] ?? 'cash', 'bank_name' => $h['bank_name'] ?? null, 'bank_account' => $h['bank_account'] ?? null,
                 'remarks' => isset($manual[$eid]['remarks']) && trim((string)$manual[$eid]['remarks']) !== '' ? mb_substr(trim((string)$manual[$eid]['remarks']), 0, 255) : null,
                 'warnings' => array_merge($warn, $r['warnings']),
+                'increment_note' => $note ? mb_substr(implode(' | ', $note), 0, 255) : null,
                 'loans' => $alloc,
             ];
             foreach ($vch[$eid] ?? [] as $v) {
@@ -346,7 +402,7 @@ final class Payroll
         $cols = ['employee_id', 'department_id', 'designation_id', 'basic_salary', 'daily_rate', 'allowances', 'absent_days', 'leave_wp_days',
             'leave_wop_days', 'rest_days', 'holiday_days', 'unmarked_days', 'work_days', 'paid_days', 'work_pay', 'allowance_pay', 'ot_hours',
             'ot_rate', 'ot_amount', 'ot_voucher_amount', 'gross', 'fine', 'advance', 'loan_deduction', 'loan_balance', 'incentive', 'penalty',
-            'eobi', 'pessi', 'income_tax', 'net_salary', 'payment_mode', 'bank_name', 'bank_account', 'remarks'];
+            'eobi', 'pessi', 'income_tax', 'net_salary', 'payment_mode', 'bank_name', 'bank_account', 'remarks', 'increment_note'];
         $row = array_intersect_key($l, array_flip($cols));
         $row['warnings'] = $l['warnings'] ? mb_substr(implode('; ', $l['warnings']), 0, 500) : null;
         return $row + ['salary_sheet_id' => $sheetId];

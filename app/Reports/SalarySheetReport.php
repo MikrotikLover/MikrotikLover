@@ -65,7 +65,8 @@ final class SalarySheetReport extends SalaryReport
             table.sal td.net { font-weight: 700; }
             .sal-foot { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12mm; margin-top: 16mm; font-size: 8pt; }
             .sal-foot div { border-top: 1px solid #000; text-align: center; padding-top: 3px; }
-            .sal-sum { margin-top: 4mm; font-size: 8pt; }';
+            .sal-sum { margin-top: 4mm; font-size: 8pt; }
+            .inc-mark { color: #b45309; font-size: 6pt; }';
     }
 
     private function cell(array $c, mixed $v, bool $total = false): string
@@ -118,7 +119,8 @@ final class SalarySheetReport extends SalaryReport
                 foreach ($cols as $c) {
                     $h .= match ($c[3]) {
                         'sr' => '<td class="c">' . ++$sr . '</td>',
-                        'name' => '<td class="nm"><b>' . self::e($l['code']) . '</b> ' . self::e($l['name']) . '</td>',
+                        'name' => '<td class="nm"><b>' . self::e($l['code']) . '</b> ' . self::e($l['name'])
+                            . (!empty($l['increment_note']) ? ' <span class="inc-mark" title="' . self::e($l['increment_note']) . '">▲</span>' : '') . '</td>',
                         default => $this->cell($c, self::value($l, $c[0])),
                     };
                 }
@@ -134,6 +136,11 @@ final class SalarySheetReport extends SalaryReport
         }
         $h .= '<div class="sal-sum">Net payable: <b>Rs. ' . self::money($cash + $bank) . '</b> &nbsp; (Cash ' . self::money($cash)
             . ' &nbsp;·&nbsp; Bank ' . self::money($bank) . ') &nbsp;·&nbsp; Work Pay includes prorated allowances; OT Amount includes fixed OT voucher amounts.</div>';
+        $notes = array_filter($lines, fn($l) => !empty($l['increment_note']));
+        if ($notes) {
+            $h .= '<div class="sal-sum"><b>▲ Salary changed within the period</b> (work pay is split pro rata; OT is priced at the salary of each OT date):<br>'
+                . implode('<br>', array_map(fn($l) => '<b>' . self::e($l['code']) . '</b> ' . self::e($l['name']) . ': ' . self::e($l['increment_note']), $notes)) . '</div>';
+        }
         $h .= '<div class="sal-foot"><div>Prepared by</div><div>Checked by (HR)</div><div>Accounts</div><div>Approved by</div></div>';
         return $h;
     }
@@ -141,13 +148,13 @@ final class SalarySheetReport extends SalaryReport
     public function csv(): array
     {
         $cols = array_values(array_filter($this->columns(), fn($c) => !in_array($c[3], ['sr', 'sign'], true)));
-        $out = [array_merge(['Code'], array_map(fn($c) => $c[1], $cols), ['Payment', 'Bank Account', 'Remarks'])];
+        $out = [array_merge(['Code'], array_map(fn($c) => $c[1], $cols), ['Payment', 'Bank Account', 'Remarks', 'Increment in period'])];
         foreach ($this->lines() as $l) {
             $row = [$l['code']];
             foreach ($cols as $c) {
                 $row[] = self::value($l, $c[0]);
             }
-            $out[] = array_merge($row, [$l['payment_mode'], $l['bank_account'], $l['remarks']]);
+            $out[] = array_merge($row, [$l['payment_mode'], $l['bank_account'], $l['remarks'], $l['increment_note'] ?? '']);
         }
         return $out;
     }

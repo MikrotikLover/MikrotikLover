@@ -1,5 +1,5 @@
-// Employee Info: tabbed form (Info + photo, Salary Info with effective-dated history, Qualification,
-// Experience, List of Employees). Desktop keys: F1 search, F5 new, F7 reload, F9 ID card, F10 save, F12 delete.
+// Employee Info: tabbed form (Info + photo, Salary Info with effective-dated history, Increment History,
+// Qualification, Experience, List of Employees). Desktop keys: F1 search, F5 new, F7 reload, F9 ID card, F10 save, F12 delete.
 import { get, post, put, del, api } from '../core/api.js';
 import { h, toast, modal, confirmDialog, money, fdate, fdatetime, openReport, debounce, TYPES } from '../core/dom.js';
 import { cropImage } from '../core/cropper.js';
@@ -7,7 +7,8 @@ import { Form } from '../core/form.js';
 import { DataGrid, EditGrid } from '../core/grid.js';
 import { setKeys } from '../core/keys.js';
 import { go, setPath } from '../core/router.js';
-import { can, lookups } from '../core/store.js';
+import { can, lookups, session } from '../core/store.js';
+import { incrementHistory, deleteIncrement } from './increments.js';
 
 const withUrdu = (list) => () => list().filter((x) => x.is_active || x.__keep).map((x) => ({ value: x.id, label: x.name_ur ? `${x.name}  —  ${x.name_ur}` : x.name }));
 
@@ -62,6 +63,9 @@ const SALARY_FIELDS = [
   { name: 'remarks', label: 'Remarks', span: 8, maxlength: 255 },
 ];
 
+// Salary info records of an existing employee hold the terms only; the pay rate is managed in Increment History.
+const TERMS_FIELDS = SALARY_FIELDS.filter((f) => f.name !== 'basic_salary' && f.name !== 'daily_rate');
+
 const SALARY_DEFAULTS = { basic_salary: 0, daily_rate: 0, allowances: 0, ot_applicable: 1, payment_mode: 'cash', eobi_applicable: 0, pessi_applicable: 0, tax_applicable: 0 };
 
 const NEW_DEFAULTS = { relation: 'S/O', gender: 'M', emp_type: 'permanent', status: 'active' };
@@ -106,8 +110,6 @@ export default {
     const salaryGrid = new DataGrid({
       columns: [
         { key: 'effective_from', label: 'Effective', render: (r) => fdate(r.effective_from) },
-        { key: 'basic_salary', label: 'Basic', align: 'right', render: (r) => money(r.basic_salary) },
-        { key: 'daily_rate', label: 'Daily', align: 'right', render: (r) => money(r.daily_rate) },
         { key: 'allowances', label: 'Allow.', align: 'right', render: (r) => money(r.allowances) },
         { key: 'ot_rate', label: 'OT Rate', align: 'right', render: (r) => (Number(r.ot_applicable) ? (r.ot_rate === null ? 'Auto' : money(r.ot_rate)) : 'No OT') },
         { key: 'flags', label: 'Statutory', render: (r) => [Number(r.eobi_applicable) && 'EOBI', Number(r.pessi_applicable) && 'SS', Number(r.tax_applicable) && 'Tax'].filter(Boolean).join(', ') || '—' },
@@ -158,17 +160,40 @@ export default {
     }
 
     // ---------- tabs
-    const tabNames = ['Employee Info', 'Salary Info', 'Qualification', 'Experience', 'List of Employees'];
+    const tabNames = ['Employee Info', 'Salary Info', 'Increment History', 'Qualification', 'Experience', 'List of Employees'];
     const tabBtns = tabNames.map((n, i) => h('button', { type: 'button', onclick: () => showTab(i) }, n));
     const metaLine = h('div', { class: 'meta-line' });
     const salaryNewBox = h('div', null, h('p', { class: 'muted', style: 'margin-top:0' }, 'Initial salary — saved together with the employee (effective from the joining date).'), salaryForm.el);
     const salaryHistBtns = h('div', { style: 'display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap' },
-      h('button', { class: 'btn', type: 'button', onclick: () => editSalary(null) }, '+ Add salary record / increment'),
+      h('button', { class: 'btn', type: 'button', onclick: () => editSalary(null) }, '+ Add salary info record'),
       h('button', { class: 'btn', type: 'button', onclick: () => salaryGrid.current() && editSalary(salaryGrid.current()) }, 'Edit selected'),
       h('button', { class: 'btn danger', type: 'button', onclick: () => deleteSalary() }, 'Delete selected'),
-      h('span', { class: 'muted', style: 'align-self:center;font-size:12px' }, 'Increments add a new effective-dated record; history is kept.'));
+      h('span', { class: 'muted', style: 'align-self:center;font-size:12px' }, 'Allowances, OT, statutory and payment terms. The salary itself is changed in the Increment History tab.'));
     const salaryHistBox = h('div', null, salaryHistBtns, salaryGrid.el);
     const salaryHint = h('div', { class: 'help', style: 'margin-top:8px' });
+
+    // Increment History tab (view for everyone with employees.view; add / delete for admins)
+    const isAdmin = Number(session.user?.is_admin) === 1;
+    const incSummary = h('div', { style: 'margin-bottom:8px;font-size:13px' });
+    const incGrid = incrementHistory({ onDelete: isAdmin ? async (r) => { const res = await deleteIncrement(r); if (res) showIncrements(res); } : null });
+    const incBtns = h('div', { style: 'display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap' },
+      isAdmin ? h('button', { class: 'btn', type: 'button', onclick: () => st.emp && go(`/increments/${st.emp.id}`) }, '+ Add increment') : null,
+      h('button', { class: 'btn', type: 'button', onclick: () => st.emp && openReport('employee_increments', { employee_id: st.emp.id }) }, 'Print history'));
+    const incBox = h('div', null, incSummary, incBtns, incGrid.el);
+    const incNew = h('p', { class: 'muted' }, 'Save the employee first. The basic salary (or daily rate) on the Salary Info tab becomes the joining row.');
+    function showIncrements(res) {
+      const e = res.employee;
+      const next = res.rows.filter((r) => r.status === 'scheduled').map((r) => `${money(r.new_salary)} from ${fdate(r.effective_date)}`);
+      incSummary.replaceChildren('Current salary: ', h('b', null, money(e.current_salary)), e.emp_type === 'daily_wages' ? ' per day' : ' per month',
+        next.length ? h('span', null, ' · ', h('span', { class: 'badge info' }, 'Scheduled: ' + next.join(', '))) : '');
+      incGrid.setRows(res.rows);
+    }
+    async function loadIncrements() {
+      incNew.classList.toggle('hidden', !!st.emp);
+      incBox.classList.toggle('hidden', !st.emp);
+      if (!st.emp) return;
+      try { showIncrements(await get(`employees/${st.emp.id}/increments`)); } catch (e) { toast(e.message, 'err'); }
+    }
 
     // List tab
     const listSearch = h('input', { class: 'input', type: 'search', placeholder: 'Search code / name / CNIC / cell…', style: 'max-width:380px' });
@@ -199,6 +224,7 @@ export default {
         h('div', { class: 'photo-box' }, photoBox, h('div', { class: 'btns' }, btnPhoto, btnCam, btnNoPhoto), fileInput,
           h('div', { class: 'muted', style: 'font-size:11px;text-align:center' }, 'Photo is cropped to 3:4 for the ID card'))),
       h('div', null, salaryNewBox, salaryHistBox, salaryHint),
+      h('div', null, incNew, incBox),
       quals.el,
       exps.el,
       h('div', null, h('div', { class: 'filters' }, listSearch, h('span', { class: 'muted', style: 'font-size:12px;align-self:center' }, 'Double-click or Enter opens the employee')), listGrid.el),
@@ -209,14 +235,16 @@ export default {
       tab = i;
       tabBtns.forEach((b, j) => b.classList.toggle('active', i === j));
       panes.forEach((p, j) => p.classList.toggle('hidden', i !== j));
-      if (i === 4) loadListTab().then(() => listSearch.focus());
+      if (i === 2) loadIncrements();
+      if (i === 5) loadListTab().then(() => listSearch.focus());
     }
 
     function hintSalary() {
       const t = form.get('emp_type');
-      salaryHint.textContent = t === 'daily_wages'
+      salaryHint.textContent = (t === 'daily_wages'
         ? 'Daily wages: pay = daily rate × present days + overtime. Basic salary may be left 0.'
-        : 'Monthly: work pay = basic salary ÷ days in month × paid days.';
+        : 'Monthly: work pay = basic salary ÷ days in month × paid days.')
+        + (st.emp ? ' Salary changes are increments (Increment History tab).' : ' This becomes the joining salary in Increment History.');
     }
 
     // ---------- toolbar
@@ -261,6 +289,7 @@ export default {
           + (emp.updated_at ? ` · Updated ${fdatetime(emp.updated_at)}${emp.updated_by_name ? ' by ' + emp.updated_by_name : ''}` : '')
         : '';
       hintSalary();
+      if (tab === 2) loadIncrements();
     }
 
     async function confirmDiscard() {
@@ -312,8 +341,8 @@ export default {
         form.showErrors(errs, keys.length ? '' : e.message);
         salaryForm.showErrors(Object.fromEntries(keys.filter((k) => k.startsWith('salary.')).map((k) => [k, errs[k]])));
         if (keys.some((k) => k.startsWith('salary.'))) showTab(1);
-        else if (errs.qualifications) { showTab(2); toast(errs.qualifications, 'err', 6000); }
-        else if (errs.experiences) { showTab(3); toast(errs.experiences, 'err', 6000); }
+        else if (errs.qualifications) { showTab(3); toast(errs.qualifications, 'err', 6000); }
+        else if (errs.experiences) { showTab(4); toast(errs.experiences, 'err', 6000); }
         else if (keys.length) showTab(0);
         else toast(e.message, 'err', 6000);
       }
@@ -380,12 +409,12 @@ export default {
     // ---------- salary history dialog (existing employee)
     function editSalary(row) {
       if (!st.emp || !canEdit) return;
-      const f = new Form(SALARY_FIELDS);
+      const f = new Form(TERMS_FIELDS);
       const cur = st.emp.salary_history?.find((r) => r.is_current) || st.emp.salary_history?.[0];
-      f.values = row || { ...SALARY_DEFAULTS, ...(cur ? { ...cur, effective_from: null, reason: 'Increment', remarks: null } : {}) };
+      f.values = row || { ...SALARY_DEFAULTS, ...(cur ? { ...cur, effective_from: null, reason: null, remarks: null } : {}) };
       if (row?.is_locked) f.setReadonly(true);
       modal({
-        title: row ? `Salary record effective ${fdate(row.effective_from)}` : 'New salary record / increment',
+        title: row ? `Salary info effective ${fdate(row.effective_from)}` : 'New salary info record',
         body: h('div', null, row?.is_locked ? h('div', { class: 'form-error' }, 'This record is used by a posted salary sheet and cannot be changed.') : null, f.el),
         wide: true,
         buttons: [

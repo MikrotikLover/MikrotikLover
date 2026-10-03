@@ -5,7 +5,7 @@ declare(strict_types=1);
  * JSON API front controller. Reached through public/api.php (rewritten from /api/*).
  *
  * Route table: [METHOD, pattern, [Controller, method], permission|null|'auth']
- *   permission 'module.action' -> authorize; 'auth' -> logged in only; null -> public.
+ *   permission 'module.action' -> authorize; 'auth' -> logged in only; 'admin' -> admin-role users only; null -> public.
  * All non-GET requests require the X-CSRF-Token header.
  */
 
@@ -28,6 +28,7 @@ use App\Controllers\DepartmentController;
 use App\Controllers\DesignationController;
 use App\Controllers\EmployeeController;
 use App\Controllers\HolidayController;
+use App\Controllers\IncrementController;
 use App\Controllers\JournalController;
 use App\Controllers\LookupController;
 use App\Controllers\RatesController;
@@ -72,6 +73,15 @@ $routes = array_merge(
         ['POST',   '/employees/{id}/salary',            [EmployeeController::class, 'salaryStore'],   'employees.edit'],
         ['PUT',    '/employees/{id}/salary/{sid}',      [EmployeeController::class, 'salaryUpdate'],  'employees.edit'],
         ['DELETE', '/employees/{id}/salary/{sid}',      [EmployeeController::class, 'salaryDestroy'], 'employees.edit'],
+
+        // Salary increments: everyone with employees.view can see them; only admins add / bulk-apply / delete
+        ['GET',    '/employees/{id}/increments',        [IncrementController::class, 'history'],      'employees.view'],
+        ['GET',    '/increments/meta',                  [IncrementController::class, 'meta'],         'employees.view'],
+        ['GET',    '/increments/preview',               [IncrementController::class, 'preview'],      'admin'],
+        ['POST',   '/increments',                       [IncrementController::class, 'store'],        'admin'],
+        ['POST',   '/increments/bulk/preview',          [IncrementController::class, 'bulkPreview'],  'admin'],
+        ['POST',   '/increments/bulk',                  [IncrementController::class, 'bulkApply'],    'admin'],
+        ['DELETE', '/increments/{id}',                  [IncrementController::class, 'destroy'],      'admin'],
 
         ['GET',    '/settings/company',  [SettingsController::class, 'company'],       'auth'],
         ['PUT',    '/settings/company',  [SettingsController::class, 'saveCompany'],   'settings.edit'],
@@ -209,9 +219,23 @@ try {
     [[$class, $action], $perm] = $matched;
     if ($perm === 'auth') {
         Auth::require();
+    } elseif ($perm === 'admin') {
+        Auth::require();
+        if (!Auth::isAdmin()) {
+            throw ApiException::forbidden('Only an administrator can do this.');
+        }
     } elseif (is_string($perm)) {
         [$module, $act] = explode('.', $perm, 2);
         Auth::authorize($module, $act);
+    }
+
+    if ($perm !== null) {
+        // scheduled increments become the current salary on their date (once a day, no cron needed)
+        try {
+            App\Increments::syncDue();
+        } catch (Throwable $e) {
+            error_log('[api] salary sync: ' . $e->getMessage());
+        }
     }
 
     $result = (new $class())->$action($request);

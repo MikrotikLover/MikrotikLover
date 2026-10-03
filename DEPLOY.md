@@ -59,6 +59,10 @@ Then **remove `setup_key`** (set it to `''`). System Health warns while it is st
 
 Upgrades work the same way: deploy the new files, then run `migrate.php` again (only new migrations are applied).
 
+**Upgrading to the salary increment module (migration `012`):** take a backup first (step 7). The migration copies each employee's salary history into `salary_increments` (the first record becomes the *joining* row, and each later change of rate becomes a *new salary* increment), so old months keep their old salary. Afterwards, open **Payroll → Salary Increment** for a few employees and check that the history looks right.
+
+*Optional cron.* A future-dated increment becomes the employee's current salary on its date. The first API request of that day does this automatically. To run it at midnight instead, add an hPanel cron job (*Advanced → Cron Jobs*): `5 0 * * *  /usr/bin/php /home/USER/domains/example.com/public_html/tools/sync_salaries.php`. Payroll doesn't depend on this, because it always reads the salary effective on each date.
+
 ## 5. First login
 
 1. Open `https://example.com/` and log in as **admin / admin123**. You must choose a new password immediately.

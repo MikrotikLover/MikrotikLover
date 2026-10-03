@@ -104,7 +104,10 @@ export default {
         const tr = h('tr', { class: Number(l.net_salary) < 0 ? 'neg' : '' });
         for (const [k, , t] of COLS) {
           if (k === 'sr') tr.append(h('td', { class: 'num' }, i + 1));
-          else if (k === 'name') tr.append(h('td', null, h('b', null, l.code), ' ', l.name));
+          else if (k === 'name') {
+            tr.append(h('td', null, h('b', null, l.code), ' ', l.name,
+              l.increment_note ? h('span', { class: 'badge info', style: 'margin-left:4px;cursor:help', title: l.increment_note }, '▲ inc') : null));
+          }
           else if ((t === 'in' || t === 'txt') && (posted() || !can('salary', 'add'))) {
             tr.append(h('td', { class: t === 'in' ? 'num' : '' }, t === 'in' ? amt(l.fine) : (l.remarks || '')));
           } else if (t === 'in' || t === 'txt') {
@@ -278,6 +281,7 @@ export default {
             ? 'Pay = Daily Rate × Present (work) days + OT. Half / short days count by actual hours worked.'
             : 'Paid Days = Work + Rest + Paid Leave · Work Pay = Basic ÷ Days in Month × Paid Days (allowances prorated the same way and included).'),
           h('li', null, 'OT = Hours × Rate (Basic ÷ days ÷ shift hours × multiplier, or the employee\'s fixed OT rate). Gross = Work Pay + OT.'),
+          h('li', null, '▲ inc = salary increment inside the period: the month is split at the effective date and each part is paid at its own salary; each OT date uses the salary effective that day (hover for details).'),
           h('li', null, `Net = Gross + Incentive − Advance − Loan − Penalty − Fine − EOBI − ${ss} − Income Tax. A short salary reduces the loan installment (carried forward).`),
           h('li', null, 'Post re-checks the data; if attendance or vouchers changed since saving, press Show and Save again.')))),
     );
