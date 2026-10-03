@@ -24,6 +24,10 @@ abstract class VoucherController
     /** Columns cast to int in output. */
     protected array $intColumns = ['id'];
     protected array $lineIntColumns = ['id', 'line_no', 'item_id', 'unit_id', 'rolls'];
+    /** false = lines are computed by buildLines() from the header (e.g. estimation), not entered. */
+    protected bool $linesFromBody = true;
+    /** false = a voucher may be saved without entered lines (e.g. production: lines come from the BOM / fabric only). */
+    protected bool $requireLines = true;
 
     abstract protected function headerRules(): array;
 
@@ -43,6 +47,24 @@ abstract class VoucherController
      * that outflow makes stock negative.
      */
     abstract protected function movements(array $h, int $id, string $no, array $lines, array $items): array;
+
+    /** Extra WHERE for tables shared by several voucher types (alias v), e.g. production_type. */
+    protected function scopeSql(): string
+    {
+        return '';
+    }
+
+    /** Items moved by the voucher that are not on its lines (e.g. production fabric) — locked too. */
+    protected function extraLockItems(array $h): array
+    {
+        return [];
+    }
+
+    /** Header values always written (e.g. production_type). */
+    protected function fixedHeader(): array
+    {
+        return [];
+    }
 
     /** Extra header checks → [field => message]. */
     protected function checkHeader(array $h, ?array $old): array
@@ -84,6 +106,9 @@ abstract class VoucherController
     {
         [$page, $perPage, $offset] = Request::paging(25, 200);
         $where = ['v.deleted_at IS NULL'];
+        if ($this->scopeSql() !== '') {
+            $where[] = $this->scopeSql();
+        }
         $params = [];
         $from = (string) Request::query('date_from', '');
         $to = (string) Request::query('date_to', '');
@@ -172,10 +197,11 @@ abstract class VoucherController
     {
         [$h, $lines] = $this->validateRequest(null);
         $id = DB::transaction(function () use ($h, $lines): int {
-            $items = $this->lockAndLoad(array_column($lines, 'item_id'));
+            $items = $this->lockAndLoad(array_merge(array_column($lines, 'item_id'), $this->extraLockItems($h)));
             $lines = $this->runBuildLines($h, $lines, $items);
             $no = VoucherNumber::next($this->type, $h['voucher_date']);
-            $row = $this->headerRow($h) + $this->totals($lines) + [
+            // Computed values (totals, resolved defaults) override what was entered.
+            $row = array_replace($this->headerRow($h), $this->totals($lines)) + [
                 'voucher_no' => $no,
                 'status'     => 'posted',
                 'created_at' => DB::now(),
@@ -196,13 +222,16 @@ abstract class VoucherController
         $this->assertEditable($old);
         [$h, $lines] = $this->validateRequest($old);
         DB::transaction(function () use ($id, $old, $h, $lines): void {
-            $items = $this->lockAndLoad(array_merge(array_column($lines, 'item_id'), array_column($old['lines'], 'item_id')));
+            $items = $this->lockAndLoad(array_merge(
+                array_column($lines, 'item_id'), array_column($old['lines'], 'item_id'),
+                $this->extraLockItems($h), $this->extraLockItems($old)
+            ));
             // Re-read under lock: someone may have cancelled it meanwhile.
             $this->assertEditable($this->lockRow($id));
             $lines = $this->runBuildLines($h, $lines, $items);
             $removed = Stock::remove($this->type, $id);
             DB::query("DELETE FROM `{$this->linesTable}` WHERE `{$this->fk}` = :id", ['id' => $id]);
-            DB::update($this->table, $this->headerRow($h) + $this->totals($lines) + [
+            DB::update($this->table, array_replace($this->headerRow($h), $this->totals($lines)) + [
                 'updated_at' => DB::now(),
                 'updated_by' => Auth::id(),
             ], $id);
@@ -219,7 +248,7 @@ abstract class VoucherController
         $this->assertEditable($old);
         $data = Validator::make(Request::body(), ['reason' => 'required|string|max:255']);
         DB::transaction(function () use ($id, $old, $data): void {
-            $this->lockAndLoad(array_column($old['lines'], 'item_id'));
+            $this->lockAndLoad(array_merge(array_column($old['lines'], 'item_id'), $this->extraLockItems($old)));
             $this->assertEditable($this->lockRow($id));
             $removed = Stock::remove($this->type, $id);
             Stock::assertNonNegative(array_map(fn ($k) => [$k['item_id'], $k['warehouse_id'], $k['lot_no'], null, 0], $removed));
@@ -258,7 +287,7 @@ abstract class VoucherController
         }
 
         $lines = [];
-        foreach (array_values(is_array($body['lines'] ?? null) ? $body['lines'] : []) as $i => $line) {
+        foreach ($this->linesFromBody ? array_values(is_array($body['lines'] ?? null) ? $body['lines'] : []) : [] as $i => $line) {
             if (!is_array($line) || ($line['item_id'] ?? '') === '' || ($line['item_id'] ?? null) === null) {
                 continue;
             }
@@ -273,7 +302,7 @@ abstract class VoucherController
                 }
             }
         }
-        if (!$lines && !array_filter(array_keys($errors), fn ($k) => str_starts_with((string) $k, 'lines.'))) {
+        if ($this->linesFromBody && $this->requireLines && !$lines && !array_filter(array_keys($errors), fn ($k) => str_starts_with((string) $k, 'lines.'))) {
             $errors['lines'] = Lang::t('voucher.no_lines');
         }
         if ($errors) {
@@ -345,7 +374,7 @@ abstract class VoucherController
     {
         $cols = $this->columns($this->table);
         $blocked = ['id', 'voucher_no', 'status', 'created_at', 'created_by', 'cancelled_at', 'cancelled_by', 'cancel_reason', 'deleted_at', 'deleted_by'];
-        return array_filter($h, fn ($v, $k) => in_array($k, $cols, true) && !in_array($k, $blocked, true) && !is_array($v), ARRAY_FILTER_USE_BOTH);
+        return array_filter($this->fixedHeader() + $h, fn ($v, $k) => in_array($k, $cols, true) && !in_array($k, $blocked, true) && !is_array($v), ARRAY_FILTER_USE_BOTH);
     }
 
     private function auditPayload(array $h, array $lines): array
@@ -365,7 +394,8 @@ abstract class VoucherController
     /** Locks only the voucher row (not joined masters) and returns its status. */
     private function lockRow(int $id): array
     {
-        $row = DB::one("SELECT id, status FROM `{$this->table}` WHERE id = :id AND deleted_at IS NULL FOR UPDATE", ['id' => $id]);
+        $scope = $this->scopeSql() !== '' ? ' AND ' . str_replace('v.', '', $this->scopeSql()) : '';
+        $row = DB::one("SELECT id, status FROM `{$this->table}` WHERE id = :id AND deleted_at IS NULL$scope FOR UPDATE", ['id' => $id]);
         if ($row === null) {
             throw HttpException::notFound();
         }
@@ -375,7 +405,8 @@ abstract class VoucherController
     protected function find(int $id): array
     {
         $row = DB::one(
-            "SELECT {$this->selectSql()} FROM `{$this->table}` v {$this->joinSql()} WHERE v.id = :id AND v.deleted_at IS NULL",
+            "SELECT {$this->selectSql()} FROM `{$this->table}` v {$this->joinSql()} WHERE v.id = :id AND v.deleted_at IS NULL"
+            . ($this->scopeSql() !== '' ? ' AND ' . $this->scopeSql() : ''),
             ['id' => $id]
         );
         if ($row === null) {

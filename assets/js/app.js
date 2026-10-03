@@ -25,10 +25,13 @@ import settingsView from './views/settings.js';
 import { MASTERS } from './views/masters/config.js';
 import { masterListView } from './views/masterList.js';
 import { masterFormView } from './views/masterForm.js';
-import { VOUCHERS } from './views/vouchers/defs.js';
+import { VOUCHERS as STOCK_VOUCHERS } from './views/vouchers/defs.js';
+import { PRODUCTION_VOUCHERS } from './views/vouchers/productionDefs.js';
 import { voucherListView } from './views/voucherList.js';
 import { voucherFormView } from './views/voucherForm.js';
 import { voucherViewView } from './views/voucherView.js';
+
+const VOUCHERS = { ...STOCK_VOUCHERS, ...PRODUCTION_VOUCHERS };
 
 const routes = [
   { path: '/login', view: loginView, public: true },

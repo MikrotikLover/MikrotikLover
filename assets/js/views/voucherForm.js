@@ -12,8 +12,12 @@ import { navigate } from '../app.js';
 import { qtyFmt } from './vouchers/defs.js';
 
 /**
- * Shared entry form for every stock voucher (#/v/<key>/new, #/v/<key>/<id>/edit).
- * Header (formKit) → line grid (lineGrid) → remarks → Save, all on enterNav.
+ * Shared entry form for every voucher (#/v/<key>/new, #/v/<key>/<id>/edit).
+ * Header (formKit) → line grid (lineGrid) → summary → remarks → Save, all on enterNav.
+ *
+ * Optional def hooks: noGrid (lines computed on the server), summary(env) → HTML or
+ * Promise<HTML> shown under the grid, toForm(record) → record for editing,
+ * extraStockWh(values) → more warehouses to load stock for, mount(env, form).
  */
 export function voucherFormView(key, def) {
   return {
@@ -45,7 +49,8 @@ export function voucherFormView(key, def) {
           </div>
           <form class="card form voucher-form" autocomplete="off">
             <div class="form-grid">${renderFields(headerFields)}</div>
-            <div data-grid></div>
+            ${def.noGrid ? '' : '<div data-grid></div>'}
+            <div class="voucher-summary" data-summary hidden></div>
             <div class="form-grid">${renderFields(remarksField)}</div>
             <div class="form-actions">
               <a class="btn btn-ghost" href="${record ? `#/v/${key}/${record.id}` : `#/v/${key}`}">${esc(t('common.cancel'))}</a>
@@ -64,13 +69,14 @@ export function voucherFormView(key, def) {
         // so "available" shows what this voucher may use.
         const ownOut = new Map();
         const ownItems = new Set();
+        if (record && def.toForm) record = def.toForm(record);
         if (record) {
           for (const l of record.lines) {
             ownItems.add(String(l.item_id));
             const it = itemsById.get(String(l.item_id));
             const lot = Number(it?.track_lots) ? l.lot_no : '';
             const k = `${l.item_id}|${lot}`;
-            ownOut.set(k, (ownOut.get(k) || 0) + Number(l.qty || 0));
+            ownOut.set(k, (ownOut.get(k) || 0) + Number(l.qty ?? l.actual_qty ?? 0));
           }
         }
 
@@ -107,25 +113,50 @@ export function voucherFormView(key, def) {
           },
         };
 
-        const grid = lineGrid({
-          name: 'lines',
-          columns: def.columns(env),
-          onChange: () => recalc(),
-        });
+        // Vouchers whose lines are computed (estimation) get an inert grid stand-in.
+        const grid = def.noGrid
+          ? { rows: () => [], getRows: () => [], setRows: () => {}, clear: () => {}, refreshOptions: () => {}, setFooter: () => {} }
+          : lineGrid({ name: 'lines', columns: def.columns(env), onChange: () => recalc() });
         env.grid = grid;
-        form.querySelector('[data-grid]').replaceWith(grid.el);
+        if (!def.noGrid) form.querySelector('[data-grid]').replaceWith(grid.el);
+
+        const summaryEl = main.querySelector('[data-summary]');
+        let summaryTimer = null;
+        let summaryToken = 0;
+        function renderSummary() {
+          if (!def.summary) return;
+          clearTimeout(summaryTimer);
+          summaryTimer = setTimeout(async () => {
+            const token = ++summaryToken;
+            try {
+              const html = await def.summary(env);
+              if (token !== summaryToken) return;
+              summaryEl.hidden = !html;
+              summaryEl.innerHTML = html || '';
+            } catch (err) {
+              if (token !== summaryToken) return;
+              summaryEl.hidden = false;
+              summaryEl.innerHTML = `<div class="notice notice-warn">${esc(err.message)}</div>`;
+            }
+          }, def.noGrid ? 300 : 60);
+        }
+        env.refreshSummary = renderSummary;
 
         function recalc() {
-          const rows = grid.rows().filter((r) => !r.isEmpty()).map((r) => r.values());
-          grid.setFooter(t('grid.total'), def.footer(rows, env));
+          if (!def.noGrid) {
+            const rows = grid.rows().filter((r) => !r.isEmpty()).map((r) => r.values());
+            grid.setFooter(t('grid.total'), def.footer(rows, env));
+          }
+          renderSummary();
         }
 
         async function reloadStock() {
-          const wh = env.wh();
-          if (!wh) return;
-          await stock.load(wh);
+          const whs = [env.wh(), ...(def.extraStockWh?.(ctx.values()) || [])].filter(Boolean);
+          if (!whs.length) return;
+          await Promise.all(whs.map((w) => stock.load(w)));
           grid.refreshOptions();
           grid.rows().forEach((r) => r.refresh());
+          renderSummary();
         }
 
         // Header side effects (party → ownership, machine → warehouse …) and stock reloads.
@@ -139,6 +170,7 @@ export function voucherFormView(key, def) {
           def.effects?.[name]?.(env);
           prev = ctx.values();
           reloadStock();
+          recalc();
         });
 
         function applyDefaults() {
@@ -149,12 +181,13 @@ export function voucherFormView(key, def) {
 
         if (record) {
           ctx.setValues(record);
-          grid.setRows(record.lines.map((l) => ({ ...l, qty: qtyFmt(l.qty), ml_filled: l.ml_filled !== undefined ? qtyFmt(l.ml_filled) : undefined, rate: l.rate !== undefined ? Number(l.rate) : undefined })));
+          grid.setRows(def.toForm ? record.lines : record.lines.map((l) => ({ ...l, qty: qtyFmt(l.qty), ml_filled: l.ml_filled !== undefined ? qtyFmt(l.ml_filled) : undefined, rate: l.rate !== undefined ? Number(l.rate) : undefined })));
           prev = ctx.values();
         } else {
           applyDefaults();
         }
         ctx.snapshot();
+        def.mount?.(env, form);
         recalc();
         reloadStock();
 

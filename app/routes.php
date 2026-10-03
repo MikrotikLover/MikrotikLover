@@ -70,9 +70,17 @@ $voucher($r, 'igp', InwardGatePassController::class, 'igp');
 $voucher($r, 'transfers', StockTransferController::class, 'transfer');
 $voucher($r, 'consumptions', StockConsumptionController::class, 'consumption');
 $voucher($r, 'ink-loads', InkLoadController::class, 'ink_load');
+$voucher($r, 'estimations', EstimationController::class, 'estimation');
+$r->post('estimations/calc', [EstimationController::class, 'calc'], ['perm' => ['estimation.create', 'estimation.edit']]);
+$voucher($r, 'productions-bom', BomProductionController::class, 'bom_production');
+$voucher($r, 'productions-manual', ManualProductionController::class, 'manual_production');
+$r->post('production/requirements', [BomProductionController::class, 'requirements'], ['perm' => [
+    'bom_production.create', 'bom_production.edit', 'manual_production.create', 'manual_production.edit',
+]]);
 $r->get('stock/balance', [StockController::class, 'balance'], ['perm' => [
     'igp.create', 'igp.edit', 'transfer.create', 'transfer.edit', 'consumption.create', 'consumption.edit',
     'ink_load.create', 'ink_load.edit', 'reports.stock',
+    'bom_production.create', 'bom_production.edit', 'manual_production.create', 'manual_production.edit',
 ]]);
 
 return $r;

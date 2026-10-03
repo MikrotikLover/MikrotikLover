@@ -13,9 +13,9 @@ const TRANSACTIONS = [
   { key: 'transfer', icon: 'transfer', perm: 'transfer.view' },
   { key: 'consumption', icon: 'beaker', perm: 'consumption.view' },
   { key: 'ink_load', icon: 'drop', perm: 'ink_load.view' },
-  { key: 'estimation', icon: 'calculator', perm: 'estimation.view', batch: 4 },
-  { key: 'bom_production', icon: 'layers', perm: 'bom_production.view', batch: 4 },
-  { key: 'manual_production', icon: 'wrench', perm: 'manual_production.view', batch: 4 },
+  { key: 'estimation', icon: 'calculator', perm: 'estimation.view' },
+  { key: 'bom_production', icon: 'layers', perm: 'bom_production.view' },
+  { key: 'manual_production', icon: 'wrench', perm: 'manual_production.view' },
   { key: 'chalan', icon: 'truck', perm: 'chalan.view', batch: 5 },
 ];
 

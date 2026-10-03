@@ -47,11 +47,18 @@ final class LookupController
                     fn ($r) => ['sub' => $r['code'] . ' · ' . $r['machine_type']]
                 ),
                 'designs' => $this->rows(
-                    'SELECT id, design_code AS code, name, NULL AS name_ur, party_id, process_type FROM designs
+                    'SELECT id, design_code AS code, name, NULL AS name_ur, party_id, process_type, finished_item_id, default_machine_id FROM designs
                      WHERE is_active = 1 AND deleted_at IS NULL ORDER BY design_code',
                     fn ($r) => ['sub' => $r['code']]
                 ),
-                'ink_params' => InkService::params(),
+                'estimations' => $this->rows(
+                    "SELECT e.id, e.voucher_no AS code, CONCAT(e.voucher_no, ' · ', d.design_code, ' · ', e.meters, ' m') AS name, NULL AS name_ur,
+                            e.design_id, e.party_id, e.machine_id, e.fabric_item_id, e.meters
+                     FROM production_estimations e JOIN designs d ON d.id = e.design_id
+                     WHERE e.status = 'posted' AND e.deleted_at IS NULL ORDER BY e.id DESC LIMIT 300",
+                    fn ($r) => ['sub' => $r['order_ref'] ?? '']
+                ),
+                'ink_params' => InkService::params() + ['default_wastage_pct' => Settings::float('default_wastage_pct', 3)],
                 default => throw HttpException::validation(['sets' => Lang::t('validation.in')]),
             };
         }

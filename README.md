@@ -11,7 +11,7 @@ Timezone **Asia/Karachi**, currency **PKR**.
 | 1 | DB schema, folder structure, auth & roles, `enterNav.js` | ✅ delivered |
 | 2 | Master data CRUD, design library, ink master | ✅ delivered |
 | 3 | Inward Gate Pass, Stock Transfer, Stock Consumption, Ink Loading | ✅ delivered |
-| 4 | Estimation, BOM Production, Manual Production | pending |
+| 4 | Estimation, BOM Production, Manual Production | ✅ delivered |
 | 5 | Delivery Chalan + print layouts | pending |
 | 6 | Reports, exports, dashboard | pending |
 
@@ -32,8 +32,11 @@ public_html/                 ← deploy folder (this repository)
 │   │                        MasterController (base) → Party, Warehouse, Unit, Item,
 │   │                        InkColour, Machine, Design; Settings, Lookup
 │   │                        VoucherController (base) → InwardGatePass, StockTransfer,
-│   │                        StockConsumption, InkLoad; Stock (balances)
-│   └── services/            Settings, InkService, Stock (ledger), VoucherNumber
+│   │                        StockConsumption, InkLoad, Estimation,
+│   │                        ProductionController → BomProduction, ManualProduction;
+│   │                        Stock (balances)
+│   └── services/            Settings, InkService, Stock (ledger), VoucherNumber,
+│                            ProductionService (requirements + costing)
 ├── assets/
 │   ├── css/app.css
 │   └── js/
@@ -45,7 +48,7 @@ public_html/                 ← deploy folder (this repository)
 │       └── views/           login, setup, home, users, userForm, roles, audit, profile,
 │                            masterList / masterForm + masters/config.js, designs,
 │                            designForm, settings, voucherList / voucherForm /
-│                            voucherView + vouchers/defs.js
+│                            voucherView + vouchers/defs.js, vouchers/productionDefs.js
 ├── database/schema.sql      full schema for ALL batches (33 tables + stock view)
 ├── database/seed.sql        roles, permission matrix, units, warehouses, ink colours, settings
 └── tests/                   api_smoke.sh, enternav.html + enternav.test.cjs, app_e2e.test.cjs
@@ -132,6 +135,29 @@ No CLI, cron, `proc_open` or queues are used.
   require a lot. Other items' lot field is skipped by ENTER.
 - Voucher dates cannot be in the future (Asia/Karachi).
 
+## Estimation & production (Batch 4)
+
+| Voucher | Number | Route | What it does |
+|---|---|---|---|
+| Production Estimation | `PEV-…` | `#/v/estimation` | Design + order meters (+ wastage %) → ink ml per colour, paper, chemicals, fabric, machine hours, estimated cost and cost per meter. Live preview while typing; no stock effect. |
+| BOM Production | `BOM-…` | `#/v/bom_production` | Pick an estimation or design → materials load from the design BOM for the printed meters; enter actual quantities (variance % shown). |
+| Manual Production | `MPV-…` | `#/v/manual_production` | Sampling, re-print, non-standard jobs: materials entered by hand, design optional. |
+
+Stock posted by a production voucher:
+
+- **OUT grey fabric** = printed meters (good + wastage + rejected) from the fabric warehouse / lot.
+- **IN finished fabric** = good meters to the finished store; the lot defaults to the fabric lot and
+  the job-work owner is carried over.
+- **OUT paper / chemicals / other** at the actual quantity. BOM lines you don't list are still
+  consumed at the estimated quantity.
+- **Ink is recorded but not deducted**: ink leaves stock on the Ink Loading voucher (Batch 3), so
+  production stores estimated vs actual ml per colour for costing and variance only.
+
+Costing per production: materials (+ own fabric at item rate; job-work fabric costs 0) + ink +
+machine hours × hourly cost → **cost per good meter**. Machine hours = entered, else end − start,
+else printed meters ÷ machine speed. Meters convert to the fabric item's unit (yard, or kg via GSM × width).
+Edit and cancel follow the voucher rules: refused when the finished fabric was already moved or used.
+
 ## Database rules (implemented in schema, used from Batch 3)
 
 - `stock_movements` is the only stock ledger (`item, warehouse, lot, qty_in, qty_out,
@@ -179,5 +205,7 @@ ADMIN_PASS=... tests/api_masters.sh               # 58 master-data / design / im
 ADMIN_PASS=... NODE_PATH=$(npm root -g) node tests/masters_e2e.test.cjs  # 32 keyboard-driven UI checks
 ADMIN_PASS=... tests/api_vouchers.sh              # 52 voucher / stock / concurrency checks
 ADMIN_PASS=... NODE_PATH=$(npm root -g) node tests/vouchers_e2e.test.cjs # 33 voucher UI checks
+ADMIN_PASS=... tests/api_production.sh            # 58 estimation / production / costing checks
+ADMIN_PASS=... NODE_PATH=$(npm root -g) node tests/production_e2e.test.cjs # 22 production UI checks
 # Use PHP_CLI_SERVER_WORKERS=6 with php -S so the concurrency test really runs in parallel.
 ```
