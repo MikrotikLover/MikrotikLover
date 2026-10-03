@@ -156,6 +156,15 @@ final class Payroll
         ) as $b) {
             $loanBal[(int)$b['employee_id']] = (float)$b['bal'];
         }
+        // days already paid to an employee on another posted sheet (e.g. the employee type changed)
+        $paidElsewhere = [];
+        foreach (Database::all(
+            "SELECT l.employee_id, s.period_from, s.period_to, s.sheet_type FROM salary_sheet_lines l JOIN salary_sheets s ON s.id = l.salary_sheet_id
+              WHERE s.status = 'posted' AND s.id <> ? AND s.period_from <= ? AND s.period_to >= ? AND l.employee_id IN ($in)",
+            [$sid, $to, $from]
+        ) as $pe) {
+            $paidElsewhere[(int)$pe['employee_id']][] = $pe;
+        }
         // statutory rates and tax slabs effective on the last day
         $rates = [];
         foreach (Database::all('SELECT * FROM statutory_rates WHERE effective_from <= ? ORDER BY code, effective_from', [$to]) as $r) {
@@ -174,14 +183,25 @@ final class Payroll
             }
             // attendance summary
             $c = ['work' => 0.0, 'rest' => 0.0, 'holiday' => 0.0, 'leave' => 0.0, 'lwop' => 0.0, 'absent' => 0.0, 'unmarked' => 0.0];
+            $unpaid = 0.0;   // days in the period that earn nothing (used by the fixed 30 / 26 day bases)
+            $elsewhere = 0;
             $hdNoTime = 0;
             foreach (Calendar::dates($from, $to) as $d) {
                 if (!$cal->isEmployed($e, $d)) {
+                    $unpaid++;
                     continue;
+                }
+                foreach ($paidElsewhere[$eid] ?? [] as $pe) {
+                    if ($d >= $pe['period_from'] && $d <= $pe['period_to']) {
+                        $elsewhere++;
+                        $unpaid++;
+                        continue 2;
+                    }
                 }
                 $a = $att[$eid][$d] ?? null;
                 if (!$a) {
                     $c['unmarked']++;
+                    $unpaid++;
                     continue;
                 }
                 switch ($a['status']) {
@@ -194,7 +214,9 @@ final class Payroll
                         if ((int)$a['work_minutes'] === 0) {
                             $hdNoTime++;
                         }
-                        $c['work'] += PayrollEngine::dayFraction((int)$a['work_minutes'], $shiftMin);
+                        $fraction = PayrollEngine::dayFraction((int)$a['work_minutes'], $shiftMin);
+                        $c['work'] += $fraction;
+                        $unpaid += 1 - $fraction;
                         break;
                     case 'R':
                         $c['rest'] += 1;
@@ -204,6 +226,8 @@ final class Payroll
                         if (!$hol || (int)$hol['is_paid']) {
                             $c['rest'] += 1;
                             $c['holiday'] += 1;
+                        } else {
+                            $unpaid++;
                         }
                         break;
                     case 'L':
@@ -211,14 +235,22 @@ final class Payroll
                         break;
                     case 'LW':
                         $c['lwop'] += 1;
+                        $unpaid++;
                         break;
                     case 'A':
                         $c['absent'] += 1;
+                        $unpaid++;
+                        break;
+                    case 'O': // outside employment
+                        $unpaid++;
                         break;
                 }
             }
             if ($c['unmarked'] > 0) {
                 $warn[] = (int)$c['unmarked'] . ' day(s) without attendance (not paid)';
+            }
+            if ($elsewhere) {
+                $warn[] = "$elsewhere day(s) already paid on another posted sheet (employee type changed) — not paid again";
             }
             if ($hdNoTime) {
                 $warn[] = "$hdNoTime half day(s) without times (paid 0 h — enter times in attendance)";
@@ -238,7 +270,7 @@ final class Payroll
             $fine = (float)($manual[$eid]['fine'] ?? 0);
 
             $r = $engine->calculate([
-                'type' => $type, 'days' => $days,
+                'type' => $type, 'days' => $days, 'basis' => $basis, 'unpaid_days' => round($unpaid, 2),
                 'basic' => (float)($h['basic_salary'] ?? 0), 'daily_rate' => (float)($h['daily_rate'] ?? 0), 'allowances' => (float)($h['allowances'] ?? 0),
                 'work_days' => $c['work'], 'rest_days' => $c['rest'], 'paid_leave' => $c['leave'],
                 'ot_applicable' => $h ? (bool)(int)$h['ot_applicable'] : false, 'ot_rate' => $h['ot_rate'] ?? null, 'shift_hours' => $shiftHours,
@@ -277,6 +309,9 @@ final class Payroll
                 'loans' => $alloc,
             ];
             foreach ($vch[$eid] ?? [] as $v) {
+                if ($v['voucher_type'] === 'OT' && !(int)($h['ot_applicable'] ?? 0)) {
+                    continue; // not paid (OT not applicable): stays open for correction, like approved OT rows
+                }
                 $out['used']['vouchers'][] = (int)$v['id'];
             }
             foreach ($ot[$eid] ?? [] as $o) {
@@ -410,12 +445,39 @@ final class Payroll
                     . (count($changed) > 8 ? ' …' : '') . '). Press Show and Save again, then post.');
             }
 
-            // consume sources
+            // Vouchers of this salary month for employees who are NOT on the sheet would never be deducted / paid:
+            // the month is locked after posting. Refuse until they are corrected (salary month, employee dates).
+            $onSheet = array_map(fn($l) => (int)$l['employee_id'], $build['lines']);
+            $types = self::empTypes($sheet['sheet_type']);
+            $tq = implode(',', array_map(fn($t) => Database::pdo()->quote($t), $types));
+            $notIn = $onSheet ? ' AND v.employee_id NOT IN (' . implode(',', $onSheet) . ')' : '';
+            $orphans = Database::all(
+                "SELECT v.voucher_type, v.vr_no, e.code, e.name FROM vouchers v JOIN employees e ON e.id = v.employee_id
+                  WHERE v.voucher_type IN ('ADV','INC','PEN','OT') AND v.status = 'posted' AND v.deleted_at IS NULL AND v.salary_sheet_id IS NULL
+                    AND v.deduct_month = ? AND e.emp_type IN ($tq)$notIn ORDER BY e.code",
+                [$sheet['salary_month']]
+            );
+            if ($orphans) {
+                $list = array_map(fn($o) => Vouchers::number($o['voucher_type'], $o['vr_no']) . " ({$o['code']} {$o['name']})", $orphans);
+                throw ApiException::conflict('These vouchers are for ' . date('F Y', strtotime($sheet['salary_month']))
+                    . ' but the employee is not on this sheet (joined after the period, left, or inactive): ' . implode(', ', array_slice($list, 0, 10))
+                    . (count($list) > 10 ? ' …' : '') . '. Change their salary month (or the employee\'s dates), then post.');
+            }
+
+            // consume sources; guarded so a voucher unposted / an OT row changed at the same moment is detected
             foreach (array_chunk($build['used']['vouchers'], 500) as $chunk) {
-                Database::run('UPDATE vouchers SET salary_sheet_id = ' . $id . ' WHERE id IN (' . implode(',', $chunk) . ')');
+                $n = Database::run('UPDATE vouchers SET salary_sheet_id = ' . $id . ' WHERE id IN (' . implode(',', $chunk) . ")
+                    AND salary_sheet_id IS NULL AND status = 'posted' AND deleted_at IS NULL")->rowCount();
+                if ($n !== count($chunk)) {
+                    throw ApiException::conflict('Vouchers changed while posting. Press Show and Save again, then post.');
+                }
             }
             foreach (array_chunk($build['used']['overtime'], 500) as $chunk) {
-                Database::run('UPDATE overtime SET salary_sheet_id = ' . $id . ' WHERE id IN (' . implode(',', $chunk) . ')');
+                $n = Database::run('UPDATE overtime SET salary_sheet_id = ' . $id . ' WHERE id IN (' . implode(',', $chunk) . ")
+                    AND salary_sheet_id IS NULL AND status = 'approved'")->rowCount();
+                if ($n !== count($chunk)) {
+                    throw ApiException::conflict('Overtime changed while posting. Press Show and Save again, then post.');
+                }
             }
             // loan installments: allocation from the fresh build (draft rows may be stale after a loan edit)
             Database::run('DELETE FROM salary_sheet_loans WHERE salary_sheet_id = ?', [$id]);
@@ -439,6 +501,18 @@ final class Payroll
                     'updated_by' => Auth::id(),
                 ], 'id = :id', ['id' => $a['loan_installment_id']]);
                 $loans[(int)$a['loan_id']] = true;
+            }
+            // installments due this month for employees not on the sheet: skipped, balance moves to later months
+            foreach (Database::all(
+                "SELECT li.id, li.loan_id FROM loan_installments li JOIN loans l ON l.id = li.loan_id JOIN employees e ON e.id = l.employee_id
+                   JOIN vouchers v ON v.id = l.voucher_id
+                  WHERE li.due_month = ? AND li.status IN ('scheduled','adjusted') AND l.status = 'active' AND v.status = 'posted' AND v.deleted_at IS NULL
+                    AND e.emp_type IN ($tq)" . ($onSheet ? ' AND l.employee_id NOT IN (' . implode(',', $onSheet) . ')' : ''),
+                [$sheet['salary_month']]
+            ) as $o) {
+                Database::update('loan_installments', ['status' => 'skipped', 'deducted_amount' => 0, 'salary_sheet_id' => $id,
+                    'remarks' => 'Employee not on the salary sheet; balance carried forward', 'updated_by' => Auth::id()], 'id = :id', ['id' => $o['id']]);
+                $loans[(int)$o['loan_id']] = true;
             }
             foreach (array_keys($loans) as $loanId) {
                 Vouchers::reschedule($loanId); // re-spreads any shortfall, closes fully repaid loans
@@ -468,7 +542,15 @@ final class Payroll
             $add('eobi_payable', $t['eobi'], false, 'EOBI (employee share)');
             $add('pessi_payable', $t['pessi'], false, (string)Settings::get('social_security', 'PESSI') . ' (employee share)');
             $add('tax_payable', $t['income_tax'], false, 'Income tax withheld');
-            $add('salary_payable', $t['net_salary'], false, 'Net salaries payable');
+            // A negative net is money the employee still owes (e.g. an advance larger than the salary): it is not
+            // netted against other employees' payable but stays receivable in Employee Advances.
+            $positive = $shortfall = 0.0;
+            foreach ($build['lines'] as $l) {
+                $n = (float)$l['net_salary'];
+                $n >= 0 ? $positive += $n : $shortfall -= $n;
+            }
+            $add('salary_payable', $positive, false, 'Net salaries payable');
+            $add('employee_advances', $shortfall, true, 'Salary shortfall still owed by employees');
             $jvId = null;
             if ($jvLines) {
                 $jvId = Database::insert('vouchers', [

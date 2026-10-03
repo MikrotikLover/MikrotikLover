@@ -193,6 +193,7 @@ KINDS.devices = {
     { key: 'name', label: 'Name', sortable: true },
     { key: 'location', label: 'Location' },
     { key: 'last_seen_at', label: 'Last seen', render: (r) => fdatetime(r.last_seen_at), print: (r) => fdatetime(r.last_seen_at) },
+    { key: 'last_ip', label: 'Last IP' },
     { key: 'punch_count', label: 'Punches', align: 'right' },
     { key: 'is_active', label: 'Status', render: (r) => yesNo(r.is_active), print: (r) => (Number(r.is_active) ? 'Active' : 'Inactive') },
   ],
@@ -200,7 +201,9 @@ KINDS.devices = {
     { name: 'serial_no', label: 'Serial number (SN)', required: true, span: 5, maxlength: 50, help: 'Menu → System Info → Device Info on the ZKTeco device' },
     { name: 'name', label: 'Name', required: true, span: 4, maxlength: 60 },
     { name: 'is_active', label: 'Active (accept punches)', type: 'checkbox', span: 3 },
-    { name: 'location', label: 'Location', span: 12, maxlength: 100 },
+    { name: 'location', label: 'Location', span: 6, maxlength: 100 },
+    { name: 'allowed_ips', label: 'Allowed internet IP(s)', span: 6, maxlength: 255, placeholder: 'e.g. 39.45.10.20',
+      help: 'Recommended: only accept pushes from the factory connection (see "last IP"). Empty = any address.' },
   ],
   defaults: { is_active: 1 },
   top() {

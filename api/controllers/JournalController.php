@@ -55,6 +55,9 @@ final class JournalController
 
     private function save(Request $r, ?array $old): array
     {
+        if ($r->input('post') && !Auth::can('journal', 'post')) {
+            throw ApiException::forbidden('You may save this journal voucher as a draft but not post it.');
+        }
         $d = Validator::make($r->body(), ['vr_date' => 'required|date', 'remarks' => 'nullable|string|max:255', 'lines' => 'required|array'],
             ['vr_date' => 'Date', 'remarks' => 'Narration']);
         $lines = [];

@@ -105,7 +105,7 @@ final class LeaveController
             throw ApiException::validation(['from_date' => 'Leave must be within the employment period.']);
         }
         foreach (Calendar::dates($d['from_date'], $d['to_date']) as $dt) {
-            PayrollLock::assertOpen($emp['emp_type'], $dt, 'Leave');
+            PayrollLock::assertOpen($emp['emp_type'], $dt, 'Leave', (int)$emp['id']);
         }
         $days = $this->workingDays($emp, $d['from_date'], $d['to_date']);
         if (!$days) {
@@ -203,7 +203,7 @@ final class LeaveController
         Database::transaction(function () use ($l, $status) {
             $emp = Database::one('SELECT * FROM employees WHERE id = ?', [$l['employee_id']]);
             foreach (Calendar::dates($l['from_date'], $l['to_date']) as $dt) {
-                PayrollLock::assertOpen($emp['emp_type'], $dt, 'Leave');
+                PayrollLock::assertOpen($emp['emp_type'], $dt, 'Leave', (int)$emp['id']);
             }
             Database::update('leave_register', [
                 'status' => $status,

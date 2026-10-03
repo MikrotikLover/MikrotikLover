@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 /**
- * Database backup download (.sql.gz), for administrators (settings.edit). Pure PHP, no exec().
+ * Database backup download (.sql.gz), for users with the Admin role only. Pure PHP, no exec().
  *   backup.php            gzip-compressed SQL
  * Restore: hPanel → Databases → phpMyAdmin → Import, or `gunzip -c file.sql.gz | mysql dbname`.
  */
@@ -20,7 +20,7 @@ if (!Auth::user()) {
     header('Location: ./#/login');
     exit;
 }
-if (!Auth::can('settings', 'edit')) {
+if (!Auth::isAdmin()) { // the dump contains password hashes and every salary: administrators only
     http_response_code(403);
     exit('Only administrators can download backups.');
 }

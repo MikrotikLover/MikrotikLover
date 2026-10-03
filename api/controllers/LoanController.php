@@ -79,7 +79,7 @@ final class LoanController
             [$loan['id']]
         );
         foreach ($v['installments'] as &$i) {
-            $i['locked'] = $i['status'] === 'deducted' || $i['salary_sheet_id'] || PayrollLock::isLocked((string)$v['emp_type'], $i['due_month']);
+            $i['locked'] = $i['status'] === 'deducted' || $i['salary_sheet_id'] || PayrollLock::isMonthLocked((string)$v['emp_type'], $i['due_month'], (int)$v['employee_id']);
         }
         $v['journal'] = Vouchers::journal((int)$v['id']);
         return $v;
@@ -99,6 +99,9 @@ final class LoanController
 
     private function save(Request $r, ?array $old): array
     {
+        if ($r->input('post') && !Auth::can('loans', 'post')) {
+            throw ApiException::forbidden('You may save this loan as a draft but not post it.');
+        }
         $body = $r->body();
         if (isset($body['start_month']) && is_string($body['start_month']) && preg_match('/^\d{4}-\d{2}$/', $body['start_month'])) {
             $body['start_month'] .= '-01';
@@ -134,7 +137,7 @@ final class LoanController
         if ($errors) {
             throw ApiException::validation($errors);
         }
-        if (PayrollLock::isLocked($emp['emp_type'], $d['start_month'])) {
+        if (PayrollLock::isMonthLocked($emp['emp_type'], $d['start_month'], (int)$emp['id'])) {
             throw ApiException::validation(['start_month' => 'Salary for ' . date('F Y', strtotime($d['start_month'])) . ' is already posted.']);
         }
 
@@ -178,7 +181,7 @@ final class LoanController
         if ($inst['status'] === 'deducted' || $inst['salary_sheet_id']) {
             throw ApiException::conflict('This installment is already deducted in payroll.');
         }
-        PayrollLock::assertOpen((string)$v['emp_type'], $inst['due_month'], 'The installment');
+        PayrollLock::assertMonthOpen((string)$v['emp_type'], $inst['due_month'], 'The installment', (int)$v['employee_id']);
         $action = (string)$r->input('action');
         $remarks = trim((string)$r->input('remarks', ''));
         $upd = match ($action) {

@@ -116,6 +116,24 @@ return [
         assert_eq(31, PayrollEngine::daysInMonth('calendar', '2026-08-26', '2026-09-25'));
         assert_eq(30, PayrollEngine::daysInMonth('fixed30', '2026-02-01', '2026-02-28'));
     },
+    'fixed 30-day basis: a full February is the full basic' => function () use ($e) {
+        // 24 work + 4 rest in a 28-day February, nothing unpaid
+        $r = $e->calculate(['type' => 'permanent', 'days' => 30, 'basis' => 'fixed30', 'unpaid_days' => 0, 'basic' => 30000, 'work_days' => 24, 'rest_days' => 4]);
+        assert_eq(30.0, $r['paid_days']);
+        assert_eq(30000.0, $r['work_pay']);
+    },
+    'fixed 26-day basis: absences are deducted even in a 31-day month' => function () use ($e) {
+        // 23 work + 5 rest + 3 absent in 31 days: 26 - 3 = 23 paid days
+        $r = $e->calculate(['type' => 'permanent', 'days' => 26, 'basis' => 'fixed26', 'unpaid_days' => 3, 'basic' => 26000, 'work_days' => 23, 'rest_days' => 5]);
+        assert_eq(23.0, $r['paid_days']);
+        assert_eq(23000.0, $r['work_pay']);
+        // a half day worked 50%: 0.5 unpaid
+        $r = $e->calculate(['type' => 'permanent', 'days' => 30, 'basis' => 'fixed30', 'unpaid_days' => 0.5, 'basic' => 30000, 'work_days' => 25.5, 'rest_days' => 4]);
+        assert_eq(29500.0, $r['work_pay']);
+        // more unpaid days than the divisor never goes negative
+        $r = $e->calculate(['type' => 'permanent', 'days' => 26, 'basis' => 'fixed26', 'unpaid_days' => 31, 'basic' => 26000, 'work_days' => 0]);
+        assert_eq(0.0, $r['work_pay']);
+    },
     'rounding modes' => function () {
         assert_eq(3929.0, (new PayrollEngine('half_up'))->round(3928.57));
         assert_eq(3928.0, (new PayrollEngine('down'))->round(3928.57));

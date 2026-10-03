@@ -52,13 +52,17 @@ final class Auth
             return null;
         }
         $user = Database::one(
-            'SELECT u.id, u.username, u.full_name, u.email, u.role_id, u.is_active, u.must_change_password,
+            'SELECT u.id, u.username, u.full_name, u.email, u.role_id, u.is_active, u.must_change_password, u.session_version,
                     r.name AS role_name, r.is_admin
                FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = ?',
             [$uid]
         );
         if (!$user || !(int)$user['is_active']) {
             self::logout('inactive');
+            return null;
+        }
+        if ((int)($_SESSION['sv'] ?? 0) !== (int)$user['session_version']) { // password changed / reset elsewhere
+            self::logout('password_changed');
             return null;
         }
         $_SESSION['last_activity'] = time();
@@ -95,6 +99,58 @@ final class Auth
         return in_array($action, self::permissions()[$module] ?? [], true);
     }
 
+    /**
+     * End every session of a user after a password change / reset. With $keepCurrent the caller's own
+     * session stays valid (own password change).
+     */
+    public static function bumpSessionVersion(int $userId, bool $keepCurrent = false): void
+    {
+        Database::run('UPDATE users SET session_version = session_version + 1 WHERE id = ?', [$userId]);
+        if ($keepCurrent && session_status() === PHP_SESSION_ACTIVE) {
+            $_SESSION['sv'] = (int)Database::value('SELECT session_version FROM users WHERE id = ?', [$userId]);
+            session_regenerate_id(true);
+            self::$user = null;
+        }
+    }
+
+    public static function isAdmin(): bool
+    {
+        $u = self::user();
+        return $u !== null && (int)($u['is_admin'] ?? 0) === 1;
+    }
+
+    /** True when every permission in $perms is one the current user holds (no privilege escalation). */
+    public static function holdsAll(array $perms): bool
+    {
+        if (self::isAdmin()) {
+            return true;
+        }
+        foreach ($perms as $module => $actions) {
+            foreach ((array)$actions as $a) {
+                if (!self::can((string)$module, (string)$a)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Non-admins may only manage users / roles at or below their own level: never an admin role, never
+     * their own role, and never a role with permissions they do not hold themselves.
+     */
+    public static function assertCanGrantRole(int $roleId): void
+    {
+        if (self::isAdmin()) {
+            return;
+        }
+        $role = Database::one('SELECT id, is_admin FROM roles WHERE id = ?', [$roleId]);
+        if (!$role || (int)$role['is_admin'] === 1 || (int)$role['id'] === (int)(self::user()['role_id'] ?? 0)
+            || !self::holdsAll(Permissions::forRole((int)$role['id']))) {
+            throw ApiException::forbidden('Only an administrator can assign or change this role.');
+        }
+    }
+
     public static function authorize(string $module, string $action): void
     {
         self::require();
@@ -127,21 +183,31 @@ final class Auth
         $max = (int)Config::get('security.login_max_attempts', 5);
         $window = (int)Config::get('security.login_window_min', 15);
 
-        $failed = (int)Database::value(
+        // Record the attempt first (as failed) so parallel bursts are counted, then check three limits:
+        //   user + IP (since its last success) · one IP across all usernames (spraying) · one username across all IPs.
+        $attemptId = Database::insert('login_attempts', ['username' => mb_substr($username, 0, 50), 'ip_address' => $ip, 'success' => 0]);
+        $since = ['w' => $window];
+        $pair = (int)Database::value(
             'SELECT COUNT(*) FROM login_attempts
               WHERE username = :u AND ip_address = :ip AND success = 0
                 AND attempted_at > NOW() - INTERVAL :w MINUTE
-                AND attempted_at > COALESCE((SELECT MAX(attempted_at) FROM login_attempts
-                     WHERE username = :u2 AND ip_address = :ip2 AND success = 1), \'1970-01-01\')',
-            ['u' => $username, 'ip' => $ip, 'w' => $window, 'u2' => $username, 'ip2' => $ip]
+                AND id > COALESCE((SELECT MAX(id) FROM login_attempts
+                     WHERE username = :u2 AND ip_address = :ip2 AND success = 1), 0)',
+            ['u' => $username, 'ip' => $ip, 'u2' => $username, 'ip2' => $ip] + $since
         );
-        if ($failed >= $max) {
+        $perIp = (int)Database::value('SELECT COUNT(*) FROM login_attempts WHERE ip_address = :ip AND success = 0 AND attempted_at > NOW() - INTERVAL :w MINUTE',
+            ['ip' => $ip] + $since);
+        $perUser = (int)Database::value('SELECT COUNT(*) FROM login_attempts WHERE username = :u AND success = 0 AND attempted_at > NOW() - INTERVAL :w MINUTE',
+            ['u' => $username] + $since);
+        if ($pair > $max || $perIp > $max * 4 || $perUser > $max * 3) {
             throw new ApiException("Too many failed attempts. Try again in $window minutes.", 429);
         }
 
-        $user = Database::one('SELECT id, password_hash, is_active FROM users WHERE username = ?', [$username]);
+        $user = Database::one('SELECT id, password_hash, is_active, session_version FROM users WHERE username = ?', [$username]);
         $ok = $user && password_verify($password, $user['password_hash']);
-        Database::insert('login_attempts', ['username' => mb_substr($username, 0, 50), 'ip_address' => $ip, 'success' => $ok ? 1 : 0]);
+        if ($ok) {
+            Database::run('UPDATE login_attempts SET success = 1 WHERE id = ?', [$attemptId]);
+        }
 
         if (!$ok) {
             // Same message for unknown user and wrong password.
@@ -156,7 +222,7 @@ final class Auth
 
         self::startSession();
         session_regenerate_id(true);
-        $_SESSION = ['uid' => (int)$user['id'], 'last_activity' => time(), 'csrf' => bin2hex(random_bytes(32))];
+        $_SESSION = ['uid' => (int)$user['id'], 'sv' => (int)$user['session_version'], 'last_activity' => time(), 'csrf' => bin2hex(random_bytes(32))];
         Database::update('users', ['last_login_at' => date('Y-m-d H:i:s'), 'last_login_ip' => $ip], 'id = :id', ['id' => $user['id']]);
         self::$user = null;
         self::$perms = null;

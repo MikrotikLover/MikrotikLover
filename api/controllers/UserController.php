@@ -52,6 +52,7 @@ final class UserController
     public function store(Request $r): array
     {
         $data = Validator::make($r->body(), self::RULES);
+        Auth::assertCanGrantRole((int)$data['role_id']);
         $this->unique($data['username'], null);
         $password = (string)$r->input('password', '');
         if ($msg = Auth::validatePasswordStrength($password)) {
@@ -76,6 +77,10 @@ final class UserController
             throw ApiException::notFound('User');
         }
         $data = Validator::make($r->body(), self::RULES);
+        if ($id !== Auth::id()) {
+            Auth::assertCanGrantRole((int)$old['role_id']);   // may manage this user at all
+            Auth::assertCanGrantRole((int)$data['role_id']);  // may give the new role
+        }
         $this->unique($data['username'], $id);
 
         if ($id === Auth::id() && (!$data['is_active'] || (int)$data['role_id'] !== (int)$old['role_id'])) {
@@ -93,6 +98,9 @@ final class UserController
         }
         Database::transaction(function () use ($id, $data, $old) {
             Database::update('users', $data + ['updated_by' => Auth::id()], 'id = :id', ['id' => $id]);
+            if (isset($data['password_hash'])) {
+                Auth::bumpSessionVersion($id, $id === Auth::id());
+            }
             $logged = $data;
             if (isset($logged['password_hash'])) {
                 unset($logged['password_hash']);
@@ -113,6 +121,7 @@ final class UserController
         if ($id === Auth::id()) {
             throw ApiException::conflict('You cannot delete your own account.');
         }
+        Auth::assertCanGrantRole((int)$old['role_id']);
         if ($this->isAdminRole((int)$old['role_id'])) {
             $this->ensureAnotherAdmin($id);
         }

@@ -95,7 +95,7 @@ final class AttendanceVoucherController
                 'source'       => $a['source'] ?? null,
                 'saved'        => $a !== null,
                 'flag_reason'  => $a['flag_reason'] ?? null,
-                'locked'       => PayrollLock::isLocked($e['emp_type'], $date),
+                'locked'       => PayrollLock::isLocked($e['emp_type'], $date, $id),
             ];
         }
         return [
@@ -121,6 +121,9 @@ final class AttendanceVoucherController
         $deleteIds = array_values(array_unique(array_map('intval', $head['delete_ids'] ?? [])));
         if (!$rows && !$deleteIds) {
             throw ApiException::validation(['rows' => 'Nothing to save. Mark at least one employee.']);
+        }
+        if ($deleteIds && !Auth::can('attendance', 'delete')) {
+            throw ApiException::forbidden('You do not have permission to delete attendance.');
         }
         $engine = new AttendanceEngine($date, $date);
         $prepared = [];
@@ -149,7 +152,7 @@ final class AttendanceVoucherController
         foreach ($deleteIds as $eid) {
             $a = Database::one('SELECT a.*, e.emp_type, e.code FROM attendance_daily a JOIN employees e ON e.id = a.employee_id WHERE a.employee_id = ? AND a.att_date = ?', [$eid, $date]);
             if ($a) {
-                PayrollLock::assertOpen($a['emp_type'], $date);
+                PayrollLock::assertOpen($a['emp_type'], $date, 'Attendance', (int)$a['employee_id']);
                 $deletes[] = $a;
             }
         }
@@ -167,6 +170,9 @@ final class AttendanceVoucherController
             }
             foreach ($prepared as $row) {
                 $old = Database::one('SELECT * FROM attendance_daily WHERE employee_id = ? AND att_date = ?', [$row['employee_id'], $date]);
+                if ($old && !Auth::can('attendance', 'edit')) {
+                    throw ApiException::forbidden('Attendance for this date already exists; changing it needs the attendance edit permission.');
+                }
                 $id = AttendanceEngine::saveRow($row, $vid);
                 Audit::log($old ? 'update' : 'create', 'attendance_daily', $id, $old, $row);
             }
@@ -193,7 +199,7 @@ final class AttendanceVoucherController
         }
         $rows = Database::all('SELECT a.*, e.emp_type FROM attendance_daily a JOIN employees e ON e.id = a.employee_id WHERE a.voucher_id = ?', [$v['id']]);
         foreach ($rows as $a) {
-            PayrollLock::assertOpen($a['emp_type'], $a['att_date']);
+            PayrollLock::assertOpen($a['emp_type'], $a['att_date'], 'Attendance', (int)$a['employee_id']);
         }
         Database::transaction(function () use ($v, $rows) {
             foreach ($rows as $a) {

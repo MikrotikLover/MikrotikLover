@@ -49,7 +49,7 @@ const NAV = [
     { path: '/users', label: 'Users', ico: '☺', perm: ['users', 'view'] },
     { path: '/roles', label: 'Roles & Permissions', ico: '⚿', perm: ['users', 'view'] },
     { path: '/audit', label: 'Audit Log', ico: '⌕', perm: ['audit', 'view'] },
-    { path: '/system', label: 'System Health', ico: '♥', perm: ['settings', 'edit'] },
+    { path: '/system', label: 'System Health', ico: '♥', perm: ['settings', 'edit'], admin: true },
   ] },
 ];
 
@@ -122,7 +122,7 @@ function buildShell() {
 function renderNav() {
   const path = currentPath();
   shell.nav.replaceChildren(...NAV.map((g) => {
-    const items = g.items.filter((i) => can(...i.perm));
+    const items = g.items.filter((i) => can(...i.perm) && (!i.admin || Number(session.user?.is_admin) === 1));
     if (!items.length) return null;
     return h('div', { class: 'nav-group' }, h('div', null, g.group), items.map((i) =>
       h('a', { href: '#' + i.path, class: path === i.path ? 'active' : '', onclick: () => document.body.classList.remove('nav-open') },

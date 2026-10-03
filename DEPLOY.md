@@ -73,6 +73,7 @@ Upgrades work the same way: deploy the new files, then run `migrate.php` again (
   - Server address `example.com`, port `80` (or `443` with HTTPS if the device supports it);
   - "Domain name" on, proxy off.
   - The device appears under **Devices, Kiosk & TV** as *inactive*. Activate it there, and its punches are then accepted.
+  - **Set "Allowed internet IP(s)"** on the device to the factory's internet IP (shown as *Last IP* once the device has connected). Anyone who knows a serial number could otherwise push fake punches. If your ISP changes the IP, update it, or use a static IP.
   - Devices often only speak plain HTTP. `/iclock` is deliberately **not** forced to HTTPS by the app's `.htaccess`. If hPanel's *Force HTTPS* breaks the device, turn Force HTTPS off and redirect only the other pages; or use CSV/Excel import instead.
 - **Kiosk / TV:** generate the token links on **Devices, Kiosk & TV** and open them full-screen on the kiosk PC or TV. Regenerating a token disables the old link.
 
@@ -91,6 +92,7 @@ Take a backup **before every salary posting day** and before upgrades.
 - [ ] `payroll-config.php` and `payroll_storage/` are **outside** `public_html`
 - [ ] Opening `https://example.com/app/`, `/migrations/` or `/config.php` gives **403 Forbidden**
 - [ ] Each person has their own user with only the permissions they need; disable users who leave
+- [ ] Every active attendance device has **Allowed internet IP(s)** set
 - [ ] LiteSpeed Cache plugin/rules (if enabled for the site) do not cache `/api`. The app already sends `Cache-Control: no-store`; check that the data on the screen updates after saving.
 
 ## 9. Troubleshooting

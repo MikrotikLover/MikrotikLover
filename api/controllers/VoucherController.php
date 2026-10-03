@@ -106,6 +106,9 @@ class VoucherController
     protected function save(Request $r, ?array $old): array
     {
         $type = $this->type($r);
+        if ($r->input('post') && !Auth::can(Vouchers::TYPES[$type]['module'], 'post')) {
+            throw ApiException::forbidden('You may save this voucher as a draft but not post it.');
+        }
         $body = $r->body();
         if (isset($body['deduct_month']) && is_string($body['deduct_month']) && preg_match('/^\d{4}-\d{2}$/', $body['deduct_month'])) {
             $body['deduct_month'] .= '-01';

@@ -82,7 +82,7 @@ final class Vouchers
                 return "$n installment(s) already deducted in payroll.";
             }
         }
-        if ($v['employee_id'] && $v['deduct_month'] && PayrollLock::isLocked((string)$v['emp_type'], $v['deduct_month'])) {
+        if ($v['employee_id'] && $v['deduct_month'] && PayrollLock::isMonthLocked((string)$v['emp_type'], $v['deduct_month'], (int)$v['employee_id'])) {
             return 'Salary month ' . date('M Y', strtotime($v['deduct_month'])) . ' is posted.';
         }
         return null;
@@ -101,7 +101,7 @@ final class Vouchers
     /** Salary month must not be posted already for this employee type. */
     public static function assertMonthOpen(?array $emp, ?string $month): void
     {
-        if ($emp && $month && PayrollLock::isLocked($emp['emp_type'], $month)) {
+        if ($emp && $month && PayrollLock::isMonthLocked($emp['emp_type'], $month, (int)$emp['id'])) {
             throw ApiException::validation(['deduct_month' => 'Salary for ' . date('F Y', strtotime($month)) . ' is already posted. Choose a later month.']);
         }
     }
@@ -236,8 +236,16 @@ final class Vouchers
                 'amount' => $r['status'] === 'deducted' ? (float)$r['deducted_amount'] : ($r['status'] === 'skipped' ? 0.0 : (float)$r['scheduled_amount']),
             ];
         }
+        // never schedule into a salary month that is already posted for this employee
+        $emp = Database::one('SELECT emp_type FROM employees WHERE id = ?', [$loan['employee_id']]);
+        $lastPosted = Database::value(
+            "SELECT MAX(s.salary_month) FROM salary_sheets s
+              WHERE s.status = 'posted' AND (s.sheet_type = ? OR EXISTS (SELECT 1 FROM salary_sheet_lines l WHERE l.salary_sheet_id = s.id AND l.employee_id = ?))",
+            [($emp['emp_type'] ?? '') === 'daily_wages' ? 'daily_wages' : 'permanent', $loan['employee_id']]
+        );
+        $openFrom = $lastPosted ? LoanSchedule::addMonths((string)$lastPosted, 1) : null;
         try {
-            $plan = LoanSchedule::build((float)$loan['amount'], (float)$loan['installment'], $loan['start_month'], $fixed);
+            $plan = LoanSchedule::build((float)$loan['amount'], (float)$loan['installment'], $loan['start_month'], $fixed, $openFrom);
         } catch (\InvalidArgumentException $e) {
             throw ApiException::validation(['amount' => $e->getMessage()]);
         }

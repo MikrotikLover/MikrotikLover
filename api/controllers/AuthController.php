@@ -80,6 +80,7 @@ final class AuthController
             'id = :id',
             ['id' => $user['id']]
         );
+        Auth::bumpSessionVersion((int)$user['id'], true); // other sessions (e.g. a stolen one) end here
         Audit::log('password_change', 'users', (int)$user['id']);
         return ['changed' => true];
     }

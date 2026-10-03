@@ -118,7 +118,7 @@ final class AttendanceController
         if (!$a) {
             throw ApiException::notFound('Attendance row');
         }
-        PayrollLock::assertOpen($a['emp_type'], $a['att_date']);
+        PayrollLock::assertOpen($a['emp_type'], $a['att_date'], 'Attendance', (int)$a['employee_id']);
         Database::transaction(function () use ($a) {
             Database::run('DELETE FROM overtime WHERE employee_id = ? AND ot_date = ? AND salary_sheet_id IS NULL', [$a['employee_id'], $a['att_date']]);
             Database::run('DELETE FROM attendance_daily WHERE id = ?', [$a['id']]);

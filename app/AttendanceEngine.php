@@ -155,7 +155,7 @@ final class AttendanceEngine
         if ($date > date('Y-m-d')) {
             throw ApiException::validation(['status' => 'Attendance cannot be entered for a future date.']);
         }
-        PayrollLock::assertOpen($emp['emp_type'], $date);
+        PayrollLock::assertOpen($emp['emp_type'], $date, 'Attendance', (int)$emp['id']);
         $status = (string)($in['status'] ?? '');
         if (!in_array($status, ['P', 'A', 'L', 'LW', 'S', 'R', 'H', 'HD', 'O'], true)) {
             throw ApiException::validation(['status' => "Select a valid status for $who."]);
@@ -375,7 +375,7 @@ final class AttendanceEngine
                 foreach ($dayPunches as $p) {
                     $this->consumed[(int)$p['id']] = true; // never reuse for the next date
                 }
-                if (PayrollLock::isLocked($emp['emp_type'], $date)) {
+                if (PayrollLock::isLocked($emp['emp_type'], $date, (int)$emp['id'])) {
                     $sum['locked']++;
                     continue;
                 }

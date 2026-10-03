@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\ApiException;
+use App\Auth;
 use App\Config;
 use App\Database;
 use App\Request;
@@ -16,6 +18,9 @@ final class SystemController
 {
     public function status(Request $r): array
     {
+        if (!Auth::isAdmin()) {
+            throw ApiException::forbidden('System Health is for administrators.');
+        }
         $checks = [];
         $add = function (string $name, string $status, string $detail) use (&$checks) {
             $checks[] = compact('name', 'status', 'detail');

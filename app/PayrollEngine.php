@@ -9,6 +9,9 @@ namespace App;
  *
  * Permanent / contract (monthly)
  *   Paid Days      = Work Days + Rest Days + Paid Leave            (rest days include paid holidays)
+ *                    With a fixed 30 / 26-day basis: Days - unpaid days (absent, leave without pay,
+ *                    unmarked, unworked part of half days, days not employed), so a full month is
+ *                    always the full basic and each unpaid day costs Basic / Days.
  *                    Work Days count a full present day as 1 and a half / short day by actual hours
  *                    (worked minutes / shift net minutes, max 1) - no fixed half day.
  *   Work Pay       = round(Basic / Days in Month x Paid Days)
@@ -102,7 +105,8 @@ final class PayrollEngine
 
     /**
      * @param array $in keys:
-     *   type 'permanent'|'daily_wages', days (divisor), basic, daily_rate, allowances,
+     *   type 'permanent'|'daily_wages', days (divisor), basis 'calendar'|'fixed30'|'fixed26', unpaid_days,
+ *   basic, daily_rate, allowances,
      *   work_days, rest_days, paid_leave (days, may be fractional),
      *   ot_applicable (bool), ot_rate (override|null), shift_hours (|null), ot_minutes, ot_voucher_hours, ot_voucher_amount,
      *   incentive, penalty, fine, advance, loan_planned,
@@ -121,6 +125,12 @@ final class PayrollEngine
         if ($daily) {
             $paid = $work; // daily wages: paid for present days only
             $workPay = $this->round($rate * $work);
+        } elseif (in_array($g('basis', 'calendar'), ['fixed30', 'fixed26'], true) && isset($in['unpaid_days'])) {
+            // Fixed 30 / 26-day month: a full month earns the full basic whatever its calendar length;
+            // only unpaid days (absent, leave without pay, unmarked, unworked part of half days, not
+            // employed) are deducted, each worth Basic / Days.
+            $paid = round(max(0.0, $days - (float)$in['unpaid_days']), 2);
+            $workPay = $this->round($basic / $days * $paid);
         } else {
             $paid = round($work + (float)$g('rest_days') + (float)$g('paid_leave'), 2);
             if ($paid > $days) {
@@ -174,7 +184,7 @@ final class PayrollEngine
         }
         $net = $beforeLoan - $loan;
         if ($net < 0) {
-            $warnings[] = 'Net salary is negative';
+            $warnings[] = 'Net salary is negative: ' . number_format(-$net) . ' stays owed (booked to Employee Advances on posting) — recover it with an advance voucher next month';
         }
         if ($paid <= 0 && $gross <= 0) {
             $warnings[] = 'No paid days in this period';

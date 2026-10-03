@@ -69,7 +69,8 @@ abstract class Report
     /** CSS string literal (for @page content). */
     protected static function cssString(string $s): string
     {
-        return '"' . str_replace(['\\', '"', "\n"], ['\\\\', '\\"', ' '], $s) . '"';
+        // < and > are CSS-escaped so a value can never close the <style> element
+        return '"' . str_replace(['\\', '"', "\n", '<', '>'], ['\\\\', '\\"', ' ', '\\3C ', '\\3E '], $s) . '"';
     }
 
     protected function companyHeader(): string
@@ -98,6 +99,7 @@ abstract class Report
             : '';
         $title = self::e($this->title());
         $pageContent = self::cssString($printed);
+        $printedHtml = self::e($printed);
         $extraCss = $this->pageCss();
         $header = $this->showHeader() ? $this->companyHeader() : '';
 
@@ -131,7 +133,7 @@ abstract class Report
 <main class="rpt">
 {$header}
 {$body}
-<div class="rpt-printed screen-only">{$printed}</div>
+<div class="rpt-printed screen-only">{$printedHtml}</div>
 </main>
 <script>
 document.addEventListener('keydown', function (e) {

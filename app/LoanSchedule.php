@@ -18,10 +18,13 @@ final class LoanSchedule
 {
     /**
      * @param array<string,array{status:string,amount:float}> $fixed keyed by 'Y-m-01'
+     * @param string|null $openFrom first month that can still be deducted (salary of earlier months is
+     *                              already posted): nothing new is scheduled before it
      * @return list<array{month:string,amount:float,status:string}>
      */
-    public static function build(float $amount, float $installment, string $startMonth, array $fixed = []): array
+    public static function build(float $amount, float $installment, string $startMonth, array $fixed = [], ?string $openFrom = null): array
     {
+        $openFrom = $openFrom !== null ? self::month($openFrom) : null;
         if ($amount <= 0 || $installment <= 0) {
             throw new \InvalidArgumentException('Amount and installment must be positive.');
         }
@@ -41,7 +44,7 @@ final class LoanSchedule
         while (($remaining > 0.001 || $month <= $lastFixed) && $guard++ < 600) {
             if (isset($fixed[$month])) {
                 $out[] = ['month' => $month, 'amount' => (float)$fixed[$month]['amount'], 'status' => $fixed[$month]['status']];
-            } elseif ($remaining > 0.001) {
+            } elseif ($remaining > 0.001 && ($openFrom === null || $month >= $openFrom)) {
                 $amt = min($installment, $remaining);
                 $remaining = round($remaining - $amt, 2);
                 $out[] = ['month' => $month, 'amount' => $amt, 'status' => 'scheduled'];

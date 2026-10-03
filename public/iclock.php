@@ -21,6 +21,7 @@ use App\AttendanceEngine;
 use App\Database;
 use App\Http;
 use App\PunchStore;
+use App\Request;
 
 Http::noStore();
 header('Content-Type: text/plain; charset=utf-8');
@@ -53,7 +54,14 @@ try {
         Database::insert('devices', ['serial_no' => $sn, 'name' => 'New device ' . $sn, 'location' => 'Auto-registered, activate to accept punches', 'is_active' => 0]);
         $device = Database::one('SELECT * FROM devices WHERE serial_no = ?', [$sn]);
     }
-    Database::update('devices', ['last_seen_at' => date('Y-m-d H:i:s')], 'id = :id', ['id' => $device['id']]);
+    $ip = Request::ip();
+    // Optional IP allowlist per device (comma / space separated). The serial number alone is not a secret.
+    $allowed = preg_split('/[\s,;]+/', trim((string)($device['allowed_ips'] ?? '')), -1, PREG_SPLIT_NO_EMPTY);
+    if ($allowed && !in_array($ip, $allowed, true)) {
+        error_log("[iclock] SN $sn refused from $ip (not in allowed IPs)");
+        iclock_reply('ERROR: address not allowed', 403);
+    }
+    Database::update('devices', ['last_seen_at' => date('Y-m-d H:i:s'), 'last_ip' => $ip], 'id = :id', ['id' => $device['id']]);
     $active = (int)$device['is_active'] === 1;
 
     if ($endpoint === 'getrequest' || $endpoint === 'devicecmd') {
@@ -105,8 +113,8 @@ try {
                 continue;
             }
             $ts = PunchStore::parseDateTime($f[1]);
-            if ($ts === null) {
-                continue;
+            if ($ts === null || $ts > time() + 3600) {
+                continue; // unreadable, or in the future (wrong device clock / forged): never stored
             }
             $machine = (int)trim($f[0]);
             $inserted = $store->add([

@@ -60,7 +60,7 @@ final class OvertimeController
             'approved_minutes' => 'required|int|min:1|max:960', 'remarks' => 'nullable|string|max:255',
         ], ['approved_minutes' => 'OT minutes', 'ot_date' => 'Date']);
         $emp = Database::one('SELECT * FROM employees WHERE id = ?', [$d['employee_id']]);
-        PayrollLock::assertOpen($emp['emp_type'], $d['ot_date'], 'Overtime');
+        PayrollLock::assertOpen($emp['emp_type'], $d['ot_date'], 'Overtime', (int)$emp['id']);
         $att = Database::one('SELECT * FROM attendance_daily WHERE employee_id = ? AND att_date = ?', [$d['employee_id'], $d['ot_date']]);
         if (!$att || !in_array($att['status'], ['P', 'S', 'HD', 'R', 'H'], true)) {
             throw ApiException::validation(['ot_date' => 'Overtime can only be entered for a day the employee was present.']);
@@ -98,7 +98,7 @@ final class OvertimeController
                 if ($o['salary_sheet_id']) {
                     throw ApiException::conflict("Overtime of {$o['code']} on {$o['ot_date']} is already paid in a salary sheet.");
                 }
-                PayrollLock::assertOpen($o['emp_type'], $o['ot_date'], 'Overtime');
+                PayrollLock::assertOpen($o['emp_type'], $o['ot_date'], 'Overtime', (int)$o['employee_id']);
                 if ($d['status'] === 'approved' && $d['approved_minutes'] === 0) {
                     throw ApiException::validation(['items' => "Row " . ($i + 1) . ": approved minutes must be more than 0 (or reject)."]);
                 }
@@ -132,7 +132,7 @@ final class OvertimeController
         if ((int)$o['computed_minutes'] > 0) {
             throw ApiException::conflict('Overtime computed from attendance cannot be deleted; reject it instead.');
         }
-        PayrollLock::assertOpen($o['emp_type'], $o['ot_date'], 'Overtime');
+        PayrollLock::assertOpen($o['emp_type'], $o['ot_date'], 'Overtime', (int)$o['employee_id']);
         Database::run('DELETE FROM overtime WHERE id = ?', [$o['id']]);
         Audit::log('delete', 'overtime', (int)$o['id'], $o, null);
         return ['deleted' => true];

@@ -286,7 +286,7 @@ All have Print/PDF and Excel/CSV. **Advance Salary**, **Incentive**, **Penalty**
 | Days in month | Days in the selected period (`salary_day_basis` = `calendar`; `fixed30` / `fixed26` also supported) |
 | Work days | P / S = 1; **HD = worked minutes ÷ shift net minutes** (max 1, actual hours, no fixed ½) |
 | Rest days | R + paid holidays (H) |
-| Paid days (permanent) | Work + Rest + Paid leave (L), capped at days in month |
+| Paid days (permanent) | Calendar basis: Work + Rest + Paid leave (L), capped at days in month. Fixed 30 / 26 basis: Days − unpaid days (absent, leave without pay, unmarked, the unworked part of half days, days not employed), so a full month always earns the full basic |
 | Work Pay | `round(Basic ÷ Days × Paid days)`; Allowance pay = `round(Allowances ÷ Days × Paid days)` |
 | Daily wages | Pay = `round(Daily rate × Work days)`; rest days and leave are not paid; allowances prorate on work days |
 | OT rate | Employee's fixed OT rate, else `Basic ÷ Days ÷ Shift hours × OT multiplier` (daily: `Rate ÷ Shift hours × multiplier`) |
@@ -303,7 +303,7 @@ Every verified example from the specification is a unit test: 4,500 · 3,929 · 
 - The salary rate is the salary-info record effective on the **last day** of the period. A mid-period increment is not split.
 - **Unmarked days** (employed, no attendance row) are unpaid and flagged. Post attendance before running payroll.
 - A **half day without times** pays 0 hours and is flagged (enter the times in attendance).
-- If the salary can't cover the loan installment, the installment is reduced and the balance carried forward. Advances, penalties and statutory amounts are never reduced, so a **negative net** is shown and highlighted for review instead.
+- If the salary can't cover the loan installment, the installment is reduced and the balance carried forward. Advances, penalties and statutory amounts are never reduced, so a **negative net** is shown and highlighted. On posting, the shortfall is debited back to Employee Advances (it is not netted against other employees' payable). Recover it with an advance voucher next month.
 - Income tax is annualised from the month's salary, with no year-to-date reconciliation. The JV books only the **employee share** of EOBI / PESSI (the employer share is a separate challan entry).
 - **Fine** is entered on the salary sheet. **Penalty** comes from posted penalty vouchers.
 - Posted salary sheets can't be unposted (per the "posted months are locked" rule).
@@ -428,6 +428,36 @@ Migration `010_payroll_lines.sql` makes day counts fractional, adds allowance, h
 6. **System Health:** locally, *Debug* shows ✕ when `debug` is true. **Download database backup** produces `payroll-backup-….sql.gz`; importing it into an empty database gives the same data.
 7. View the page source of the app: the response has a `Content-Security-Policy` header with a nonce. The browser console shows no CSP errors on the dashboard, employee photo cropper, reports, kiosk and TV.
 8. Follow DEPLOY.md on a Hostinger test subdomain: `/app/`, `/migrations/` and `/config.php` return 403; `migrate.php?key=` works until the key is cleared.
+
+## Final review fixes (after batch 5)
+
+An independent security review and a payroll-correctness review of the whole system found the issues below. All are fixed and re-tested through the API on a fresh database.
+
+**Security**
+- **Privilege escalation through users and roles.** A non-admin with user or role rights can no longer:
+  - assign the Admin role, or edit, reset or delete an admin user;
+  - edit their own role, or grant permissions they don't hold themselves (`Auth::assertCanGrantRole`, `Auth::holdsAll`).
+- **"Save & Post" now needs the post permission** (vouchers, loans, journal). Without it, the request is refused and nothing is saved.
+- **Attendance voucher.** Overwriting an existing day needs `attendance.edit`; removing rows needs `attendance.delete`.
+- **ZKTeco push.**
+  - Optional **Allowed internet IP(s)** per device, plus a *Last IP* column on the device list (the serial number alone is not a secret).
+  - Punches dated more than 1 hour in the future are dropped.
+- **Login throttling** is per user + IP, per IP across all usernames (password spraying) and per username across all IPs. The attempt is recorded before checking, which closes the race on parallel requests.
+- **Sessions end when a password changes** (own change or admin reset): `users.session_version`, migration 011.
+- **Backup download and System Health are admin-only.** The dump contains password hashes and every salary.
+- **The printed-by name** on reports is HTML-escaped, and CSS-escaped inside the `@page` rule.
+
+**Payroll**
+- **Employee type change.** The lock now applies **per employee** too: dates and salary months on a posted sheet where the employee has a line stay locked, whatever the current type. A new sheet skips days already paid on another posted sheet (warning shown), so nothing is paid twice.
+- **Salary-month locks** (vouchers, loan installments) compare the posted sheet's **salary month** (`PayrollLock::isMonthLocked`), so a short first period (e.g. 10th–30th) also locks its month's vouchers.
+- **Vouchers for employees not on the sheet** (joined after the period, left, inactive) block posting, with a list to correct. Due loan installments of such employees are marked *skipped* and their balance moves to later months.
+- **Loan reschedule never puts a balance into a month whose salary is already posted.**
+- **Fixed 30 / 26-day basis** now deducts only unpaid days from the fixed divisor (see the table above). Before, a full February paid 28/30 and absences could be hidden by the cap.
+- **A negative net** is debited to Employee Advances instead of reducing other employees' payable. The JV still balances.
+- **OT vouchers** of employees without OT are no longer consumed (they stay open for correction, like approved OT rows).
+- **Posting consumes vouchers and OT with guarded updates** (`salary_sheet_id IS NULL`, still posted / approved). A concurrent change makes posting stop instead of silently using stale data.
+
+Tests: `php tests/run.php` → 49 passed (adds the fixed-basis cases).
 
 ## Notes and open questions
 

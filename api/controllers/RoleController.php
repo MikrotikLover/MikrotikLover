@@ -65,6 +65,9 @@ final class RoleController
         if ($dup) {
             throw ApiException::validation(['name' => 'A role with this name already exists.']);
         }
+        if ($old && !Auth::isAdmin()) {
+            Auth::assertCanGrantRole((int)$old['id']); // not the admin role, not your own role
+        }
         $perms = [];
         foreach ((array)$r->input('permissions', []) as $module => $actions) {
             foreach ((array)$actions as $action) {
@@ -72,6 +75,9 @@ final class RoleController
                     $perms[$module][] = $action;
                 }
             }
+        }
+        if (!Auth::holdsAll($perms)) {
+            throw ApiException::forbidden('You can only grant permissions you have yourself.');
         }
         $id = Database::transaction(function () use ($data, $old, $perms) {
             if ($old) {
@@ -102,6 +108,7 @@ final class RoleController
         if ((int)$role['is_admin']) {
             throw ApiException::conflict('The Admin role cannot be deleted.');
         }
+        Auth::assertCanGrantRole((int)$role['id']);
         if ((int)Database::value('SELECT COUNT(*) FROM users WHERE role_id = ?', [$role['id']]) > 0) {
             throw ApiException::conflict('Users are assigned to this role. Move them to another role first.');
         }

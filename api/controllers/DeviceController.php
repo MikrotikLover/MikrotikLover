@@ -12,6 +12,7 @@ final class DeviceController extends CrudController
         'serial_no' => 'required|string|max:50',
         'name'      => 'required|string|max:60',
         'location'  => 'nullable|string|max:100',
+        'allowed_ips' => 'nullable|string|max:255',
         'is_active' => 'bool',
     ];
     protected array $unique = ['serial_no' => 'Serial number'];
