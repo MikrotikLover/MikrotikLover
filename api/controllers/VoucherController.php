@@ -106,6 +106,9 @@ class VoucherController
     protected function save(Request $r, ?array $old): array
     {
         $type = $this->type($r);
+        if ($type === 'OT' && !Auth::isAdmin()) {
+            throw ApiException::forbidden('Overtime vouchers (manual overtime) are entered by an administrator only.');
+        }
         if ($r->input('post') && !Auth::can(Vouchers::TYPES[$type]['module'], 'post')) {
             throw ApiException::forbidden('You may save this voucher as a draft but not post it.');
         }
@@ -122,6 +125,7 @@ class VoucherController
         $rules['amount'] = $type === 'OT' ? 'required|int|min:0|max:99999999' : 'required|int|min:1|max:99999999';
         if ($type === 'OT') {
             $rules['ot_hours'] = 'required|num|min:0|max:744';
+            $rules['remarks'] = 'required|string|max:255'; // reason for the manual overtime
         }
         if ($type === 'ADV') {
             $rules['pay_account_id'] = 'nullable|int|exists:accounts';

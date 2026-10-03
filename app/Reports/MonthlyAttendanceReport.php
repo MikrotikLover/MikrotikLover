@@ -7,13 +7,14 @@ use App\Calendar;
 use App\Database;
 
 /**
- * Monthly Attendance Sheet: employees grouped by department x days 1..31 (weekday headers),
- * status codes per day and totals per employee; department daily "present" row.
+ * Monthly Attendance Sheet: employees grouped by department (rotated department label) x days 1..31
+ * (headers "01 - Wednesday"), status codes per day (P, A, LWP, LWOP, R, H, HD) and totals per employee;
+ * department daily "present" row.
  */
 final class MonthlyAttendanceReport extends Report
 {
     private ?array $data = null;
-    private const TOTALS = ['P' => 'P', 'HD' => 'HD', 'A' => 'A', 'L' => 'L', 'LW' => 'LW', 'R' => 'R', 'H' => 'H'];
+    private const TOTALS = ['P' => 'P', 'A' => 'A', 'L' => 'LWP', 'LW' => 'LWOP', 'R' => 'R', 'H' => 'H', 'HD' => 'HD'];
 
     public function permission(): array
     {
@@ -46,7 +47,11 @@ final class MonthlyAttendanceReport extends Report
             table.mas td.wk { background: #ededed; }
             table.mas td.A { font-weight: 700; }
             table.mas td.tot { font-weight: 700; background: #f5f5f5; }
-            .legend { font-size: 7pt; margin-top: 4px; }';
+            .legend { font-size: 7pt; margin-top: 4px; }
+            table.mas th.dh { height: 24mm; vertical-align: bottom; padding: 1px 0; }
+            table.mas th.dh span { writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; font-size: 6.4pt; }
+            table.mas td.dept { writing-mode: vertical-rl; transform: rotate(180deg); font-weight: 700; font-size: 7.5pt; background: #f0f0f0; white-space: nowrap; }
+            table.mas td.lv { font-size: 5.2pt; letter-spacing: -.2px; }';
     }
 
     private function month(): string
@@ -148,21 +153,22 @@ final class MonthlyAttendanceReport extends Report
         $days = $d['days'];
         $month = substr($d['from'], 0, 7);
         $wk = [];
-        $head = '<tr><th>Sr</th><th>Employee</th>';
+        $head = '<tr><th>Dept</th><th>Sr</th><th>Employee</th>';
         for ($i = 1; $i <= $days; $i++) {
             $ts = strtotime(sprintf('%s-%02d', $month, $i));
             $isRest = in_array((int)date('w', $ts), $d['rest'], true) || $d['cal']->holiday(date('Y-m-d', $ts));
             $wk[$i] = $isRest;
-            $head .= '<th' . ($isRest ? ' class="wk"' : '') . '>' . $i . '<br>' . substr(date('D', $ts), 0, 2) . '</th>';
+            $head .= '<th class="dh' . ($isRest ? ' wk' : '') . '"><span>' . sprintf('%02d', $i) . ' - ' . date('l', $ts) . '</span></th>';
         }
         foreach (self::TOTALS as $label) {
             $head .= '<th>' . $label . '</th>';
         }
         $head .= '<th>OT hrs</th></tr>';
-        $cols = 2 + $days + count(self::TOTALS) + 1;
+        $cols = 3 + $days + count(self::TOTALS) + 1;
+        $perDept = array_count_values(array_column($d['emps'], 'department'));
 
         // Explicit column widths so 31 days + totals fit A4 landscape (285 mm usable).
-        $colgroup = '<colgroup><col style="width:5mm"><col style="width:40mm">' . str_repeat('<col style="width:5.6mm">', $days)
+        $colgroup = '<colgroup><col style="width:5mm"><col style="width:5mm"><col style="width:33mm">' . str_repeat('<col style="width:5.6mm">', $days)
             . str_repeat('<col style="width:6mm">', count(self::TOTALS)) . '<col style="width:10mm"></colgroup>';
         $h = '<table class="rpt-table mas">' . $colgroup . '<thead>' . $head . '</thead><tbody>';
         $dept = null;
@@ -172,7 +178,7 @@ final class MonthlyAttendanceReport extends Report
             if ($dept === null) {
                 return;
             }
-            $h .= '<tr class="subtotal"><td></td><td class="nm">Present in ' . self::e($dept) . '</td>';
+            $h .= '<tr class="subtotal"><td></td><td class="nm">Present</td>';
             for ($i = 1; $i <= $days; $i++) {
                 $h .= '<td' . ($wk[$i] ? ' class="wk"' : '') . '>' . ($deptPresent[$i] ?? 0) . '</td>';
             }
@@ -183,19 +189,20 @@ final class MonthlyAttendanceReport extends Report
                 $flush();
                 $dept = $e['department'];
                 $deptPresent = [];
-                $h .= '<tr class="group"><td colspan="' . $cols . '" style="text-align:left">' . self::e($dept) . '</td></tr>';
+                $deptCell = '<td class="dept" rowspan="' . ($perDept[$dept] + 1) . '">' . self::e($dept) . '</td>';
             }
             $sr++;
-            $h .= '<tr><td>' . $sr . '</td><td class="nm">' . self::e($e['code']) . ' ' . self::e($e['name'])
+            $h .= '<tr>' . ($deptCell ?? '') . '<td>' . $sr . '</td><td class="nm">' . self::e($e['code']) . ' ' . self::e($e['name'])
                 . '<br><small>' . self::e($e['designation']) . '</small></td>';
             for ($i = 1; $i <= $days; $i++) {
                 $c = $this->cell($e, $i, $d);
                 if (in_array($c, ['P', 'S', 'HD'], true)) {
                     $deptPresent[$i] = ($deptPresent[$i] ?? 0) + 1;
                 }
-                $cls = trim(($wk[$i] ? 'wk ' : '') . ($c === 'A' ? 'A' : ''));
-                $h .= '<td' . ($cls ? ' class="' . $cls . '"' : '') . '>' . self::e($c) . '</td>';
+                $cls = trim(($wk[$i] ? 'wk ' : '') . ($c === 'A' ? 'A' : '') . (in_array($c, ['L', 'LW'], true) ? ' lv' : ''));
+                $h .= '<td' . ($cls ? ' class="' . $cls . '"' : '') . '>' . self::e(self::statusCode($c)) . '</td>';
             }
+            $deptCell = null;
             $t = $this->totals($e, $d);
             foreach (array_keys(self::TOTALS) as $k) {
                 $h .= '<td class="tot">' . ($t[$k] ?: '') . '</td>';
@@ -206,7 +213,7 @@ final class MonthlyAttendanceReport extends Report
         $h .= '</tbody></table>';
         $legend = [];
         foreach (self::STATUS_NAMES as $k => $v) {
-            $legend[] = "<b>$k</b> = $v";
+            $legend[] = '<b>' . self::statusCode($k) . "</b> = $v";
         }
         return $h . '<div class="legend">' . implode(' &nbsp; ', $legend) . ' &nbsp; <b>-</b> = not employed &nbsp; blank = not marked'
             . ' &nbsp;|&nbsp; P total includes S (joined) &nbsp;|&nbsp; OT = approved overtime</div>';
@@ -223,7 +230,7 @@ final class MonthlyAttendanceReport extends Report
         foreach ($d['emps'] as $e) {
             $row = [$e['department'], $e['code'], $e['name'], $e['designation']];
             for ($i = 1; $i <= $d['days']; $i++) {
-                $row[] = $this->cell($e, $i, $d);
+                $row[] = self::statusCode($this->cell($e, $i, $d));
             }
             $t = $this->totals($e, $d);
             foreach (array_keys(self::TOTALS) as $k) {

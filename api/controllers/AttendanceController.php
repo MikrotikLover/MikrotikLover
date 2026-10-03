@@ -7,6 +7,7 @@ use App\ApiException;
 use App\AttendanceEngine;
 use App\Audit;
 use App\Database;
+use App\DayLock;
 use App\LiveAttendance;
 use App\PayrollLock;
 use App\PunchStore;
@@ -36,6 +37,35 @@ final class AttendanceController
         Audit::log('post', 'attendance_daily', null, null, $d + ['summary' => $sum]);
         $sum['unprocessed_punches'] = (int)Database::value('SELECT COUNT(*) FROM attendance_punches WHERE is_processed = 0 AND employee_id IS NOT NULL AND punch_time < ?', [$d['from'] . ' 00:00:00']);
         return $sum;
+    }
+
+    /** Posted (locked) attendance dates in a range: ?from=&to= */
+    public function dayPosts(Request $r): array
+    {
+        $from = (string)$r->query('from', date('Y-m-01'));
+        $to = (string)$r->query('to', date('Y-m-d'));
+        foreach ([$from, $to] as $d) {
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) || !strtotime($d)) {
+                throw ApiException::validation(['from' => 'Enter valid dates.']);
+            }
+        }
+        return DayLock::list($from, $to);
+    }
+
+    /** Admin: post (lock) verified dates {from, to, remarks?}. */
+    public function postDays(Request $r): array
+    {
+        $d = Validator::make($r->body(), ['from' => 'required|date', 'to' => 'required|date|after_or_equal:from', 'remarks' => 'nullable|string|max:255'],
+            ['from' => 'From date', 'to' => 'To date']);
+        return DayLock::post($d['from'], $d['to'], $d['remarks'] ?? null);
+    }
+
+    /** Admin: unpost one date {date, reason} (reason required, audit-logged). */
+    public function unpostDay(Request $r): array
+    {
+        $d = Validator::make($r->body(), ['date' => 'required|date', 'reason' => 'required|string|max:255'], ['reason' => 'Reason']);
+        DayLock::unpost($d['date'], $d['reason']);
+        return ['unposted' => $d['date']];
     }
 
     /** Status of raw punches: pending (unprocessed) dates and unmapped machine IDs. */
@@ -119,6 +149,7 @@ final class AttendanceController
             throw ApiException::notFound('Attendance row');
         }
         PayrollLock::assertOpen($a['emp_type'], $a['att_date'], 'Attendance', (int)$a['employee_id']);
+        DayLock::assertOpen($a['att_date']);
         Database::transaction(function () use ($a) {
             Database::run('DELETE FROM overtime WHERE employee_id = ? AND ot_date = ? AND salary_sheet_id IS NULL', [$a['employee_id'], $a['att_date']]);
             Database::run('DELETE FROM attendance_daily WHERE id = ?', [$a['id']]);

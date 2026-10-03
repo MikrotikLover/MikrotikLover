@@ -24,6 +24,8 @@ final class Settings
         'ot_multiplier'        => 'required|num|min:1|max:5',
         'default_shift_hours'  => 'required|num|min:1|max:24',
         'max_daily_hours'      => 'required|int|min:1|max:24',
+        'late_grace_minutes'   => 'required|int|min:0|max:240',
+        'scan_repeat_seconds'  => 'required|int|min:10|max:3600',
         'id_card_valid_months' => 'required|int|min:1|max:120',
         'id_card_back_note'    => 'nullable|string|max:255',
     ];

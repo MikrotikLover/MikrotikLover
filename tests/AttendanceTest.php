@@ -67,11 +67,13 @@ return [
         assert_eq(0, $r['work_minutes']);
         assert_eq('Missing time out', $r['flag_reason']);
     },
-    'manual times: out before in only allowed for overnight shift' => function () {
+    'manual times: out before in crosses midnight; equal times and out without in rejected' => function () {
         [$in, $out] = AttendanceEngine::manualTimes('2026-09-01', '20:00:00', '08:00:00', SHIFT_N);
         assert_eq('2026-09-02 08:00', date('Y-m-d H:i', $out));
         assert_eq('2026-09-01 20:00', date('Y-m-d H:i', $in));
-        assert_throws(fn() => AttendanceEngine::manualTimes('2026-09-01', '17:00:00', '09:00:00', SHIFT_G), ApiException::class);
+        // spec 2.4: time out earlier than time in = crossing midnight, whatever the shift
+        [$in, $out] = AttendanceEngine::manualTimes('2026-09-01', '17:00:00', '09:00:00', SHIFT_G);
+        assert_eq('2026-09-02 09:00', date('Y-m-d H:i', $out));
         assert_throws(fn() => AttendanceEngine::manualTimes('2026-09-01', '09:00:00', '09:00:00', SHIFT_G), ApiException::class);
         assert_throws(fn() => AttendanceEngine::manualTimes('2026-09-01', null, '09:00:00', SHIFT_G), ApiException::class);
     },

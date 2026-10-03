@@ -57,8 +57,8 @@ final class OvertimeController
     {
         $d = Validator::make($r->body(), [
             'employee_id' => 'required|int|exists:employees', 'ot_date' => 'required|date',
-            'approved_minutes' => 'required|int|min:1|max:960', 'remarks' => 'nullable|string|max:255',
-        ], ['approved_minutes' => 'OT minutes', 'ot_date' => 'Date']);
+            'approved_minutes' => 'required|int|min:1|max:960', 'remarks' => 'required|string|max:255',
+        ], ['approved_minutes' => 'OT minutes', 'ot_date' => 'Date', 'remarks' => 'Reason']);
         $emp = Database::one('SELECT * FROM employees WHERE id = ?', [$d['employee_id']]);
         PayrollLock::assertOpen($emp['emp_type'], $d['ot_date'], 'Overtime', (int)$emp['id']);
         $att = Database::one('SELECT * FROM attendance_daily WHERE employee_id = ? AND att_date = ?', [$d['employee_id'], $d['ot_date']]);
@@ -70,7 +70,8 @@ final class OvertimeController
         }
         $id = Database::insert('overtime', [
             'employee_id' => $d['employee_id'], 'ot_date' => $d['ot_date'], 'attendance_id' => $att['id'],
-            'computed_minutes' => 0, 'approved_minutes' => $d['approved_minutes'], 'status' => 'pending',
+            // manual entry: the minutes entered are the ceiling for approval (approval may only lower them)
+            'computed_minutes' => $d['approved_minutes'], 'is_manual' => 1, 'approved_minutes' => $d['approved_minutes'], 'status' => 'pending',
             'remarks' => $d['remarks'], 'created_by' => Auth::id(),
         ]);
         Audit::log('create', 'overtime', $id, null, $d);
@@ -102,6 +103,12 @@ final class OvertimeController
                 if ($d['status'] === 'approved' && $d['approved_minutes'] === 0) {
                     throw ApiException::validation(['items' => "Row " . ($i + 1) . ": approved minutes must be more than 0 (or reject)."]);
                 }
+                // approved hours can only be edited down: never above the computed (or manually entered) overtime
+                $ceiling = (int)$o['computed_minutes'];
+                if ($d['status'] !== 'rejected' && $d['approved_minutes'] > $ceiling) {
+                    throw ApiException::validation(['items' => "Row " . ($i + 1) . " ({$o['code']} {$o['ot_date']}): approved time cannot exceed the "
+                        . sprintf('%d:%02d', intdiv($ceiling, 60), $ceiling % 60) . ' h worked beyond the shift.']);
+                }
                 $upd = [
                     'status' => $d['status'],
                     'approved_minutes' => $d['status'] === 'rejected' ? 0 : $d['approved_minutes'],
@@ -129,7 +136,7 @@ final class OvertimeController
         if ($o['salary_sheet_id']) {
             throw ApiException::conflict('This overtime is already paid in a salary sheet.');
         }
-        if ((int)$o['computed_minutes'] > 0) {
+        if (!(int)$o['is_manual']) {
             throw ApiException::conflict('Overtime computed from attendance cannot be deleted; reject it instead.');
         }
         PayrollLock::assertOpen($o['emp_type'], $o['ot_date'], 'Overtime', (int)$o['employee_id']);

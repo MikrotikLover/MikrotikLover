@@ -26,6 +26,7 @@ final class Payroll
     public const TYPES = ['permanent' => 'Permanent', 'daily_wages' => 'Daily Wages'];
     /** Numeric line columns compared before posting (data must not have changed since saving). */
     private const CHECK = ['paid_days', 'work_pay', 'allowance_pay', 'ot_amount', 'gross', 'advance', 'loan_deduction', 'incentive', 'penalty',
+        'advance_carried', 'penalty_carried', 'fine_carried',
         'fine', 'eobi', 'pessi', 'income_tax', 'net_salary'];
 
     public static function month(string $to): string
@@ -132,7 +133,7 @@ final class Payroll
         foreach (Database::all(
             "SELECT id, employee_id, voucher_type, vr_date, amount, ot_hours FROM vouchers
               WHERE employee_id IN ($in) AND voucher_type IN ('ADV','INC','PEN','OT') AND status = 'posted' AND deleted_at IS NULL
-                AND deduct_month = ? AND (salary_sheet_id IS NULL OR salary_sheet_id = ?)",
+                AND deduct_month " . ($type === 'daily_wages' ? '<=' : '=') . " ? AND (salary_sheet_id IS NULL OR salary_sheet_id = ?)",
             [$month, $sid]
         ) as $v) {
             $vch[(int)$v['employee_id']][] = $v;
@@ -145,7 +146,7 @@ final class Payroll
                FROM loan_installments li
                JOIN loans l ON l.id = li.loan_id
                JOIN vouchers v ON v.id = l.voucher_id
-              WHERE l.employee_id IN ($in) AND li.due_month = ? AND li.status IN ('scheduled','adjusted')
+              WHERE l.employee_id IN ($in) AND li.due_month " . ($type === 'daily_wages' ? '<=' : '=') . " ? AND li.status IN ('scheduled','adjusted')
                 AND l.status = 'active' AND v.status = 'posted' AND v.deleted_at IS NULL
               ORDER BY l.id",
             [$month]
@@ -325,8 +326,10 @@ final class Payroll
 
             // mid-period increment: which salary paid which days (shown as a marker / tooltip on the sheet)
             $note = [];
-            if (count($segs) > 1) {
-                foreach ($segs as $i => $sg) {
+            // a boundary at the joining row (salary 0 before it) is not an increment
+            $paidSegs = array_filter($segs, fn($sg) => Money::toPaisa($sg['salary']) > 0);
+            if (count($paidSegs) > 1) {
+                foreach ($paidSegs as $i => $sg) {
                     $note[] = date('d-m', strtotime($sg['from'])) . ' to ' . date('d-m', strtotime($sg['to'])) . ' @ '
                         . number_format((float)$sg['salary']) . ($daily ? '/day' : '') . ' (' . $r['segment_paid_days'][$i] . ' paid d)';
                 }
@@ -355,7 +358,8 @@ final class Payroll
                 'holiday_days' => $c['holiday'], 'unmarked_days' => $c['unmarked'], 'work_days' => round($c['work'], 2),
                 'paid_days' => $r['paid_days'], 'work_pay' => $r['work_pay'], 'allowance_pay' => $r['allowance_pay'],
                 'ot_hours' => $r['ot_hours'], 'ot_rate' => $r['ot_rate'], 'ot_amount' => $r['ot_amount'], 'ot_voucher_amount' => $r['ot_voucher_amount'],
-                'gross' => $r['gross'], 'fine' => $r['fine'], 'advance' => $r['advance'], 'loan_deduction' => $r['loan_deduction'],
+                'gross' => $r['gross'], 'fine' => $r['fine'], 'fine_entered' => $r['fine_entered'], 'advance' => $r['advance'], 'loan_deduction' => $r['loan_deduction'],
+                'advance_carried' => $r['advance_carried'], 'penalty_carried' => $r['penalty_carried'], 'fine_carried' => $r['fine_carried'],
                 'loan_balance' => $balance, 'incentive' => $r['incentive'], 'penalty' => $r['penalty'], 'eobi' => $r['eobi'], 'pessi' => $r['pessi'],
                 'income_tax' => $r['income_tax'], 'net_salary' => $r['net_salary'],
                 'payment_mode' => $h['payment_mode'] ?? 'cash', 'bank_name' => $h['bank_name'] ?? null, 'bank_account' => $h['bank_account'] ?? null,
@@ -402,7 +406,8 @@ final class Payroll
         $cols = ['employee_id', 'department_id', 'designation_id', 'basic_salary', 'daily_rate', 'allowances', 'absent_days', 'leave_wp_days',
             'leave_wop_days', 'rest_days', 'holiday_days', 'unmarked_days', 'work_days', 'paid_days', 'work_pay', 'allowance_pay', 'ot_hours',
             'ot_rate', 'ot_amount', 'ot_voucher_amount', 'gross', 'fine', 'advance', 'loan_deduction', 'loan_balance', 'incentive', 'penalty',
-            'eobi', 'pessi', 'income_tax', 'net_salary', 'payment_mode', 'bank_name', 'bank_account', 'remarks', 'increment_note'];
+            'eobi', 'pessi', 'income_tax', 'net_salary', 'payment_mode', 'bank_name', 'bank_account', 'remarks', 'increment_note',
+            'fine_entered', 'advance_carried', 'penalty_carried', 'fine_carried'];
         $row = array_intersect_key($l, array_flip($cols));
         $row['warnings'] = $l['warnings'] ? mb_substr(implode('; ', $l['warnings']), 0, 500) : null;
         return $row + ['salary_sheet_id' => $sheetId];
@@ -414,9 +419,10 @@ final class Payroll
         self::validatePeriod($type, $from, $to);
         $month = self::month($to);
         return Database::transaction(function () use ($type, $from, $to, $manual, $paidDate, $remarks, $month) {
-            $sheet = Database::one('SELECT * FROM salary_sheets WHERE sheet_type = ? AND salary_month = ? FOR UPDATE', [$type, $month]);
+            $sheet = self::findSheet($type, $from, $to, true);
             if ($sheet && $sheet['status'] === 'posted') {
-                throw ApiException::conflict(self::TYPES[$type] . ' salary for ' . date('F Y', strtotime($month)) . ' is already posted and locked.');
+                throw ApiException::conflict(self::TYPES[$type] . ' salary ' . ($type === 'daily_wages'
+                    ? 'from ' . date('d-m-Y', strtotime($sheet['period_from'])) : 'for ' . date('F Y', strtotime($month))) . ' is already posted and locked.');
             }
             self::assertNoOverlap($type, $from, $to, $sheet ? (int)$sheet['id'] : null);
             $build = self::build($type, $from, $to, $sheet ? (int)$sheet['id'] : null, $manual);
@@ -441,6 +447,18 @@ final class Payroll
                 ['type' => $type, 'from' => $from, 'to' => $to, 'employees' => count($build['lines']), 'net' => $build['totals']['net_salary']]);
             return $id;
         });
+    }
+
+    /**
+     * The sheet a Show / Save of this period belongs to: permanent = one sheet per salary month;
+     * daily wages = one sheet per period start (weekly / fortnightly / monthly periods).
+     */
+    public static function findSheet(string $type, string $from, string $to, bool $lock = false): ?array
+    {
+        $sql = $type === 'daily_wages'
+            ? 'SELECT * FROM salary_sheets WHERE sheet_type = ? AND period_from = ?'
+            : 'SELECT * FROM salary_sheets WHERE sheet_type = ? AND salary_month = ?';
+        return Database::one($sql . ($lock ? ' FOR UPDATE' : ''), [$type, $type === 'daily_wages' ? $from : self::month($to)]);
     }
 
     private static function assertNoOverlap(string $type, string $from, string $to, ?int $except): void
@@ -475,7 +493,7 @@ final class Payroll
             }
             $manual = [];
             foreach ($saved as $eid => $l) {
-                $manual[$eid] = ['fine' => (float)$l['fine'], 'remarks' => $l['remarks']];
+                $manual[$eid] = ['fine' => (float)$l['fine_entered'], 'remarks' => $l['remarks']];
             }
             $build = self::build($sheet['sheet_type'], $sheet['period_from'], $sheet['period_to'], $id, $manual);
             $changed = [];
@@ -510,7 +528,10 @@ final class Payroll
             $orphans = Database::all(
                 "SELECT v.voucher_type, v.vr_no, e.code, e.name FROM vouchers v JOIN employees e ON e.id = v.employee_id
                   WHERE v.voucher_type IN ('ADV','INC','PEN','OT') AND v.status = 'posted' AND v.deleted_at IS NULL AND v.salary_sheet_id IS NULL
-                    AND v.deduct_month = ? AND e.emp_type IN ($tq)$notIn ORDER BY e.code",
+                    AND v.deduct_month " . ($sheet['sheet_type'] === 'daily_wages' ? '<=' : '=') . " ? AND e.emp_type IN ($tq)$notIn"
+                    // daily wages: only employees who will never be on a later sheet (left / inactive) block posting
+                    . ($sheet['sheet_type'] === 'daily_wages' ? " AND (e.status = 'inactive' OR (e.leaving_date IS NOT NULL AND e.leaving_date <= " . Database::pdo()->quote($sheet['period_to']) . '))' : '')
+                    . ' ORDER BY e.code',
                 [$sheet['salary_month']]
             );
             if ($orphans) {
@@ -549,6 +570,8 @@ final class Payroll
             }
             foreach ($allocs as $a) {
                 $deducted = (float)$a['deducted'];
+                // remembered so that an admin unpost can restore the installment exactly
+                Database::run('UPDATE loan_installments SET pre_post_status = status WHERE id = ?', [$a['loan_installment_id']]);
                 Database::update('loan_installments', [
                     'status' => $deducted > 0 ? 'deducted' : 'skipped',
                     'deducted_amount' => $deducted,
@@ -559,13 +582,15 @@ final class Payroll
                 $loans[(int)$a['loan_id']] = true;
             }
             // installments due this month for employees not on the sheet: skipped, balance moves to later months
-            foreach (Database::all(
+            // (daily-wages sheets can be weekly: an installment waits for the next sheet the employee is on)
+            foreach ($sheet['sheet_type'] === 'daily_wages' ? [] : Database::all(
                 "SELECT li.id, li.loan_id FROM loan_installments li JOIN loans l ON l.id = li.loan_id JOIN employees e ON e.id = l.employee_id
                    JOIN vouchers v ON v.id = l.voucher_id
                   WHERE li.due_month = ? AND li.status IN ('scheduled','adjusted') AND l.status = 'active' AND v.status = 'posted' AND v.deleted_at IS NULL
                     AND e.emp_type IN ($tq)" . ($onSheet ? ' AND l.employee_id NOT IN (' . implode(',', $onSheet) . ')' : ''),
                 [$sheet['salary_month']]
             ) as $o) {
+                Database::run('UPDATE loan_installments SET pre_post_status = status WHERE id = ?', [$o['id']]);
                 Database::update('loan_installments', ['status' => 'skipped', 'deducted_amount' => 0, 'salary_sheet_id' => $id,
                     'remarks' => 'Employee not on the salary sheet; balance carried forward', 'updated_by' => Auth::id()], 'id = :id', ['id' => $o['id']]);
                 $loans[(int)$o['loan_id']] = true;
@@ -573,6 +598,10 @@ final class Payroll
             foreach (array_keys($loans) as $loanId) {
                 Vouchers::reschedule($loanId); // re-spreads any shortfall, closes fully repaid loans
             }
+
+            // Net is never negative: advance / penalty / fine that the pay could not cover are carried to the next
+            // period as system vouchers (no journal: the advance is still receivable in Employee Advances).
+            $carried = self::carryForward($id, $sheet, $build['lines']);
 
             // salary JV
             $t = $build['totals'];
@@ -621,7 +650,102 @@ final class Payroll
                 'posted_by' => Auth::id(), 'posted_at' => date('Y-m-d H:i:s'), 'updated_by' => Auth::id()], 'id = :id', ['id' => $id]);
             PayrollLock::reset();
             Audit::log('post', 'salary_sheets', $id, ['status' => 'draft'], ['status' => 'posted', 'net' => $t['net_salary'], 'jv_id' => $jvId,
-                'vouchers' => count($build['used']['vouchers']), 'overtime_rows' => count($build['used']['overtime']), 'installments' => count($loans)]);
+                'vouchers' => count($build['used']['vouchers']), 'overtime_rows' => count($build['used']['overtime']), 'installments' => count($loans),
+                'carried_vouchers' => $carried]);
+        });
+    }
+
+    /** Create the carry-forward vouchers of a sheet being posted. Returns the voucher ids. */
+    private static function carryForward(int $sheetId, array $sheet, array $lines): array
+    {
+        $next = date('Y-m-d', strtotime($sheet['period_to'] . ' +1 day'));
+        $nextMonth = substr($next, 0, 7) . '-01';
+        $label = self::TYPES[$sheet['sheet_type']] . ' salary ' . date('d-m-Y', strtotime($sheet['period_from'])) . ' to ' . date('d-m-Y', strtotime($sheet['period_to']));
+        $ids = [];
+        foreach ($lines as $l) {
+            foreach (['advance_carried' => ['ADV', 'advance'], 'penalty_carried' => ['PEN', 'penalty'], 'fine_carried' => ['PEN', 'fine']] as $k => [$type, $what]) {
+                $amount = (float)($l[$k] ?? 0);
+                if ($amount <= 0) {
+                    continue;
+                }
+                if (PayrollLock::isMonthLocked($l['emp_type'], $nextMonth, (int)$l['employee_id']) && $l['emp_type'] !== 'daily_wages') {
+                    throw ApiException::conflict("{$l['code']}: the $what not deducted cannot be carried forward because "
+                        . date('F Y', strtotime($nextMonth)) . ' is already posted.');
+                }
+                $row = ['voucher_type' => $type, 'vr_no' => Vouchers::nextNo($type), 'vr_date' => $sheet['period_to'], 'employee_id' => (int)$l['employee_id'],
+                    'amount' => $amount, 'deduct_month' => $nextMonth, 'carried_from_sheet_id' => $sheetId,
+                    'remarks' => mb_substr("Carried forward: $what not deducted from $label (salary not sufficient)", 0, 255),
+                    'status' => 'posted', 'is_system' => 1, 'posted_by' => Auth::id(), 'posted_at' => date('Y-m-d H:i:s'), 'created_by' => Auth::id()];
+                $vid = Database::insert('vouchers', $row);
+                Audit::log('create', 'vouchers', $vid, null, $row);
+                $ids[] = $vid;
+            }
+        }
+        return $ids;
+    }
+
+    /**
+     * Admin unpost of a posted sheet (audit-logged). Allowed only for the latest posted sheet of its
+     * type and while no later posted sheet includes any of its employees, so nothing paid later depends
+     * on it. Reverses everything posting did: salary JV removed, vouchers / overtime / loan installments
+     * released (installments get their previous status back, loans are rescheduled), carry-forward
+     * vouchers deleted, the sheet becomes a draft again.
+     */
+    public static function unpost(int $id, string $reason): void
+    {
+        Database::transaction(function () use ($id, $reason) {
+            $sheet = Database::one('SELECT * FROM salary_sheets WHERE id = ? FOR UPDATE', [$id]) ?? throw ApiException::notFound('Salary sheet');
+            if ($sheet['status'] !== 'posted') {
+                throw ApiException::conflict('Only a posted salary sheet can be unposted.');
+            }
+            $later = Database::one(
+                "SELECT s.id, s.sheet_type, s.period_from, s.period_to FROM salary_sheets s
+                  WHERE s.status = 'posted' AND s.id <> ? AND s.period_from > ?
+                    AND (s.sheet_type = ? OR EXISTS (SELECT 1 FROM salary_sheet_lines a JOIN salary_sheet_lines b ON b.employee_id = a.employee_id
+                                                      WHERE a.salary_sheet_id = s.id AND b.salary_sheet_id = ?))
+                  ORDER BY s.period_from LIMIT 1",
+                [$id, $sheet['period_to'], $sheet['sheet_type'], $id]
+            );
+            if ($later) {
+                throw ApiException::conflict('A later salary sheet (' . self::TYPES[$later['sheet_type']] . ' ' . date('d-m-Y', strtotime($later['period_from']))
+                    . ' to ' . date('d-m-Y', strtotime($later['period_to'])) . ') is posted. Unpost that one first.');
+            }
+            $used = Database::value('SELECT COUNT(*) FROM vouchers WHERE carried_from_sheet_id = ? AND salary_sheet_id IS NOT NULL', [$id]);
+            if ($used) {
+                throw ApiException::conflict('A carried-forward voucher of this sheet is already used by another posted sheet. Unpost that one first.');
+            }
+            // salary JV
+            if ($sheet['jv_id']) {
+                $jv = Database::one('SELECT * FROM vouchers WHERE id = ?', [$sheet['jv_id']]);
+                Database::update('salary_sheets', ['jv_id' => null], 'id = :id', ['id' => $id]);
+                Database::run('DELETE FROM journal_entries WHERE voucher_id = ?', [$sheet['jv_id']]);
+                Database::run('DELETE FROM vouchers WHERE id = ?', [$sheet['jv_id']]);
+                Audit::log('delete', 'vouchers', (int)$sheet['jv_id'], $jv, null);
+            }
+            // carry-forward vouchers created by this sheet
+            foreach (Database::all('SELECT * FROM vouchers WHERE carried_from_sheet_id = ?', [$id]) as $v) {
+                Database::run('DELETE FROM vouchers WHERE id = ?', [$v['id']]);
+                Audit::log('delete', 'vouchers', (int)$v['id'], $v, null);
+            }
+            // consumed vouchers and overtime become open again
+            $vouchers = Database::run('UPDATE vouchers SET salary_sheet_id = NULL WHERE salary_sheet_id = ?', [$id])->rowCount();
+            $ot = Database::run('UPDATE overtime SET salary_sheet_id = NULL WHERE salary_sheet_id = ?', [$id])->rowCount();
+            // loan installments get their pre-posting state back, loans are rescheduled
+            $loans = Database::column('SELECT DISTINCT loan_id FROM loan_installments WHERE salary_sheet_id = ?', [$id]);
+            Database::run("UPDATE loan_installments SET status = COALESCE(pre_post_status, 'scheduled'), pre_post_status = NULL,
+                                  deducted_amount = 0, salary_sheet_id = NULL, remarks = NULL, updated_by = ?
+                            WHERE salary_sheet_id = ?", [Auth::id(), $id]);
+            foreach ($loans as $loanId) {
+                Database::run("UPDATE loans SET status = 'active' WHERE id = ?", [$loanId]);
+            }
+            Database::update('salary_sheets', ['status' => 'draft', 'posted_by' => null, 'posted_at' => null,
+                'unposted_by' => Auth::id(), 'unposted_at' => date('Y-m-d H:i:s'), 'updated_by' => Auth::id()], 'id = :id', ['id' => $id]);
+            PayrollLock::reset();
+            foreach ($loans as $loanId) {
+                Vouchers::reschedule((int)$loanId);
+            }
+            Audit::log('unpost', 'salary_sheets', $id, ['status' => 'posted', 'jv_id' => $sheet['jv_id'], 'posted_at' => $sheet['posted_at']],
+                ['status' => 'draft', 'reason' => $reason, 'vouchers_released' => $vouchers, 'overtime_released' => $ot, 'loans' => count($loans)]);
         });
     }
 }

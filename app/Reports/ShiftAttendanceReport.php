@@ -113,7 +113,7 @@ final class ShiftAttendanceReport extends Report
                 . '<td>' . self::e($r['code']) . '</td><td>' . self::e($r['name']) . '</td><td>' . self::e($r['department']) . '</td>'
                 . '<td>' . self::e($r['designation']) . '</td><td>' . self::time($r['time_in']) . '</td><td>' . self::time($r['time_out']) . '</td>'
                 . '<td class="num">' . self::hm($r['work_minutes']) . '</td><td class="num">' . self::hm($r['late_minutes']) . '</td>'
-                . '<td><b>' . self::e($r['status']) . '</b></td></tr>';
+                . '<td><b>' . self::e(self::statusCode($r['status'])) . '</b></td></tr>';
         }
         $flush();
         return $h . '</tbody><tfoot><tr class="grandtotal"><td colspan="' . $cols . '">Total: ' . $sr . ' record(s)</td></tr></tfoot></table>';

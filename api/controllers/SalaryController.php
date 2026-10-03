@@ -46,15 +46,15 @@ final class SalaryController
         $from = (string)$r->query('from', '');
         $to = (string)$r->query('to', '');
         Payroll::validatePeriod($type, $from, $to);
-        $sheet = Database::one('SELECT * FROM salary_sheets WHERE sheet_type = ? AND salary_month = ?', [$type, Payroll::month($to)]);
+        $sheet = Payroll::findSheet($type, $from, $to);
         if ($sheet && $sheet['status'] === 'posted') {
             // a posted month is shown as stored, never recomputed
             return $this->stored((int)$sheet['id']);
         }
         $manual = [];
         if ($sheet) {
-            foreach (Database::all('SELECT employee_id, fine, remarks FROM salary_sheet_lines WHERE salary_sheet_id = ?', [$sheet['id']]) as $l) {
-                $manual[(int)$l['employee_id']] = ['fine' => (float)$l['fine'], 'remarks' => $l['remarks']];
+            foreach (Database::all('SELECT employee_id, fine_entered, remarks FROM salary_sheet_lines WHERE salary_sheet_id = ?', [$sheet['id']]) as $l) {
+                $manual[(int)$l['employee_id']] = ['fine' => (float)$l['fine_entered'], 'remarks' => $l['remarks']];
             }
         }
         $b = Payroll::build($type, $from, $to, $sheet ? (int)$sheet['id'] : null, $manual);
@@ -129,6 +129,14 @@ final class SalaryController
     {
         $d = Validator::make($r->body(), ['paid_date' => 'nullable|date'], ['paid_date' => 'Paid Date']);
         Payroll::post($r->id(), $d['paid_date'] ?? null);
+        return $this->stored($r->id());
+    }
+
+    /** Admin: unpost a posted sheet {reason} (audit-logged). */
+    public function unpost(Request $r): array
+    {
+        $d = Validator::make($r->body(), ['reason' => 'required|string|max:255'], ['reason' => 'Reason']);
+        Payroll::unpost($r->id(), $d['reason']);
         return $this->stored($r->id());
     }
 

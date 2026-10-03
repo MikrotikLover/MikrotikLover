@@ -98,6 +98,9 @@ $routes = array_merge(
         ['POST',   '/attendance/vouchers',        [AttendanceVoucherController::class, 'save'],    'attendance.add'],
         ['DELETE', '/attendance/vouchers/{id}',   [AttendanceVoucherController::class, 'destroy'], 'attendance.delete'],
         ['POST',   '/attendance/post',            [AttendanceController::class, 'post'],           'attendance_post.post'],
+        ['GET',    '/attendance/day-posts',       [AttendanceController::class, 'dayPosts'],       'attendance.view'],
+        ['POST',   '/attendance/day-posts',       [AttendanceController::class, 'postDays'],       'admin'],
+        ['POST',   '/attendance/day-posts/unpost', [AttendanceController::class, 'unpostDay'],     'admin'],
         ['GET',    '/attendance/punch-status',    [AttendanceController::class, 'punchStatus'],    'attendance_post.view'],
         ['GET',    '/attendance/daily',           [AttendanceController::class, 'daily'],          'attendance.view'],
         ['PUT',    '/attendance/daily/{id}',      [AttendanceController::class, 'updateDaily'],    'attendance.edit'],
@@ -109,7 +112,7 @@ $routes = array_merge(
         ['POST',   '/attendance/screens/regenerate', [AttendanceController::class, 'regenerate'],  'devices.edit'],
 
         ['GET',    '/overtime',          [OvertimeController::class, 'index'],   'overtime.view'],
-        ['POST',   '/overtime',          [OvertimeController::class, 'store'],   'overtime.add'],
+        ['POST',   '/overtime',          [OvertimeController::class, 'store'],   'admin'],  // manual overtime: admin only, reason required
         ['POST',   '/overtime/decide',   [OvertimeController::class, 'decide'],  'overtime.post'],
         ['DELETE', '/overtime/{id}',     [OvertimeController::class, 'destroy'], 'overtime.delete'],
 
@@ -128,7 +131,7 @@ $routes = array_merge(
         ['GET',    '/loans/{id}',                    [LoanController::class, 'show'],        'loans.view'],
         ['POST',   '/loans',                         [LoanController::class, 'store'],       'loans.add'],
         ['PUT',    '/loans/{id}',                    [LoanController::class, 'update'],      'loans.edit'],
-        ['POST',   '/loans/{id}/installments/{iid}', [LoanController::class, 'installment'], 'loans.edit'],
+        ['POST',   '/loans/{id}/installments/{iid}', [LoanController::class, 'installment'], 'admin'],  // skip / change an installment
         // Journal vouchers
         ['GET',    '/journal',      [JournalController::class, 'index'],  'journal.view'],
         ['GET',    '/journal/{id}', [JournalController::class, 'show'],   'journal.view'],
@@ -154,6 +157,7 @@ $routes = array_merge(
         ['GET',    '/salary/sheets/{id}',           [SalaryController::class, 'show'],     'salary.view'],
         ['POST',   '/salary/sheets',                [SalaryController::class, 'store'],    'salary.add'],
         ['POST',   '/salary/sheets/{id}/post',      [SalaryController::class, 'post'],     'salary.post'],
+        ['POST',   '/salary/sheets/{id}/unpost',    [SalaryController::class, 'unpost'],   'admin'],
         ['PUT',    '/salary/sheets/{id}/paid-date', [SalaryController::class, 'paidDate'], 'salary.edit'],
         ['DELETE', '/salary/sheets/{id}',           [SalaryController::class, 'destroy'],  'salary.delete'],
 

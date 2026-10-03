@@ -5,7 +5,7 @@ import { get, post, put, del } from '../core/api.js';
 import { h, toast, confirmDialog, fdate, money, today, openReport } from '../core/dom.js';
 import { Form } from '../core/form.js';
 import { setKeys } from '../core/keys.js';
-import { can, lookups } from '../core/store.js';
+import { can, lookups, session } from '../core/store.js';
 
 
 /** Previous calendar month as [from, to]. */
@@ -33,6 +33,18 @@ export default {
       { name: 'remarks', label: 'Remarks', span: 6, maxlength: 255 },
     ]);
     form.values = { period_from: from, period_to: to, paid_date: '' };
+    // Daily wages: weekly / fortnightly / monthly periods (To is set from From)
+    const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const preset = (kind) => {
+      const f = new Date((form.get('period_from') || from) + 'T12:00:00');
+      const t = kind === 'month' ? new Date(f.getFullYear(), f.getMonth() + 1, 0, 12) : new Date(f.getTime() + (kind === 'week' ? 6 : 13) * 86400000);
+      form.set('period_to', iso(t));
+    };
+    const presets = daily ? h('div', { style: 'display:flex;gap:6px;align-items:center;margin-top:6px' }, h('span', { class: 'muted', style: 'font-size:12px' }, 'Period:'),
+      h('button', { class: 'btn sm', type: 'button', onclick: () => preset('week') }, 'Weekly (7 days)'),
+      h('button', { class: 'btn sm', type: 'button', onclick: () => preset('fortnight') }, 'Fortnightly (14 days)'),
+      h('button', { class: 'btn sm', type: 'button', onclick: () => preset('month') }, 'Monthly (to month end)'),
+      h('span', { class: 'muted', style: 'font-size:12px' }, 'Pay = rate of each day × paid days. Vouchers and loan installments still open are taken by the next sheet.')) : null;
 
     let data = null;      // last preview / stored sheet
     let dirtyLines = false;
@@ -42,6 +54,8 @@ export default {
     const btnShow = B('Show ', '', () => show(), 'F7');
     const btnSave = B('Save ', 'primary', () => save(), 'F10', can('salary', 'add'));
     const btnPost = B('Post & Lock', 'ok', () => postSheet(), '', can('salary', 'post'));
+    const isAdmin = Number(session.user?.is_admin) === 1;
+    const btnUnpost = B('Unpost', 'danger', () => unpostSheet(), '', isAdmin);
     const btnDel = B('Delete Draft ', 'danger', () => removeDraft(), 'F12', can('salary', 'delete'));
     const btnPrint = B('Salary Sheet ', '', () => report('salary_sheet'), 'F9');
     const btnSlips = B('Payslips', '', () => report('payslips'));
@@ -56,14 +70,18 @@ export default {
       btnSave.disabled = !can('salary', 'add') || !data || posted();
       btnPost.disabled = !can('salary', 'post') || !id || posted();
       btnDel.disabled = !can('salary', 'delete') || !id || posted();
+      btnUnpost.disabled = !isAdmin || !posted();
       for (const b of [btnPrint, btnSlips, btnBank, btnDept]) b.disabled = !id;
       const st = data ? data.status : 'none';
       status.className = 'badge ' + ({ posted: 'ok', draft: 'warn', new: 'info' }[st] || '');
       status.textContent = { posted: 'Posted — locked', draft: dirtyLines ? 'Draft (unsaved changes)' : 'Draft saved', new: 'Not saved' }[st] || 'not shown';
       form.setReadonly(posted());
       // the paid date may still be set on a posted sheet
-      const pd = form.el.querySelector('[name=paid_date]');
-      if (pd) pd.readOnly = false;
+      // the period can always be changed to show another sheet; the paid date may still be set on a posted sheet
+      for (const n of ['paid_date', 'period_from', 'period_to']) {
+        const el = form.el.querySelector(`[name=${n}]`);
+        if (el) el.readOnly = false;
+      }
     }
 
     function report(name) {
@@ -112,12 +130,12 @@ export default {
             tr.append(h('td', { class: t === 'in' ? 'num' : '' }, t === 'in' ? amt(l.fine) : (l.remarks || '')));
           } else if (t === 'in' || t === 'txt') {
             const inp = h('input', {
-              class: 'input cell' + (t === 'in' ? ' num' : ''), value: t === 'in' ? (Number(l.fine) || '') : (l.remarks || ''),
+              class: 'input cell' + (t === 'in' ? ' num' : ''), value: t === 'in' ? (Number(l.fine_entered ?? l.fine) || '') : (l.remarks || ''),
               type: t === 'in' ? 'number' : 'text', min: t === 'in' ? 0 : null, step: t === 'in' ? 1 : null, maxlength: t === 'txt' ? 255 : null,
               'data-col': k, 'data-row': i,
             });
             inp.addEventListener('change', () => {
-              if (t === 'in') l.fine = Math.max(0, Number(inp.value) || 0); else l.remarks = inp.value;
+              if (t === 'in') l.fine_entered = Math.max(0, Number(inp.value) || 0); else l.remarks = inp.value;
               dirtyLines = true;
               if (t === 'in') recalcLocal(l, tr);
               refreshButtons();
@@ -145,7 +163,7 @@ export default {
         h('span', { class: 'spacer' }),
         'Enter moves to the next row · Fine and Remarks are editable until posting',
       );
-      info.textContent = data ? `${fdate(data.from)} – ${fdate(data.to)}` : '';
+      info.textContent = data ? `${data.sheet?.id ? `Sheet No. ${data.sheet.id} · ` : ''}${fdate(data.from)} – ${fdate(data.to)}` : '';
     }
 
     function totalRow(lines) {
@@ -162,7 +180,7 @@ export default {
 
     // A changed fine changes the net immediately (the server recalculates on Save and again on Post).
     function recalcLocal(l, tr) {
-      l.net_salary = l._netBase - Number(l.fine);
+      l.net_salary = Math.max(0, l._netBase - Number(l.fine_entered)); // preview only: the server applies the carry-forward rules on Save
       tr.classList.toggle('neg', l.net_salary < 0);
       tr.querySelector('[data-k=net_salary]').textContent = amt(l.net_salary);
       table.querySelector('tr.total')?.replaceWith(totalRow(data.lines));
@@ -212,7 +230,7 @@ export default {
       try {
         const d = await post('salary/sheets', {
           sheet_type: type, period_from: v.period_from, period_to: v.period_to, paid_date: v.paid_date || null, remarks: v.remarks || null,
-          lines: data.lines.map((l) => ({ employee_id: l.employee_id, fine: Number(l.fine) || 0, remarks: l.remarks || '' })),
+          lines: data.lines.map((l) => ({ employee_id: l.employee_id, fine: Number(l.fine_entered ?? l.fine) || 0, remarks: l.remarks || '' })),
         });
         setData(d);
         toast('Salary sheet saved (draft).');
@@ -227,13 +245,24 @@ export default {
       const ok = await confirmDialog(
         `Post the ${daily ? 'Daily Wages' : 'Permanent'} salary for ${fdate(data.from)} – ${fdate(data.to)}?\n\n`
         + `${t.employees} employees · Net Rs. ${money(t.net_salary)}\n\n`
-        + 'Posting locks attendance, vouchers and loan installments of this period and creates the salary journal voucher. It cannot be undone.',
+        + 'Posting locks attendance, vouchers and loan installments of this period and creates the salary journal voucher. Only an administrator can unpost it.',
         { title: 'Post salary sheet', ok: 'Post & Lock', danger: true });
       if (!ok) return;
       try {
         const d = await post(`salary/sheets/${sheetId()}/post`, { paid_date: form.get('paid_date') || null });
         setData(d);
         toast('Salary posted and locked. Journal voucher created.');
+        loadList();
+      } catch (e) { showErr(e); }
+    }
+
+    async function unpostSheet() {
+      if (btnUnpost.disabled) return;
+      const reason = window.prompt('Unpost this salary sheet?\nThe journal voucher is removed and vouchers, overtime and loan installments are released.\n\nReason (required, audit-logged):');
+      if (!reason || !reason.trim()) return;
+      try {
+        setData(await post(`salary/sheets/${sheetId()}/unpost`, { reason: reason.trim() }));
+        toast('Salary sheet unposted — it is a draft again. Show (F7) to recalculate.', 'warn', 6000);
         loadList();
       } catch (e) { showErr(e); }
     }
@@ -271,9 +300,9 @@ export default {
     setKeys({ load: show, save, del: removeDraft, print: () => report('salary_sheet') });
 
     root.append(
-      h('div', { class: 'toolbar' }, btnShow, btnSave, btnPost, btnDel, h('span', { class: 'sep' }), btnPrint, btnSlips, btnBank, btnDept,
+      h('div', { class: 'toolbar' }, btnShow, btnSave, btnPost, btnUnpost, btnDel, h('span', { class: 'sep' }), btnPrint, btnSlips, btnBank, btnDept,
         h('span', { class: 'spacer' }), info, status),
-      h('div', { class: 'panel' }, h('div', { class: 'panel-body' }, form.el,
+      h('div', { class: 'panel' }, h('div', { class: 'panel-body' }, form.el, presets,
         h('div', { style: 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px' }, h('span', { class: 'muted', style: 'font-size:12px' }, 'Sheets:'), listBox))),
       h('div', { class: 'panel', style: 'margin-top:10px' }, h('div', { class: 'panel-body' }, wrap, foot,
         h('ul', { class: 'muted', style: 'font-size:12px;margin:8px 0 0;padding-left:18px' },
@@ -282,7 +311,7 @@ export default {
             : 'Paid Days = Work + Rest + Paid Leave · Work Pay = Basic ÷ Days in Month × Paid Days (allowances prorated the same way and included).'),
           h('li', null, 'OT = Hours × Rate (Basic ÷ days ÷ shift hours × multiplier, or the employee\'s fixed OT rate). Gross = Work Pay + OT.'),
           h('li', null, '▲ inc = salary increment inside the period: the month is split at the effective date and each part is paid at its own salary; each OT date uses the salary effective that day (hover for details).'),
-          h('li', null, `Net = Gross + Incentive − Advance − Loan − Penalty − Fine − EOBI − ${ss} − Income Tax. A short salary reduces the loan installment (carried forward).`),
+          h('li', null, 'Net = Gross + Overtime + Incentive − Advance − Loan − Penalty − Fine, and is never negative: the loan installment is reduced first (balance rescheduled), then advance, penalty and fine are carried forward to the next period (hover ⚠).'),
           h('li', null, 'Post re-checks the data; if attendance or vouchers changed since saving, press Show and Save again.')))),
     );
     render();

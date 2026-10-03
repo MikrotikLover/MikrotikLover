@@ -11,7 +11,9 @@ namespace App;
  *   by employee  an employee who has a line on any posted sheet is locked for that sheet's period,
  *                whatever their current type (so changing the type cannot reopen paid days).
  * Date-keyed data (attendance, OT, leave) uses isLocked(); month-keyed data (vouchers' salary month,
- * loan installments' due month) uses isMonthLocked(), which compares the sheet's salary month.
+ * loan installments' due month) uses isMonthLocked(), which compares the sheet's salary month. Daily-wages
+ * sheets may be weekly / fortnightly, so for daily-wages employees a month never closes to new vouchers:
+ * the next sheet takes everything still open up to its month.
  */
 final class PayrollLock
 {
@@ -69,6 +71,11 @@ final class PayrollLock
     /** Salary month (any day of it) already posted for this type / employee. */
     public static function isMonthLocked(string $empType, string $month, ?int $employeeId = null): bool
     {
+        if (self::group($empType) === 'daily_wages') {
+            // daily-wages sheets can be weekly / fortnightly: a voucher or installment of a month that already has a
+            // posted sheet is taken by the next sheet the employee is on, so the month never closes to new entries
+            return false;
+        }
         $m = substr($month, 0, 7) . '-01';
         $type = self::group($empType);
         foreach (self::periods() as $p) {

@@ -44,6 +44,10 @@ final class LeaveReport extends Report
             $where[] = 'l.status = :s';
             $params['s'] = $status;
         }
+        if (($code = (string)$this->request->query('code', '')) !== '') { // employee-wise register
+            $where[] = 'e.code = :code';
+            $params['code'] = $code;
+        }
         foreach (['department_id' => 'e.department_id', 'leave_type_id' => 'l.leave_type_id', 'employee_id' => 'l.employee_id'] as $k => $c) {
             if ($v = $this->request->queryInt($k)) {
                 $where[] = "$c = :$k";

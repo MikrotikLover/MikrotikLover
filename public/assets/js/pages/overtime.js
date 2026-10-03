@@ -4,7 +4,7 @@ import { h, toast, modal, confirmDialog, fdate, openReport, today } from '../cor
 import { EmployeePicker } from '../core/emppicker.js';
 import { Form } from '../core/form.js';
 import { setKeys } from '../core/keys.js';
-import { can, opt } from '../core/store.js';
+import { can, opt, session } from '../core/store.js';
 import { hm } from './attendance-voucher.js';
 
 const parseHm = (s) => {
@@ -45,15 +45,16 @@ export default {
           h('td', null, r.shift_code || ''),
           h('td', null, r.time_in ? r.time_in.slice(11, 16) : ''), h('td', null, r.time_out ? r.time_out.slice(11, 16) + (r.time_out.slice(0, 10) !== r.ot_date ? ' +1' : '') : ''),
           h('td', null, r.att_status || ''),
-          h('td', { class: 'num' }, r.computed_minutes > 0 ? hm(r.computed_minutes) : h('span', { class: 'badge' }, 'manual')),
+          h('td', { class: 'num' }, Number(r.is_manual) ? h('span', { class: 'badge', title: 'Manual entry: ' + (r.remarks || '') }, 'manual ' + hm(r.computed_minutes)) : hm(r.computed_minutes)),
           h('td', null, appr), h('td', null, status), h('td', null, rem),
           h('td', { class: 'muted', style: 'font-size:11px' }, r.salary_sheet_id ? 'Paid' : (r.approved_by_name || '')),
-          h('td', { class: 'act' }, !r.salary_sheet_id && r.computed_minutes === 0 && can('overtime', 'delete')
+          h('td', { class: 'act' }, !r.salary_sheet_id && Number(r.is_manual) && can('overtime', 'delete')
             ? h('button', { class: 'rm', type: 'button', title: 'Delete manual entry', onclick: () => remove(r) }, '×') : ''));
         const mark = () => { st.dirty.add(r.id); tr.classList.add('dirty'); };
         appr.addEventListener('change', () => {
           const m = parseHm(appr.value);
           if (Number.isNaN(m) || m > 960) { toast('Enter hours as h:mm or decimal (max 16 h).', 'err'); appr.value = hm(r.approved_minutes); return; }
+          if (m > Number(r.computed_minutes)) { toast(`Approved time can only be lowered (max ${hm(r.computed_minutes)}).`, 'err'); appr.value = hm(r.approved_minutes); return; }
           r.approved_minutes = m; appr.value = hm(m); mark();
         });
         status.addEventListener('change', () => { r.status = status.value; tr.className = `ot-${r.status} dirty`; mark(); });
@@ -101,13 +102,13 @@ export default {
       const f = new Form([
         { name: 'ot_date', label: 'Date', type: 'date', required: true, span: 4 },
         { name: 'hours', label: 'OT hours (h:mm)', required: true, span: 4, placeholder: '2:30' },
-        { name: 'remarks', label: 'Remarks', span: 12, maxlength: 255 },
+        { name: 'remarks', label: 'Reason', required: true, span: 12, maxlength: 255 },
       ]);
       f.values = { ot_date: today() };
       modal({
         title: 'Manual overtime entry', wide: false,
         body: h('div', null, h('div', { class: 'form-grid', style: 'margin-bottom:8px' }, picker.el), f.el,
-          h('p', { class: 'muted', style: 'font-size:12px' }, 'Only for days the employee was present. It is created as Pending.')),
+          h('p', { class: 'muted', style: 'font-size:12px' }, 'Administrator only. Only for days the employee was present; a reason is required. It is created as Pending and can only be approved for these hours or less.')),
         buttons: [{ label: 'Cancel' }, { label: 'Add (F10)', class: 'primary', onClick: async () => {
           const v = f.values;
           const m = parseHm(v.hours);
@@ -123,7 +124,8 @@ export default {
     }
 
     const print = () => openReport('overtime', { ...filters.values, mode: 'detail' });
-    setKeys({ load, save, print, new: () => can('overtime', 'add') && addManual() });
+    const isAdmin = Number(session.user?.is_admin) === 1;
+    setKeys({ load, save, print, new: () => isAdmin && addManual() });
 
     root.append(
       h('div', { class: 'toolbar' },
@@ -133,7 +135,7 @@ export default {
         h('button', { class: 'btn', type: 'button', disabled: !canDecide, onclick: () => bulk('approved') }, '✔ Approve selected'),
         h('button', { class: 'btn danger', type: 'button', disabled: !canDecide, onclick: () => bulk('rejected') }, '✖ Reject selected'),
         h('span', { class: 'sep' }),
-        h('button', { class: 'btn', type: 'button', disabled: !can('overtime', 'add'), onclick: addManual }, 'Manual OT ', h('kbd', null, 'F5')),
+        h('button', { class: 'btn', type: 'button', disabled: !isAdmin, title: isAdmin ? '' : 'Administrator only', onclick: addManual }, 'Manual OT ', h('kbd', null, 'F5')),
         h('button', { class: 'btn', type: 'button', onclick: print }, 'Print ', h('kbd', null, 'F9')),
         h('span', { class: 'spacer' }), totals),
       h('div', { class: 'panel', style: 'margin-bottom:10px' }, h('div', { class: 'panel-body' }, filters.el)),

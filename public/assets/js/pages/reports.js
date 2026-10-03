@@ -11,7 +11,7 @@ const firstOfMonth = () => today().slice(0, 8) + '01';
 const dept = (span = 3) => ({ name: 'department_id', label: 'Department', type: 'select', span, options: () => opt.departments(true), blankLabel: 'All' });
 const empType = (span = 3) => ({ name: 'emp_type', label: 'Type', type: 'select', span, blankLabel: 'All', options: Object.entries(TYPES).map(([value, label]) => ({ value, label })) });
 const range = [{ name: 'from', label: 'From', type: 'date', span: 3 }, { name: 'to', label: 'To', type: 'date', span: 3 }];
-const STATUSES = [['P', 'Present'], ['A', 'Absent'], ['L', 'Leave'], ['LW', 'Leave w/o pay'], ['HD', 'Half day'], ['R', 'Rest'], ['H', 'Holiday'], ['none', 'Not marked']];
+const STATUSES = [['P', 'Present'], ['A', 'Absent'], ['L', 'LWP - Leave with pay'], ['LW', 'LWOP - Leave without pay'], ['HD', 'Half day'], ['R', 'Rest'], ['H', 'Holiday'], ['none', 'Not marked']];
 
 const REPORTS = [
   { group: 'Employees', key: 'employee_list', title: 'Employee List', perm: ['employees', 'print'], csv: true,
@@ -62,8 +62,9 @@ const REPORTS = [
       { name: 'mode', label: 'Layout', type: 'select', required: true, span: 3, options: [{ value: 'detail', label: 'Detail (per day)' }, { value: 'summary', label: 'Summary (per employee)' }] }],
     defaults: () => ({ from: firstOfMonth(), to: today(), status: 'approved', mode: 'detail' }) },
   { group: 'Attendance', key: 'leave_register', title: 'Leave Register', perm: ['leave', 'print'], csv: true,
-    desc: 'Leave applications for a year by department.',
+    desc: 'Leave applications for a year by department, or employee-wise (enter an employee code), with per-employee totals by type.',
     fields: [{ name: 'year', label: 'Year', type: 'number', required: true, span: 3, min: 2000, max: 2100 }, dept(),
+      { name: 'code', label: 'Employee code (employee-wise)', span: 3 },
       { name: 'status', label: 'Status', type: 'select', span: 3, blankLabel: 'All', options: ['approved', 'pending', 'rejected', 'cancelled'].map((s) => ({ value: s, label: s[0].toUpperCase() + s.slice(1) })) }],
     defaults: () => ({ year: Number(today().slice(0, 4)), status: 'approved' }) },
   { group: 'Accounts', key: 'vouchers', title: 'Advance / Incentive / Penalty / Overtime Vouchers', perm: ['vouchers', 'print'], csv: true,

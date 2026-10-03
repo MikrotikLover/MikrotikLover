@@ -179,6 +179,12 @@ final class EmployeeController
             throw ApiException::notFound('Employee');
         }
         $e['salary_history'] = $this->salaryRows($id);
+        $e['shift_history'] = Database::all(
+            'SELECT h.shift_date, h.changed_at, sg.code AS shift_group_code, sg.name AS shift_group, u.full_name AS changed_by_name
+               FROM employee_shift_history h LEFT JOIN shift_groups sg ON sg.id = h.shift_group_id LEFT JOIN users u ON u.id = h.changed_by
+              WHERE h.employee_id = ? ORDER BY h.changed_at DESC, h.id DESC',
+            [$id]
+        );
         $e['qualifications'] = Database::all(
             'SELECT degree, institute, passing_year, grade, remarks FROM employee_qualifications WHERE employee_id = ? ORDER BY id',
             [$id]
@@ -359,6 +365,12 @@ final class EmployeeController
                 Database::update('employees', $data + ['updated_by' => Auth::id()], 'id = :id', ['id' => $id]);
                 Audit::log('update', 'employees', $id, $existing, $data);
                 Increments::moveJoining($id, $existing['joining_date'], $data['joining_date']); // the joining row follows the joining date
+                if ((int)$existing['shift_group_id'] !== (int)$data['shift_group_id'] || $existing['shift_date'] !== $data['shift_date']) {
+                    if ($existing['shift_group_id'] && !Database::value('SELECT 1 FROM employee_shift_history WHERE employee_id = ?', [$id])) {
+                        self::logShift($id, $existing); // first change: keep the assignment it replaces
+                    }
+                    self::logShift($id, $data);
+                }
             } else {
                 $id = Database::insert('employees', $data + ['created_by' => Auth::id()]);
                 Audit::log('create', 'employees', $id, null, $data);
@@ -371,6 +383,9 @@ final class EmployeeController
                     Audit::log('create', 'employee_salary_history', $sid, null, $salary + ['employee_id' => $id]);
                 }
                 Increments::addJoining($id, $data['joining_date'], $joining); // every employee starts with a 'joining' row
+                if ($data['shift_group_id']) {
+                    self::logShift($id, $data);
+                }
             }
             if ($quals !== null) {
                 Database::run('DELETE FROM employee_qualifications WHERE employee_id = ?', [$id]);
@@ -387,6 +402,13 @@ final class EmployeeController
             return $id;
         });
         return $this->load($id);
+    }
+
+    /** Shift group history: one row per change of group or rotation start date. */
+    private static function logShift(int $id, array $data): void
+    {
+        Database::insert('employee_shift_history', ['employee_id' => $id, 'shift_group_id' => $data['shift_group_id'] ?: null,
+            'shift_date' => $data['shift_date'], 'changed_by' => Auth::id()]);
     }
 
     /** Validate repeatable child rows; blank rows are skipped. null = not sent (leave unchanged). */
@@ -420,6 +442,24 @@ final class EmployeeController
         if (!$e) {
             throw ApiException::notFound('Employee');
         }
+        // An employee with attendance, vouchers, overtime, leave or salary records is never removed: the record is
+        // kept and set Inactive (soft delete). Only an employee without any such data is deleted.
+        $used = Database::value(
+            'SELECT (SELECT COUNT(*) FROM attendance_daily WHERE employee_id = :a) + (SELECT COUNT(*) FROM salary_sheet_lines WHERE employee_id = :b)
+                  + (SELECT COUNT(*) FROM vouchers WHERE employee_id = :c) + (SELECT COUNT(*) FROM overtime WHERE employee_id = :d)
+                  + (SELECT COUNT(*) FROM leave_register WHERE employee_id = :e) + (SELECT COUNT(*) FROM attendance_punches WHERE employee_id = :f)',
+            ['a' => $id, 'b' => $id, 'c' => $id, 'd' => $id, 'e' => $id, 'f' => $id]
+        );
+        if ((int)$used > 0) {
+            if ($e['status'] === 'inactive') {
+                throw ApiException::conflict('This employee has attendance or salary records and is already inactive; it cannot be removed.');
+            }
+            Database::transaction(function () use ($e, $id) {
+                Database::update('employees', ['status' => 'inactive', 'updated_by' => Auth::id()], 'id = :id', ['id' => $id]);
+                Audit::log('deactivate', 'employees', $id, ['status' => $e['status']], ['status' => 'inactive', 'reason' => 'delete requested; employee has records']);
+            });
+            return ['deleted' => false, 'deactivated' => true, 'message' => 'The employee has attendance or salary records, so the record was kept and set Inactive.'];
+        }
         try {
             Database::transaction(function () use ($e, $id) {
                 Database::run('DELETE FROM employees WHERE id = ?', [$id]);
@@ -427,7 +467,7 @@ final class EmployeeController
             });
         } catch (\PDOException $ex) {
             if (($ex->errorInfo[1] ?? 0) === 1451) {
-                throw ApiException::conflict('This employee has attendance, vouchers or salary records and cannot be deleted. Set the status to Inactive and enter a leaving date instead.');
+                throw ApiException::conflict('This employee is referenced by other records and cannot be deleted. Set the status to Inactive instead.');
             }
             throw $ex;
         }

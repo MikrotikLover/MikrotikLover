@@ -28,9 +28,9 @@ namespace App;
  *   Overtime       = round(sum of OT Hours x OT Rate per rate) + fixed OT voucher amounts
  *   Work pay and overtime are computed in integer paisa (App\Money), never float.
  *   Gross          = Work Pay + Allowance Pay + Overtime
- *   Net            = Gross + Incentive - Advance - Loan - Penalty - Fine - EOBI - PESSI/SESSI - Income Tax
- *   Loan installments are reduced (carried forward) when the salary cannot cover them; other
- *   deductions are never reduced, so a negative net is flagged for review instead.
+ *   Net            = Gross + Incentive - Advance - Loan - Penalty - Fine (- EOBI - PESSI/SESSI - Income Tax when enabled)
+ *   Net is never negative: the loan installment is reduced first (balance rescheduled), then advance,
+ *   penalty and fine; whatever is not deducted is carried forward to the next period.
  */
 final class PayrollEngine
 {
@@ -250,15 +250,42 @@ final class PayrollEngine
         $fine = $this->round((float)$g('fine'));
         $loanPlanned = $this->round((float)$g('loan_planned'));
 
-        $beforeLoan = $gross + $incentive - $advance - $penalty - $fine - $eobi - $pessi - $tax;
-        $loan = min($loanPlanned, max(0.0, $beforeLoan));
+        // Net salary is never negative. What the pay cannot cover is not deducted now:
+        //   1. the loan installment is reduced first (the loan balance is rescheduled),
+        //   2. then the advance, the penalty and the fine are reduced, in that order; the unrecovered
+        //      amounts are carried forward to the next salary period (system vouchers created on posting).
+        // Statutory amounts (only when enabled on the employee) are capped at the pay itself.
+        $avail = $gross + $incentive;
+        $cap = function (float $v, string $label) use (&$avail, &$warnings): float {
+            if ($v > $avail) {
+                $warnings[] = "$label reduced to " . number_format(max(0.0, $avail)) . ' (salary not sufficient)';
+                $v = max(0.0, $avail);
+            }
+            $avail -= $v;
+            return $v;
+        };
+        $tax = $cap($tax, 'Income tax');
+        $pessi = $cap($pessi, 'PESSI / SESSI');
+        $eobi = $cap($eobi, 'EOBI');
+        $take = function (float $want) use (&$avail): float {
+            $got = min($want, max(0.0, $avail));
+            $avail -= $got;
+            return $got;
+        };
+        $fineD = $take($fine);
+        $penaltyD = $take($penalty);
+        $advanceD = $take($advance);
+        $loan = $take($loanPlanned);
+        $carried = ['advance' => $advance - $advanceD, 'penalty' => $penalty - $penaltyD, 'fine' => $fine - $fineD];
         if ($loan < $loanPlanned) {
             $warnings[] = 'Loan installment reduced to ' . number_format($loan) . ' (balance carried forward)';
         }
-        $net = $beforeLoan - $loan;
-        if ($net < 0) {
-            $warnings[] = 'Net salary is negative: ' . number_format(-$net) . ' stays owed (booked to Employee Advances on posting) — recover it with an advance voucher next month';
+        foreach ($carried as $k => $c) {
+            if ($c > 0) {
+                $warnings[] = ucfirst($k) . ' ' . number_format($c) . ' not deducted (salary not sufficient) — carried forward to the next period';
+            }
         }
+        $net = max(0.0, $avail);
         if ($paid <= 0 && $gross <= 0) {
             $warnings[] = 'No paid days in this period';
         }
@@ -267,7 +294,8 @@ final class PayrollEngine
             'paid_days' => $paid, 'work_pay' => $workPay, 'allowance_pay' => $allowancePay,
             'ot_hours' => $otHours, 'ot_rate' => $otRate, 'ot_amount' => $otAmount, 'ot_voucher_amount' => $otVoucherAmount, 'ot_rates' => $otRates,
             'segment_paid_days' => array_map(fn($p) => $p / 100.0, $segPaid),
-            'gross' => $gross, 'incentive' => $incentive, 'advance' => $advance, 'penalty' => $penalty, 'fine' => $fine,
+            'gross' => $gross, 'incentive' => $incentive, 'advance' => $advanceD, 'penalty' => $penaltyD, 'fine' => $fineD,
+            'fine_entered' => $fine, 'advance_carried' => $carried['advance'], 'penalty_carried' => $carried['penalty'], 'fine_carried' => $carried['fine'],
             'eobi' => $eobi, 'pessi' => $pessi, 'income_tax' => $tax, 'loan_deduction' => $loan, 'net_salary' => $net,
             'warnings' => $warnings,
         ];

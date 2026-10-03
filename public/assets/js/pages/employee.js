@@ -163,6 +163,7 @@ export default {
     const tabNames = ['Employee Info', 'Salary Info', 'Increment History', 'Qualification', 'Experience', 'List of Employees'];
     const tabBtns = tabNames.map((n, i) => h('button', { type: 'button', onclick: () => showTab(i) }, n));
     const metaLine = h('div', { class: 'meta-line' });
+    const shiftHist = h('div', { class: 'meta-line' });
     const salaryNewBox = h('div', null, h('p', { class: 'muted', style: 'margin-top:0' }, 'Initial salary — saved together with the employee (effective from the joining date).'), salaryForm.el);
     const salaryHistBtns = h('div', { style: 'display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap' },
       h('button', { class: 'btn', type: 'button', onclick: () => editSalary(null) }, '+ Add salary info record'),
@@ -220,7 +221,7 @@ export default {
     listSearch.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown' || e.key === 'Enter') { e.preventDefault(); listGrid.focus(); } });
 
     const panes = [
-      h('div', { class: 'emp-top' }, h('div', null, form.el, metaLine),
+      h('div', { class: 'emp-top' }, h('div', null, form.el, shiftHist, metaLine),
         h('div', { class: 'photo-box' }, photoBox, h('div', { class: 'btns' }, btnPhoto, btnCam, btnNoPhoto), fileInput,
           h('div', { class: 'muted', style: 'font-size:11px;text-align:center' }, 'Photo is cropped to 3:4 for the ID card'))),
       h('div', null, salaryNewBox, salaryHistBox, salaryHint),
@@ -284,6 +285,9 @@ export default {
       btnDel.disabled = !emp || !canDel;
       btnCard.disabled = !emp || !canPrint;
       recLabel.textContent = emp ? `Auto ID ${emp.id} · ${emp.code} — ${emp.name}` : 'New employee';
+      shiftHist.replaceChildren(...(emp?.shift_history?.length ? [h('b', null, 'Shift group history: '),
+        emp.shift_history.map((x, i) => h('span', { title: `Changed by ${x.changed_by_name || '?'} on ${fdatetime(x.changed_at)}` },
+          (i ? ' · ' : ''), `${x.shift_group_code || 'none'} from ${fdate(x.shift_date)}`))] : []));
       metaLine.textContent = emp
         ? `Created ${fdatetime(emp.created_at)}${emp.created_by_name ? ' by ' + emp.created_by_name : ''}`
           + (emp.updated_at ? ` · Updated ${fdatetime(emp.updated_at)}${emp.updated_by_name ? ' by ' + emp.updated_by_name : ''}` : '')
@@ -350,9 +354,15 @@ export default {
 
     async function remove() {
       if (!st.emp || btnDel.disabled) return;
-      if (!(await confirmDialog(`Delete employee ${st.emp.code} — ${st.emp.name}?\nThis cannot be undone.`, { ok: 'Delete', danger: true }))) return;
+      if (!(await confirmDialog(`Delete employee ${st.emp.code} — ${st.emp.name}?\nAn employee with attendance or salary records is kept and set Inactive instead.`, { ok: 'Delete', danger: true }))) return;
       try {
-        await del(`employees/${st.emp.id}`);
+        const r = await del(`employees/${st.emp.id}`);
+        if (r.deactivated) {
+          toast(r.message, 'warn', 7000);
+          form.dirty = false;
+          fill(await get(`employees/${st.emp.id}`));
+          return;
+        }
         toast('Employee deleted.');
         form.dirty = false;
         st.childDirty = false;

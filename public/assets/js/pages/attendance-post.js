@@ -5,8 +5,8 @@ import { h, toast, modal, confirmDialog, fdate, ftime, today } from '../core/dom
 import { Form } from '../core/form.js';
 import { DataGrid } from '../core/grid.js';
 import { setKeys } from '../core/keys.js';
-import { can, lookups, opt } from '../core/store.js';
-import { STATUSES, hm } from './attendance-voucher.js';
+import { can, lookups, opt, session } from '../core/store.js';
+import { STATUSES, hm, statusCode } from './attendance-voucher.js';
 
 const yesterday = () => { const d = new Date(today() + 'T12:00:00'); d.setDate(d.getDate() - 1); return d.toISOString().slice(0, 10); };
 
@@ -79,7 +79,7 @@ export default {
         { key: 'time_out', label: 'Out', render: (r) => (r.time_out ? ftime(r.time_out.slice(11)) + (r.time_out.slice(0, 10) !== r.att_date ? ' +1' : '') : '') },
         { key: 'work_minutes', label: 'Hours', align: 'right', render: (r) => (r.work_minutes ? hm(r.work_minutes) : '') },
         { key: 'late_minutes', label: 'Late', align: 'right', render: (r) => (r.late_minutes ? hm(r.late_minutes) : '') },
-        { key: 'status', label: 'Status', render: (r) => h('b', null, r.status) },
+        { key: 'status', label: 'Status', render: (r) => h('b', null, statusCode(r.status)) },
         { key: 'flag_reason', label: 'Flag / remarks', render: (r) => h('span', { style: r.is_flagged ? 'color:var(--danger)' : '' }, [r.flag_reason, r.remarks].filter(Boolean).join(' · ')) },
         { key: 'source', label: 'Source', render: (r) => (r.vr_no ? `Vr# ${r.vr_no}` : r.source) },
       ],
@@ -130,6 +130,36 @@ export default {
       });
     }
 
+    // ---------- verify & lock dates (admin): a posted date cannot be changed until an admin unposts it
+    const isAdmin = Number(session.user?.is_admin) === 1;
+    const lockBox = h('div');
+    async function loadLocks() {
+      const v = form.values;
+      const from = (v.from || today()).slice(0, 8) + '01';
+      const rows = await get('attendance/day-posts', { from, to: today() });
+      const btnLock = h('button', { class: 'btn primary', type: 'button', disabled: !isAdmin, title: isAdmin ? '' : 'Administrator only', onclick: async () => {
+        const f = form.values;
+        if (!(await confirmDialog(`Post (lock) attendance from ${fdate(f.from)} to ${fdate(f.to)}?\nLocked dates cannot be edited until an administrator unposts them.`, { ok: 'Post & Lock' }))) return;
+        try {
+          const r = await post('attendance/day-posts', { from: f.from, to: f.to });
+          toast(r.posted.length ? `${r.posted.length} date(s) posted and locked.` : 'Those dates were already posted.');
+          loadLocks();
+        } catch (e) { toast(e.message, 'err', 9000); }
+      } }, '🔒 Post & lock From–To');
+      lockBox.replaceChildren(
+        h('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px' }, btnLock,
+          h('span', { class: 'muted', style: 'font-size:12px' }, 'Lock the From–To dates once verified. Rows with a missing time out must be corrected first.')),
+        rows.length
+          ? h('div', { style: 'display:flex;flex-wrap:wrap;gap:6px' }, rows.map((r) => h('span', { class: 'badge ok', title: `Posted by ${r.posted_by_name || '?'} on ${r.posted_at}` },
+            '🔒 ' + fdate(r.att_date), isAdmin ? h('button', { class: 'btn sm', type: 'button', style: 'margin-left:4px;padding:0 6px', title: 'Unpost (admin)', onclick: async () => {
+              const reason = window.prompt(`Reason for unposting ${fdate(r.att_date)} (required, audit-logged):`);
+              if (!reason || !reason.trim()) return;
+              try { await post('attendance/day-posts/unpost', { date: r.att_date, reason: reason.trim() }); toast('Date unposted.'); loadLocks(); } catch (e) { toast(e.message, 'err', 8000); }
+            } }, '✕') : null)))
+          : h('div', { class: 'muted' }, 'No posted dates this month yet.'),
+      );
+    }
+
     setKeys({ save: run, load: loadExceptions, print: () => import('../core/dom.js').then((m) => m.openReport('daily_attendance', { date: form.get('from'), department_id: form.get('department_id') })) });
 
     root.append(
@@ -142,12 +172,14 @@ export default {
               h('li', null, 'Manual voucher entries are kept unless "overwrite" is ticked. Posted salary months are never changed.'),
               h('li', null, 'Overtime candidates go to Overtime Approval.')))),
         h('div', { class: 'panel' }, h('div', { class: 'panel-body' }, pendingBox))),
+      h('div', { class: 'panel', style: 'margin-top:12px' }, h('div', { class: 'panel-head' }, h('h2', null, 'Verify & lock dates (Daily Attendance Post)')),
+        h('div', { class: 'panel-body' }, lockBox)),
       h('div', { class: 'panel', style: 'margin-top:12px' },
         h('div', { class: 'panel-head' }, h('h2', null, 'Review & fix'), filter,
           h('button', { class: 'btn', type: 'button', onclick: loadExceptions }, 'Show ', h('kbd', null, 'F7'))),
         h('div', { class: 'panel-body' }, grid.el, h('div', { class: 'grid-foot' }, count, h('span', { class: 'spacer' }), 'Double-click / Enter a row to correct it'))),
     );
     void lookups;
-    await Promise.all([loadPending(), loadExceptions()]);
+    await Promise.all([loadPending(), loadExceptions(), loadLocks()]);
   },
 };

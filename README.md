@@ -14,6 +14,7 @@ Web-based payroll and HR system for Pakistani factories. It rebuilds the workflo
 | 4 | PayrollEngine, salary sheets, posting/locking, payslips, salary reports, unit tests | **Delivered** |
 | 5 | Dashboard, audit log viewer, rate settings, hardening, Hostinger deployment guide | **Delivered** |
 | + | Salary increment module: single / bulk increments, effective-dated salary, pro-rata salary sheet, OT at the salary of each date, history + 2 reports (see below) | **Delivered** |
+| ++ | Full-scope update: attendance day lock + admin unpost, net never negative (carry forward), salary unpost, weekly daily-wage sheets, Data Entry role, OT approval rules, print layouts (see below) | **Delivered** |
 
 The **full database schema for every module** is already in place (`migrations/001`–`005`), so later batches only add code.
 
@@ -145,7 +146,7 @@ Approved leave (L / LW) ──────────────────�
 | Item | Rule |
 |---|---|
 | Working hours | Always Out − In (never typed). The shift break is deducted when the stay exceeds half the shift span. |
-| Validation | Out ≤ In is rejected, except a manual Out on an overnight shift, which moves to the next day. Over 24 h is rejected. Over *max daily hours* (setting, default 16) is accepted but flagged. A single punch is flagged "Missing time out". |
+| Validation | Time Out earlier than Time In = a night shift crossing midnight (Out moves to the next day); Out equal to In is rejected; over 24 h is rejected. *(Changed in the full-scope update; previously only overnight shifts could cross midnight.)* Over *max daily hours* (setting, default 16) is accepted but flagged. A single punch is flagged "Missing time out" and no hours are invented. |
 | Late | Minutes after shift start, counted only when beyond the shift's grace minutes. |
 | Early | Minutes before shift end. |
 | OT candidate | Minutes after shift end, when ≥ the shift's *min OT*. On rest days and holidays, all worked time counts. Candidates arrive *Pending*. Approve, reject, or edit the hours in Overtime Approval. Only approved OT will reach payroll. |
@@ -270,8 +271,8 @@ All have Print/PDF and Excel/CSV. **Advance Salary**, **Incentive**, **Penalty**
 
 1. Choose **From / To** (defaults to the previous month; any period of up to 31 days, e.g. 26th–25th). The salary month is the month of **To**.
 2. **Show (F7)** computes every employee from attendance, approved overtime, posted vouchers and loan installments. Nothing is written.
-3. Review. Enter **Fine** and **Remarks** per row (Enter / ↓ moves to the next row). Rows with warnings show ⚠ (hover for details); a negative net is highlighted.
-4. **Save (F10)** stores a **draft** (one per type and month). Show again at any time to recalculate; saved fines and remarks are kept.
+3. Review. Enter **Fine** and **Remarks** per row (Enter / ↓ moves to the next row). Rows with warnings show ⚠ (hover for details). Net is never negative (see the full-scope section).
+4. **Save (F10)** stores a **draft** (one per month for Permanent; Daily Wages can be weekly / fortnightly / monthly). Show again at any time to recalculate; saved fines and remarks are kept.
 5. **Post & Lock** recalculates and compares with the saved draft. If attendance, overtime or vouchers changed in the meantime it refuses with "press Show and Save again". Otherwise it:
    - marks the vouchers, overtime rows and loan installments as consumed by the sheet (a short installment is carried forward and the loan is re-scheduled);
    - creates the system **salary JV**: Dr Salaries (work pay + allowances), Overtime, Incentives / Cr Employee Advances, Employee Loans, Penalty income (penalties + fines), EOBI payable, PESSI/SESSI payable, Income tax payable, Salaries payable (net). It always balances;
@@ -304,10 +305,10 @@ Every verified example from the specification is a unit test: 4,500 · 3,929 · 
 - The salary rate is the salary-info record effective on the **last day** of the period. A mid-period increment is not split.
 - **Unmarked days** (employed, no attendance row) are unpaid and flagged. Post attendance before running payroll.
 - A **half day without times** pays 0 hours and is flagged (enter the times in attendance).
-- If the salary can't cover the loan installment, the installment is reduced and the balance carried forward. Advances, penalties and statutory amounts are never reduced, so a **negative net** is shown and highlighted. On posting, the shortfall is debited back to Employee Advances (it is not netted against other employees' payable). Recover it with an advance voucher next month.
+- *(Superseded by the full-scope update.)* Net is never negative: the loan installment is reduced first and its balance rescheduled; then the advance, penalty and fine that the salary can't cover are carried forward to the next period as system vouchers.
 - Income tax is annualised from the month's salary, with no year-to-date reconciliation. The JV books only the **employee share** of EOBI / PESSI (the employer share is a separate challan entry).
 - **Fine** is entered on the salary sheet. **Penalty** comes from posted penalty vouchers.
-- Posted salary sheets can't be unposted (per the "posted months are locked" rule).
+- *(Superseded.)* An administrator can unpost the latest posted sheet, with a reason; it is audit-logged.
 
 ### Reports (Print / PDF; CSV where noted)
 
@@ -590,6 +591,115 @@ Automated: `php tests/run.php` → 62 passed (13 new in `IncrementsTest.php`). T
     - History and reports work.
 14. **New employee.** Create an employee with basic 38,000 joining 01-10-2026 → a *joining* row of 38,000. Change the joining date to 28-09-2026 → the joining row moves.
 15. **Reports.** Increment Register 01-09 → 31-12 (department sub-totals, grand total old vs new, CSV). Employee Increment History for `0001` (145,000 → 160,000 → scheduled 168,000). Both print in A4 with Page X of Y.
+
+## Full-scope update (Al Nahar parity)
+
+The full specification (setup, attendance, accounts, salary sheets, users and roles, increments) was checked against this codebase module by module. Most of it already existed (batches 1–5 and the increment module above). This update adds only what was missing; nothing else was rewritten. Migration: `013_full_scope.sql`.
+
+### What was added or changed
+
+| Spec | Change |
+|---|---|
+| 1.1 Settings | **Late grace minutes** (company default; a shift's own grace overrides it) and the **barcode repeat window** in Company Settings. The OT multiplier help text now explains the per-date formula. |
+| 1.5 Shift groups | **Shift group history** (`employee_shift_history`): every change of group or rotation start is kept and shown on Employee Info. |
+| 1.6 Employee delete | An employee with attendance, salary, voucher, overtime, leave or punch records is **kept and set Inactive** (soft delete, audit-logged). Only an employee without any records is removed. |
+| 2 Statuses | Stored codes L / LW are shown everywhere as **LWP / LWOP** (screens, reports, CSV). |
+| 2.1 Attendance voucher | **Status filter** in the header (Auto Attendance, voucher number, department and prev/next already existed). |
+| 2.2 Barcode | Repeat scans ignored within **2 minutes** (setting `scan_repeat_seconds` = 120; existing installs at the old 60 s default are moved to 120). |
+| 2.4 Working hours | Time Out earlier than Time In = **crossing midnight on any shift** (previously only overnight shifts). Out = In is rejected. A missing time out is flagged and no hours are invented (unchanged). |
+| 2.5 Daily Attendance Post | **Post & lock dates** (admin) on the Daily Attendance Post screen. Posting is refused while a *missing time out* exists. A posted date can't be entered, edited, deleted, re-processed from punches or filled by leave. **Admin unpost** needs a reason and is audit-logged. Punches that arrive for a locked date wait and are applied after an unpost. |
+| 2.6 Overtime | Approved hours can only be **edited down** (never above the overtime worked, or the hours entered manually). **Manual overtime** (Overtime Approval → Manual OT, and the Overtime Voucher) is **admin only, with a reason**. Manual rows are flagged `is_manual` and are no longer touched by attendance re-posting. |
+| 2.7 Leave register | **Employee-wise** register (employee code filter). |
+| 2.8 Monthly sheet | Day headers **"01 - Wednesday"** (vertical), a **rotated department label** per group, and totals **P, A, LWP, LWOP, R** (+ H, HD). |
+| 3.2 Loans | **Skip / change an installment: admin only** (audit-logged as before). |
+| 4.1 Net never negative | Deduction order: fine → penalty → advance → loan. The **loan installment gives way first** (balance rescheduled). Then advance, penalty and fine that the pay can't cover are **carried forward**: posting creates system ADV / PEN vouchers for the next period (no extra journal; the advance stays receivable). The sheet shows the warning; the print lists what was carried. |
+| 4.1 Unpost | **Admin unpost** of the latest posted sheet (reason required, audit-logged). It reverses everything posting did: removes the salary JV and carry vouchers, releases vouchers, overtime and loan installments (installments get their exact previous status back; loans are rescheduled), and makes the sheet a draft. Refused while a later sheet with the same employees is posted. |
+| 4.2 Daily wages | **Weekly / fortnightly / monthly** sheets (period presets). Several daily-wages sheets per month (one per start date, no overlaps). Vouchers and loan installments still open are taken by the next sheet the employee is on, so a daily-wager's month never closes to new vouchers. |
+| 4.3 Print | Title **"Salary Sheet For The Month Of September, 2026"** (weekly sheets name the period). Columns per spec: Sr, ID, Employee Name, Designation, Paid Days, Basic Salary, Gross, OT Hour, OT Rate, Overtime, Advance, Loan Ded., Remaining Bal., Incentive, Penalty, Fine, Net Salary, Signature. Department sub-totals, grand total, landscape, page X of Y. |
+| 5 Roles | New **Data Entry** role: setup, attendance, vouchers, loans, leave, salary drafts. It has no posting / unposting, no OT approval, no increments, and no users. Admin and Viewer exist. |
+
+### Hostinger quick reference
+
+Full steps are in [DEPLOY.md](DEPLOY.md).
+
+- **Config:** `../payroll-config.php`, one level above the app folder, so Git redeploys can't wipe it. Copy it from `config.sample.php`: DB credentials, `storage_path`, `setup_key`.
+- **Photos and logos:** `storage_path` in that config, pointing **outside** `public_html`, e.g. `/home/u123456789/domains/example.com/payroll_storage`. Redeploys don't touch it, and files are served only through `file.php` after a login check. System Health warns if it's inside the deploy folder.
+- **Migrations:** `https://example.com/migrate.php?key=…` (browser) or `php migrations/migrate.php` (SSH). Upgrades apply only new migrations.
+- **hPanel cron (optional):** `5 0 * * *  /usr/bin/php /home/USER/domains/example.com/public_html/tools/sync_salaries.php`. It moves scheduled increments into `employees.basic_salary` at midnight; without it, the first request of the day does the same.
+- **ZKTeco ADMS:** on the device, *Comm → Cloud Server Setting*: server = your domain, port 80, Domain-name mode on. The device appears under **Attendance → Devices, Kiosk & TV** as inactive; tick *Active* and optionally set its internet IP. Enter each employee's enrollment number as **Machine ID**. Exported logs (CSV / Excel / attlog.dat) go through **Machine Log Import**.
+
+### API endpoints added
+
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/api/attendance/day-posts?from=&to=` | attendance.view |
+| POST | `/api/attendance/day-posts` `{from, to, remarks?}` (post & lock) | admin |
+| POST | `/api/attendance/day-posts/unpost` `{date, reason}` | admin |
+| POST | `/api/salary/sheets/{id}/unpost` `{reason}` | admin |
+| POST | `/api/overtime` (manual OT, `remarks` = reason required) | admin (was overtime.add) |
+| POST | `/api/loans/{id}/installments/{iid}` (skip / adjust / reset) | admin (was loans.edit) |
+| POST/PUT | `/api/vouchers/ot` (overtime voucher, `remarks` required) | admin |
+| GET | `report.php?r=leave_register&code=` (employee-wise) | leave.print |
+
+### Files
+
+**New:** `migrations/013_full_scope.sql`, `migrations/seeds/130_demo_shift_history.sql`, `app/DayLock.php`.
+
+**Changed:**
+- `app/AttendanceEngine.php`: day lock, company grace, out-before-in crosses midnight, manual OT rows protected, approved OT never above worked OT.
+- `app/Payroll.php`: carry-forward, unpost, daily-wages periods, joining boundary not shown as an increment.
+- `app/PayrollEngine.php`: net never negative.
+- `app/PayrollLock.php`: a daily-wages month doesn't close to vouchers.
+- `app/Settings.php`, `app/Reports/Report.php`, `app/Reports/MonthlyAttendanceReport.php`, `app/Reports/SalarySheetReport.php`, `app/Reports/{Daily,Employee,Shift}AttendanceReport.php`, `app/Reports/LeaveReport.php`.
+- `api/router.php`, `api/controllers/{Attendance,AttendanceVoucher,Leave,Overtime,Voucher,Salary,Employee}Controller.php`.
+- `public/assets/js/pages/{attendance-post,attendance-voucher,overtime,salary,settings,employee,reports}.js`.
+- Tests: `tests/{PayrollEngine,Attendance}Test.php`.
+
+### Decisions to confirm
+
+- **EOBI / PESSI / income tax, payslips and the bank transfer list already existed** (batches 4–5), although the spec says not to add them. I did **not** delete them: they are off unless enabled on an employee's salary info, and the salary sheet print shows their columns only when a sheet has such amounts. Say the word and I'll remove them completely (menu, reports, engine, JV lines, rates screen).
+- **Leave types:** the spec has LWP / LWOP. The existing leave register has typed leave (CL, SL, AL = with pay; LWP = without pay) with quotas. These are shown as LWP / LWOP in attendance.
+- **Carry-forward order:** the spec says to cap the loan first. After the loan, the advance gives way before the penalty and fine, because the advance stays a receivable and is simply recovered next period.
+- **Attendance day lock** is company-wide per date and blocks attendance only. Overtime approval and vouchers keep their own workflow; posted salary still locks everything.
+
+### Full test checklist
+
+Automated: `php tests/run.php` → **63 passed**. The end-to-end scripts were run through the HTTP API on a fresh `--seed` database: **61 checks** (full scope) + **59 checks** (increments), all passing. A September sheet without increments is line-for-line identical to the previous version.
+
+1. **Night shift hours.** Attendance Voucher, 01-10-2026, employee on shift N: In 20:00, Out 08:00 → Out on 02-10, hours = 12 h − break (11:00). Out equal to In is rejected.
+2. **Missing time out.** Enter only Time In → row flagged *Missing time out*, 0 hours. **Post & lock** that date is refused until it is corrected.
+3. **Auto attendance.** Attendance Voucher → date + department → F7 → tick *Auto Attendance* → everyone P → F10. The status filter shows only the chosen status.
+4. **Duplicate attendance blocked.** Save the same date / department again → rows are updated, never duplicated (one row per employee per date).
+5. **Daily post lock.**
+   - Post & lock 01-10 → editing that date is refused, even for an admin.
+   - Unpost needs an admin and a reason; the audit log shows it.
+   - After the unpost, the date can be edited again.
+6. **Barcode.** Kiosk: scan `0008` → IN with photo and name. Scan again within 2 minutes → "already scanned".
+7. **Overtime approval.**
+   - Approving more than the worked or entered time is refused; lowering works.
+   - Manual OT without a reason, or by a non-admin, is refused.
+   - Only approved OT reaches the sheet.
+8. **Loan installments until balance 0.** Loan 10,000 @ 4,000 → schedule 4,000 + 4,000 + 2,000. Post September → 4,000 deducted, Remaining Bal. 6,000, next installments 4,000 + 2,000. When the salary is short, the installment is reduced and rescheduled. Skip / change is admin only.
+9. **Net salary never negative.** `0009`: advance 60,000 + penalty 700 + fine 300 → net 0. Fine and penalty are deducted, the advance is partly deducted, and the rest becomes a system ADV voucher for October. No line on the sheet is negative.
+10. **% increment**, 11. **fixed increment**, 12. **direct new salary**, 13. **mid-month increment pro-rata**, 14. **future-dated increment**, 15. **past date in an unposted month (allowed)**, 16. **past date in a posted month (blocked)**, 17. **bulk increment with exclusions**, 18. **overtime before and after an increment**, 19. **regenerating an old month**: see *Test checklist (increments)* above (same numbers: 49,500 · 46,000 · 47,500 · 52,267 · …).
+20. **Posting / unposting locks.**
+    - After posting September, editing September attendance and adding a September voucher are refused.
+    - HR can't unpost, and unpost needs a reason.
+    - Admin unpost → draft again: JV and carry voucher removed, loan installment back to scheduled, attendance editable.
+    - Show → Save → Post again works.
+21. **Daily wages weekly sheets.**
+    - Weekly 01–07 Sep posted, then an advance for a daily-wager is still accepted; weekly 08–14 Sep deducts it.
+    - Pay = rate × paid days.
+    - An overlapping period is refused.
+    - The print title names the period.
+22. **Delete rules.**
+    - Increments: see the increment checklist.
+    - Employees: deleting `0004` (has attendance) keeps it and sets it Inactive; a new employee without records is removed.
+23. **Roles.** A *Data Entry* user can save attendance and draft vouchers, but can't post vouchers or salary, lock dates, enter OT vouchers or add increments (403). A Viewer only sees and prints.
+24. **Reports.**
+    - Monthly sheet ("01 - Tuesday", rotated department, LWP / LWOP totals); employee-wise leave register.
+    - Salary sheet title and columns.
+    - Daily, employee-wise, shift-wise, overtime, vouchers, loans, DayBook, JV, employee list and ID cards (Code128 SVG) all render and print A4.
 
 ## Notes and open questions
 
