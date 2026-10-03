@@ -13,6 +13,8 @@ Web-based payroll and HR system for Pakistani factories. It rebuilds the workflo
 | 3 | Accounts vouchers + loan schedule + JV + voucher reports + DayBook | **Delivered** |
 | 4 | PayrollEngine, salary sheets, posting/locking, payslips, salary reports, unit tests | **Delivered** |
 | 5 | Dashboard, audit log viewer, rate settings, hardening, Hostinger deployment guide | **Delivered** |
+| + | Salary increment module: single / bulk increments, effective-dated salary, pro-rata salary sheet, OT at the salary of each date, history + 2 reports (see below) | **Delivered** |
+| ++ | Full-scope update: attendance day lock + admin unpost, net never negative (carry forward), salary unpost, weekly daily-wage sheets, Data Entry role, OT approval rules, print layouts (see below) | **Delivered** |
 
 The **full database schema for every module** is already in place (`migrations/001`–`005`), so later batches only add code.
 
@@ -144,7 +146,7 @@ Approved leave (L / LW) ──────────────────�
 | Item | Rule |
 |---|---|
 | Working hours | Always Out − In (never typed). The shift break is deducted when the stay exceeds half the shift span. |
-| Validation | Out ≤ In is rejected, except a manual Out on an overnight shift, which moves to the next day. Over 24 h is rejected. Over *max daily hours* (setting, default 16) is accepted but flagged. A single punch is flagged "Missing time out". |
+| Validation | Time Out earlier than Time In = a night shift crossing midnight (Out moves to the next day); Out equal to In is rejected; over 24 h is rejected. *(Changed in the full-scope update; previously only overnight shifts could cross midnight.)* Over *max daily hours* (setting, default 16) is accepted but flagged. A single punch is flagged "Missing time out" and no hours are invented. |
 | Late | Minutes after shift start, counted only when beyond the shift's grace minutes. |
 | Early | Minutes before shift end. |
 | OT candidate | Minutes after shift end, when ≥ the shift's *min OT*. On rest days and holidays, all worked time counts. Candidates arrive *Pending*. Approve, reject, or edit the hours in Overtime Approval. Only approved OT will reach payroll. |
@@ -269,8 +271,8 @@ All have Print/PDF and Excel/CSV. **Advance Salary**, **Incentive**, **Penalty**
 
 1. Choose **From / To** (defaults to the previous month; any period of up to 31 days, e.g. 26th–25th). The salary month is the month of **To**.
 2. **Show (F7)** computes every employee from attendance, approved overtime, posted vouchers and loan installments. Nothing is written.
-3. Review. Enter **Fine** and **Remarks** per row (Enter / ↓ moves to the next row). Rows with warnings show ⚠ (hover for details); a negative net is highlighted.
-4. **Save (F10)** stores a **draft** (one per type and month). Show again at any time to recalculate; saved fines and remarks are kept.
+3. Review. Enter **Fine** and **Remarks** per row (Enter / ↓ moves to the next row). Rows with warnings show ⚠ (hover for details). Net is never negative (see the full-scope section).
+4. **Save (F10)** stores a **draft** (one per month for Permanent; Daily Wages can be weekly / fortnightly / monthly). Show again at any time to recalculate; saved fines and remarks are kept.
 5. **Post & Lock** recalculates and compares with the saved draft. If attendance, overtime or vouchers changed in the meantime it refuses with "press Show and Save again". Otherwise it:
    - marks the vouchers, overtime rows and loan installments as consumed by the sheet (a short installment is carried forward and the loan is re-scheduled);
    - creates the system **salary JV**: Dr Salaries (work pay + allowances), Overtime, Incentives / Cr Employee Advances, Employee Loans, Penalty income (penalties + fines), EOBI payable, PESSI/SESSI payable, Income tax payable, Salaries payable (net). It always balances;
@@ -303,10 +305,10 @@ Every verified example from the specification is a unit test: 4,500 · 3,929 · 
 - The salary rate is the salary-info record effective on the **last day** of the period. A mid-period increment is not split.
 - **Unmarked days** (employed, no attendance row) are unpaid and flagged. Post attendance before running payroll.
 - A **half day without times** pays 0 hours and is flagged (enter the times in attendance).
-- If the salary can't cover the loan installment, the installment is reduced and the balance carried forward. Advances, penalties and statutory amounts are never reduced, so a **negative net** is shown and highlighted. On posting, the shortfall is debited back to Employee Advances (it is not netted against other employees' payable). Recover it with an advance voucher next month.
+- *(Superseded by the full-scope update.)* Net is never negative: the loan installment is reduced first and its balance rescheduled; then the advance, penalty and fine that the salary can't cover are carried forward to the next period as system vouchers.
 - Income tax is annualised from the month's salary, with no year-to-date reconciliation. The JV books only the **employee share** of EOBI / PESSI (the employer share is a separate challan entry).
 - **Fine** is entered on the salary sheet. **Penalty** comes from posted penalty vouchers.
-- Posted salary sheets can't be unposted (per the "posted months are locked" rule).
+- *(Superseded.)* An administrator can unpost the latest posted sheet, with a reason; it is audit-logged.
 
 ### Reports (Print / PDF; CSV where noted)
 
@@ -458,6 +460,246 @@ An independent security review and a payroll-correctness review of the whole sys
 - **Posting consumes vouchers and OT with guarded updates** (`salary_sheet_id IS NULL`, still posted / approved). A concurrent change makes posting stop instead of silently using stale data.
 
 Tests: `php tests/run.php` → 49 passed (adds the fixed-basis cases).
+
+## Salary increment module
+
+Admins enter every increment by hand; nothing is applied automatically. Increments can be **percentage**, **fixed amount** or a **direct new salary**, and each takes effect from an effective date. Payroll and overtime always price a date with the salary effective on that date.
+
+### How it works
+
+- **One source for the pay rate.** `salary_increments` holds the rate over time: the monthly basic for permanent and contract staff, and the rate per day for daily wages. `App\Increments::getSalaryOnDate($employeeId, $date): string` returns the latest `new_salary` with `effective_date <= $date` (ties go to the highest `id`), as a decimal string. Payroll calls it through a per-request cache, so a whole sheet costs one query.
+- **Other salary terms stay where they were.** `employee_salary_history` still holds allowances, OT applicability and the fixed OT rate, the EOBI / PESSI / tax flags, and the payment mode and bank. Its `basic_salary` and `daily_rate` columns are no longer read by payroll. New records store a snapshot of the increment rate there.
+- **`employees.basic_salary`** (new column) is a cached copy of the salary effective **today**. It is refreshed after every increment write and once a day: the first API request of the day, or the optional cron `tools/sync_salaries.php`. A future increment therefore doesn't change it until its date.
+- **Calculation.** New salary = old + old × % / 100, or old + amount, or the value itself. It is rounded half up to a whole rupee. The value must be > 0 and the new salary must be > 0. All increment, pro-rata and OT arithmetic uses integer paisa (`App\Money::toPaisa / divRound`), never float.
+- **Date rules.**
+  - The effective date defaults to today (Asia/Karachi). It must be after the joining date and not after the leaving date.
+  - **Future** dates are allowed. The increment shows as *Scheduled* until its date.
+  - **Past** dates are allowed only if no salary sheet with this employee is posted for that month or any later month. Arrears are not calculated.
+  - Only one increment per employee per date.
+  - A new increment must be dated **after** the employee's latest one. To add an earlier one, delete the later one first. This keeps `old_salary` correct.
+- **Pro-rata.** When an effective date falls inside a salary period, the period is split into segments. Each segment pays `segment salary ÷ days in month × paid days in that segment`. Absent days, leave, half days and unmarked days are counted per segment. Fines are still one amount per row.
+  - On the fixed 30 / 26-day basis, the last segment absorbs the difference between the divisor and the calendar length, so a full month still pays exactly the blended salary.
+  - Daily wages pay each segment's rate × its present days.
+  - The row gets **▲ inc** on screen (hover for the split) and **▲** plus a footnote on the printed sheet. The split is stored in `salary_sheet_lines.increment_note`.
+- **Overtime.** Each approved OT row is priced with the salary effective on its `ot_date`, and each OT-voucher hour with the salary on its voucher date. The rate is `salary ÷ (days in month × shift hours) × multiplier` (daily wages: `rate ÷ shift hours × multiplier`). The multiplier comes from Company Settings → *Overtime multiplier* (1, 1.5, 2…). If OT falls on both sides of an increment, the sheet shows a blended rate (so hours × rate = amount), and the note lists each rate. An employee's fixed OT rate, if set, still overrides all of this.
+- **Deleting.**
+  - Only the employee's latest increment can be deleted, and never the joining row.
+  - It can't be deleted if a salary sheet is posted for its month or later.
+  - `employees.basic_salary` is recalculated afterwards.
+  - There is no edit. To correct an increment, delete it and add it again.
+- **Permissions.**
+  - Add, bulk-apply and delete: admin-role users only (the router's `'admin'` permission).
+  - History and both reports: anyone with `employees.view` / `employees.print`.
+  - Every write is in a DB transaction and audit-logged (`salary_increments` create / delete / bulk; joining-row moves).
+
+### Screens
+
+- **Payroll → Salary Increment** (`#/increments[/{employee id}]`): pick the employee (code + Enter, or F2).
+  - The screen shows the current salary and any scheduled increments.
+  - Choose the type, value, effective date, approver and reason. A live server preview shows old salary → new salary, the change and %, Applied / Scheduled, and any rule that blocks it. **F10** saves.
+  - The history grid below has *Delete* on the latest row. **F9** prints the employee's history.
+- **Payroll → Bulk Increment** (`#/increments/bulk`, admins only): choose a department or shift group, optionally monthly or daily-wages staff only, then a percentage or fixed amount, date and reason.
+  - **Preview (F7)** lists every employee with old / new salary. Employees who fail a rule are greyed out with the reason.
+  - Untick employees to exclude them, then **Confirm & Apply (F10)**.
+  - Everything is saved in one transaction: if any ticked employee fails a rule at save time, nothing is saved.
+- **Employee Info → Increment History** tab: date, type, value, old / new salary, reason, approved by, created by, and status (Applied / Scheduled, plus *Posted* when locked).
+- **Reports → Employees:**
+  - **Increment Register:** date range and department; grouped by department, with old vs new salary cost per department and in total; CSV.
+  - **Employee Increment History:** one employee's timeline from joining, with current, joining and scheduled salary; CSV.
+
+### API endpoints
+
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/api/employees/{id}/increments` → `{employee (current_salary), rows}` | employees.view |
+| GET | `/api/increments/meta` → approvers, `can_manage` | employees.view |
+| GET | `/api/increments/preview?employee_id=&increment_type=&increment_value=&effective_date=` | admin |
+| POST | `/api/increments` `{employee_id, increment_type: percentage\|fixed\|new_salary, increment_value: "10.5", effective_date, reason?, approved_by?}` | admin |
+| POST | `/api/increments/bulk/preview` `{scope: department\|shift_group, scope_id, emp_group?: monthly\|daily, increment_type: percentage\|fixed, increment_value, effective_date}` | admin |
+| POST | `/api/increments/bulk` (same + `employee_ids: [...]` = the ticked employees, `reason?`, `approved_by?`) | admin |
+| DELETE | `/api/increments/{id}` | admin |
+| GET | `report.php?r=increment_register&from=&to=&department_id=&include_joining=1` · `r=employee_increments&employee_id=\|code=` (+ `&format=csv`) | employees.print |
+
+### Files
+
+**New**
+- `migrations/012_salary_increments.sql`: the table (spec DDL with `INT UNSIGNED` + foreign keys to match `employees` / `users`); backfill from salary history; `employees.basic_salary`; `salary_sheet_lines.increment_note`.
+- `migrations/seeds/120_demo_increments.sql`: the same backfill for the demo seed, which loads employees after 012.
+- `app/Increments.php`: `getSalaryOnDate`, segments, formulas, date rules, add / bulk / delete, `basic_salary` sync.
+- `api/controllers/IncrementController.php`
+- `app/Reports/IncrementRegisterReport.php`, `app/Reports/EmployeeIncrementReport.php`
+- `public/assets/js/pages/increments.js`: single and bulk screens, plus the shared history grid.
+- `tools/sync_salaries.php`: optional hPanel cron.
+- `tests/IncrementsTest.php`
+
+**Changed**
+- `app/Money.php`: integer-paisa helpers (`toPaisa`, `fromPaisa`, `divRound`, `roundRupees`).
+- `app/PayrollEngine.php`: optional `segments` (pro-rata) and `ot_items` (per-date OT pricing) inputs, computed in paisa. Without them the result is exactly as before.
+- `app/Payroll.php`: the rate comes from `getSalaryOnDate`. Attendance is counted per salary segment, and OT rows and OT vouchers are priced by their date. It writes `increment_note`. A sheet with no increment inside its period is unchanged: Jun, Sep and Oct 2026, on calendar, fixed30 and fixed26, were compared line by line with the previous code, all identical.
+- `api/router.php`: increment routes, the `'admin'` route permission, and the daily `basic_salary` sync.
+- `api/controllers/EmployeeController.php`:
+  - a new employee gets a *joining* row (from the basic salary or daily rate typed on the Salary Info tab);
+  - changing the joining date moves that row (refused if an increment or posted salary is in the way);
+  - the list reads `employees.basic_salary`;
+  - salary info records no longer take a typed rate (the server stores the increment snapshot).
+- `app/Reports/EmployeeListReport.php`: salary column from `employees.basic_salary`.
+- `app/Reports/SalarySheetReport.php`: ▲ marker, footnote and CSV column for mid-period increments.
+- `public/report.php`: registers the two reports.
+- `public/assets/js/app.js`: menu items and routes.
+- `public/assets/js/pages/employee.js`:
+  - new *Increment History* tab;
+  - the Salary Info dialog drops the basic / daily rate fields, because the rate is managed by increments (the initial salary of a new employee is still typed there);
+  - tab indexes shifted.
+- `public/assets/js/pages/salary.js`: ▲ inc badge with tooltip, and a formula note.
+- `public/assets/js/pages/reports.js`: the two report cards.
+- `DEPLOY.md`: upgrade note and optional cron.
+
+### Decisions to confirm
+
+- **`employees.basic_salary` didn't exist.** The salary lived only in `employee_salary_history`. It was added as a synced cache, as the spec asked. For daily-wages staff it holds the rate per day.
+- **Backfill uses the full history, not only the current salary.** A single joining row at today's salary would make re-generated old months (e.g. June 2026 for `0001`: 145,000, not 160,000) use the wrong salary. Employees without any salary record get a joining row of 0. Migrated amounts are kept exactly, not rounded.
+- **Changing the employee type** between daily wages and monthly doesn't convert the rate. Add a *new salary* increment from the change date.
+- **Bulk fixed amounts** on mixed groups: the *Employees* filter defaults to *Monthly* so a Rs 3,000 increment doesn't hit daily rates by accident.
+- **Posted-month lock is per employee.** It checks posted sheets that have a line for that employee (salary month ≥ the effective month, or a period reaching the date).
+- **Existing engine deductions** (EOBI / PESSI / tax / loans) still use the batch-4 float code, rounded to whole rupees. Only work pay, OT and increment arithmetic moved to paisa.
+- **Observed, not changed:** the Salary Sheet screen opens on the previous month. When that month is posted, the From / To fields stay read only; open another month from the *Sheets:* buttons.
+
+### Test checklist (increments)
+
+Automated: `php tests/run.php` → 62 passed (13 new in `IncrementsTest.php`). The scenarios below were also run end to end through the HTTP API on a fresh `--seed` database (56 checks, all passing). Today = 03-10-2026 in the examples.
+
+1. **% increment.** `0003` (45,000): 10% from 15-10-2026 → preview 45,000 → 49,500 (+4,500, 10.00%), Scheduled. 7.5% of 75,000 = 80,625; 3.33% of 44,000 = 45,465.20 → **45,465**.
+2. **Fixed increment.** `0004` (43,000): +3,000 from 01-10-2026 → 46,000, *Applied*. The employee list shows 46,000.
+3. **Direct new salary.** `0006`: new salary 47,500.40 from today → 47,500, old salary 42,000.
+4. **Mid-month increment with pro-rata.** Before posting September, `0005` (52,000; LWP on 1 Sep, absent on 30 Sep): +8,000 from 16-09-2026. Show September → work pay **52,267** = 52,000/30×14 + 60,000/30×14. Basic 60,000. The row has **▲ inc** with the split in its tooltip, and the printed sheet has ▲ and a footnote.
+5. **Future-dated increment.** After step 1, `employees.basic_salary` for `0003` stays 45,000 and the history shows *Scheduled*. On 15-10, the first request of the day (or the cron) makes it 49,500. October's draft splits at 15-10.
+6. **Past date in an unposted month (allowed).** Step 2 (01-10-2026 while October isn't posted).
+7. **Past date in a posted month (blocked).** Post September, then try `0009` from 20-09-2026 → "Salary for September 2026 is already posted for this employee…". 01-08-2026 is also refused, because a later month is posted.
+8. **Bulk increment with exclusions.** Bulk → Department *Administration*, Monthly, 5%, 01-11-2026 → Preview shows `0001` 160,000 → 168,000 and `0015` 40,000 → 42,000. Untick `0015` → Apply → only `0001` is saved. Bulk +1,000 from 25-09-2026 on a department after September is posted → refused, **nothing** saved.
+9. **Overtime before and after an increment.** `0005`: approve 2 h OT on 10-09 and 2 h on 17-09 → OT = 2 h × (52,000 ÷ (30 × shift h) × 2) + 2 h × (60,000 ÷ (30 × shift h) × 2). The tooltip lists both rates. Change the multiplier to 1.5 in Company Settings → an unposted month uses the new rate.
+10. **Regenerating an old month's sheet.** August draft for `0005` still uses 52,000. June 2026 for `0001` uses 145,000, not 160,000. A posted September is returned as stored.
+11. **Delete rules.**
+    - The joining row → "cannot be deleted".
+    - A non-latest increment → "Only the latest…".
+    - `0005`'s 16-09 increment (September posted) → refused.
+    - The latest scheduled or applied increment → deleted, and `basic_salary` returns to the old value (`0004` → 43,000).
+    - Re-adding it works (correct = delete + add).
+12. **Validation.** Duplicate date, a date before the latest increment, value 0, a negative value, 3 decimals, before joining, and after the leaving date (`0014`) → each refused with a clear message.
+13. **Permissions.**
+    - As `hr`: the menu shows *Salary Increment* (history only, no form) but not *Bulk Increment*.
+    - As `hr`, `POST /api/increments`, `/bulk` and `DELETE` → 403. `accounts` → 403.
+    - History and reports work.
+14. **New employee.** Create an employee with basic 38,000 joining 01-10-2026 → a *joining* row of 38,000. Change the joining date to 28-09-2026 → the joining row moves.
+15. **Reports.** Increment Register 01-09 → 31-12 (department sub-totals, grand total old vs new, CSV). Employee Increment History for `0001` (145,000 → 160,000 → scheduled 168,000). Both print in A4 with Page X of Y.
+
+## Full-scope update (Al Nahar parity)
+
+The full specification (setup, attendance, accounts, salary sheets, users and roles, increments) was checked against this codebase module by module. Most of it already existed (batches 1–5 and the increment module above). This update adds only what was missing; nothing else was rewritten. Migration: `013_full_scope.sql`.
+
+### What was added or changed
+
+| Spec | Change |
+|---|---|
+| 1.1 Settings | **Late grace minutes** (company default; a shift's own grace overrides it) and the **barcode repeat window** in Company Settings. The OT multiplier help text now explains the per-date formula. |
+| 1.5 Shift groups | **Shift group history** (`employee_shift_history`): every change of group or rotation start is kept and shown on Employee Info. |
+| 1.6 Employee delete | An employee with attendance, salary, voucher, overtime, leave or punch records is **kept and set Inactive** (soft delete, audit-logged). Only an employee without any records is removed. |
+| 2 Statuses | Stored codes L / LW are shown everywhere as **LWP / LWOP** (screens, reports, CSV). |
+| 2.1 Attendance voucher | **Status filter** in the header (Auto Attendance, voucher number, department and prev/next already existed). |
+| 2.2 Barcode | Repeat scans ignored within **2 minutes** (setting `scan_repeat_seconds` = 120; existing installs at the old 60 s default are moved to 120). |
+| 2.4 Working hours | Time Out earlier than Time In = **crossing midnight on any shift** (previously only overnight shifts). Out = In is rejected. A missing time out is flagged and no hours are invented (unchanged). |
+| 2.5 Daily Attendance Post | **Post & lock dates** (admin) on the Daily Attendance Post screen. Posting is refused while a *missing time out* exists. A posted date can't be entered, edited, deleted, re-processed from punches or filled by leave. **Admin unpost** needs a reason and is audit-logged. Punches that arrive for a locked date wait and are applied after an unpost. |
+| 2.6 Overtime | Approved hours can only be **edited down** (never above the overtime worked, or the hours entered manually). **Manual overtime** (Overtime Approval → Manual OT, and the Overtime Voucher) is **admin only, with a reason**. Manual rows are flagged `is_manual` and are no longer touched by attendance re-posting. |
+| 2.7 Leave register | **Employee-wise** register (employee code filter). |
+| 2.8 Monthly sheet | Day headers **"01 - Wednesday"** (vertical), a **rotated department label** per group, and totals **P, A, LWP, LWOP, R** (+ H, HD). |
+| 3.2 Loans | **Skip / change an installment: admin only** (audit-logged as before). |
+| 4.1 Net never negative | Deduction order: fine → penalty → advance → loan. The **loan installment gives way first** (balance rescheduled). Then advance, penalty and fine that the pay can't cover are **carried forward**: posting creates system ADV / PEN vouchers for the next period (no extra journal; the advance stays receivable). The sheet shows the warning; the print lists what was carried. |
+| 4.1 Unpost | **Admin unpost** of the latest posted sheet (reason required, audit-logged). It reverses everything posting did: removes the salary JV and carry vouchers, releases vouchers, overtime and loan installments (installments get their exact previous status back; loans are rescheduled), and makes the sheet a draft. Refused while a later sheet with the same employees is posted. |
+| 4.2 Daily wages | **Weekly / fortnightly / monthly** sheets (period presets). Several daily-wages sheets per month (one per start date, no overlaps). Vouchers and loan installments still open are taken by the next sheet the employee is on, so a daily-wager's month never closes to new vouchers. |
+| 4.3 Print | Title **"Salary Sheet For The Month Of September, 2026"** (weekly sheets name the period). Columns per spec: Sr, ID, Employee Name, Designation, Paid Days, Basic Salary, Gross, OT Hour, OT Rate, Overtime, Advance, Loan Ded., Remaining Bal., Incentive, Penalty, Fine, Net Salary, Signature. Department sub-totals, grand total, landscape, page X of Y. |
+| 5 Roles | New **Data Entry** role: setup, attendance, vouchers, loans, leave, salary drafts. It has no posting / unposting, no OT approval, no increments, and no users. Admin and Viewer exist. |
+
+### Hostinger quick reference
+
+Full steps are in [DEPLOY.md](DEPLOY.md).
+
+- **Config:** `../payroll-config.php`, one level above the app folder, so Git redeploys can't wipe it. Copy it from `config.sample.php`: DB credentials, `storage_path`, `setup_key`.
+- **Photos and logos:** `storage_path` in that config, pointing **outside** `public_html`, e.g. `/home/u123456789/domains/example.com/payroll_storage`. Redeploys don't touch it, and files are served only through `file.php` after a login check. System Health warns if it's inside the deploy folder.
+- **Migrations:** `https://example.com/migrate.php?key=…` (browser) or `php migrations/migrate.php` (SSH). Upgrades apply only new migrations.
+- **hPanel cron (optional):** `5 0 * * *  /usr/bin/php /home/USER/domains/example.com/public_html/tools/sync_salaries.php`. It moves scheduled increments into `employees.basic_salary` at midnight; without it, the first request of the day does the same.
+- **ZKTeco ADMS:** on the device, *Comm → Cloud Server Setting*: server = your domain, port 80, Domain-name mode on. The device appears under **Attendance → Devices, Kiosk & TV** as inactive; tick *Active* and optionally set its internet IP. Enter each employee's enrollment number as **Machine ID**. Exported logs (CSV / Excel / attlog.dat) go through **Machine Log Import**.
+
+### API endpoints added
+
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/api/attendance/day-posts?from=&to=` | attendance.view |
+| POST | `/api/attendance/day-posts` `{from, to, remarks?}` (post & lock) | admin |
+| POST | `/api/attendance/day-posts/unpost` `{date, reason}` | admin |
+| POST | `/api/salary/sheets/{id}/unpost` `{reason}` | admin |
+| POST | `/api/overtime` (manual OT, `remarks` = reason required) | admin (was overtime.add) |
+| POST | `/api/loans/{id}/installments/{iid}` (skip / adjust / reset) | admin (was loans.edit) |
+| POST/PUT | `/api/vouchers/ot` (overtime voucher, `remarks` required) | admin |
+| GET | `report.php?r=leave_register&code=` (employee-wise) | leave.print |
+
+### Files
+
+**New:** `migrations/013_full_scope.sql`, `migrations/seeds/130_demo_shift_history.sql`, `app/DayLock.php`.
+
+**Changed:**
+- `app/AttendanceEngine.php`: day lock, company grace, out-before-in crosses midnight, manual OT rows protected, approved OT never above worked OT.
+- `app/Payroll.php`: carry-forward, unpost, daily-wages periods, joining boundary not shown as an increment.
+- `app/PayrollEngine.php`: net never negative.
+- `app/PayrollLock.php`: a daily-wages month doesn't close to vouchers.
+- `app/Settings.php`, `app/Reports/Report.php`, `app/Reports/MonthlyAttendanceReport.php`, `app/Reports/SalarySheetReport.php`, `app/Reports/{Daily,Employee,Shift}AttendanceReport.php`, `app/Reports/LeaveReport.php`.
+- `api/router.php`, `api/controllers/{Attendance,AttendanceVoucher,Leave,Overtime,Voucher,Salary,Employee}Controller.php`.
+- `public/assets/js/pages/{attendance-post,attendance-voucher,overtime,salary,settings,employee,reports}.js`.
+- Tests: `tests/{PayrollEngine,Attendance}Test.php`.
+
+### Decisions to confirm
+
+- **EOBI / PESSI / income tax, payslips and the bank transfer list already existed** (batches 4–5), although the spec says not to add them. I did **not** delete them: they are off unless enabled on an employee's salary info, and the salary sheet print shows their columns only when a sheet has such amounts. Say the word and I'll remove them completely (menu, reports, engine, JV lines, rates screen).
+- **Leave types:** the spec has LWP / LWOP. The existing leave register has typed leave (CL, SL, AL = with pay; LWP = without pay) with quotas. These are shown as LWP / LWOP in attendance.
+- **Carry-forward order:** the spec says to cap the loan first. After the loan, the advance gives way before the penalty and fine, because the advance stays a receivable and is simply recovered next period.
+- **Attendance day lock** is company-wide per date and blocks attendance only. Overtime approval and vouchers keep their own workflow; posted salary still locks everything.
+
+### Full test checklist
+
+Automated: `php tests/run.php` → **63 passed**. The end-to-end scripts were run through the HTTP API on a fresh `--seed` database: **61 checks** (full scope) + **59 checks** (increments), all passing. A September sheet without increments is line-for-line identical to the previous version.
+
+1. **Night shift hours.** Attendance Voucher, 01-10-2026, employee on shift N: In 20:00, Out 08:00 → Out on 02-10, hours = 12 h − break (11:00). Out equal to In is rejected.
+2. **Missing time out.** Enter only Time In → row flagged *Missing time out*, 0 hours. **Post & lock** that date is refused until it is corrected.
+3. **Auto attendance.** Attendance Voucher → date + department → F7 → tick *Auto Attendance* → everyone P → F10. The status filter shows only the chosen status.
+4. **Duplicate attendance blocked.** Save the same date / department again → rows are updated, never duplicated (one row per employee per date).
+5. **Daily post lock.**
+   - Post & lock 01-10 → editing that date is refused, even for an admin.
+   - Unpost needs an admin and a reason; the audit log shows it.
+   - After the unpost, the date can be edited again.
+6. **Barcode.** Kiosk: scan `0008` → IN with photo and name. Scan again within 2 minutes → "already scanned".
+7. **Overtime approval.**
+   - Approving more than the worked or entered time is refused; lowering works.
+   - Manual OT without a reason, or by a non-admin, is refused.
+   - Only approved OT reaches the sheet.
+8. **Loan installments until balance 0.** Loan 10,000 @ 4,000 → schedule 4,000 + 4,000 + 2,000. Post September → 4,000 deducted, Remaining Bal. 6,000, next installments 4,000 + 2,000. When the salary is short, the installment is reduced and rescheduled. Skip / change is admin only.
+9. **Net salary never negative.** `0009`: advance 60,000 + penalty 700 + fine 300 → net 0. Fine and penalty are deducted, the advance is partly deducted, and the rest becomes a system ADV voucher for October. No line on the sheet is negative.
+10. **% increment**, 11. **fixed increment**, 12. **direct new salary**, 13. **mid-month increment pro-rata**, 14. **future-dated increment**, 15. **past date in an unposted month (allowed)**, 16. **past date in a posted month (blocked)**, 17. **bulk increment with exclusions**, 18. **overtime before and after an increment**, 19. **regenerating an old month**: see *Test checklist (increments)* above (same numbers: 49,500 · 46,000 · 47,500 · 52,267 · …).
+20. **Posting / unposting locks.**
+    - After posting September, editing September attendance and adding a September voucher are refused.
+    - HR can't unpost, and unpost needs a reason.
+    - Admin unpost → draft again: JV and carry voucher removed, loan installment back to scheduled, attendance editable.
+    - Show → Save → Post again works.
+21. **Daily wages weekly sheets.**
+    - Weekly 01–07 Sep posted, then an advance for a daily-wager is still accepted; weekly 08–14 Sep deducts it.
+    - Pay = rate × paid days.
+    - An overlapping period is refused.
+    - The print title names the period.
+22. **Delete rules.**
+    - Increments: see the increment checklist.
+    - Employees: deleting `0004` (has attendance) keeps it and sets it Inactive; a new employee without records is removed.
+23. **Roles.** A *Data Entry* user can save attendance and draft vouchers, but can't post vouchers or salary, lock dates, enter OT vouchers or add increments (403). A Viewer only sees and prints.
+24. **Reports.**
+    - Monthly sheet ("01 - Tuesday", rotated department, LWP / LWOP totals); employee-wise leave register.
+    - Salary sheet title and columns.
+    - Daily, employee-wise, shift-wise, overtime, vouchers, loans, DayBook, JV, employee list and ID cards (Code128 SVG) all render and print A4.
 
 ## Notes and open questions
 

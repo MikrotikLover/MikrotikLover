@@ -98,15 +98,18 @@ return [
         $r = $e->calculate(['type' => 'permanent', 'days' => 30, 'basic' => 160000, 'work_days' => 30, 'tax_slabs' => $slabs]);
         assert_eq(7100.0, $r['income_tax']); // 1,920,000 a year -> 6,000 + 11% x 720,000 = 85,200 -> 7,100 a month
     },
-    'loan installment reduced when salary is not enough (carry forward)' => function () use ($e) {
+    'loan installment reduced when salary is not enough (carry forward); net never negative' => function () use ($e) {
         $r = $e->calculate(['type' => 'permanent', 'days' => 30, 'basic' => 30000, 'work_days' => 3, 'advance' => 1000, 'loan_planned' => 4000]);
         assert_eq(3000.0, $r['work_pay']);
         assert_eq(2000.0, $r['loan_deduction']);
         assert_eq(0.0, $r['net_salary']);
         assert_true(str_contains(implode(' ', $r['warnings']), 'carried forward'));
+        // net is never negative: the advance not covered is carried forward
         $r = $e->calculate(['type' => 'permanent', 'days' => 30, 'basic' => 30000, 'work_days' => 1, 'advance' => 5000]);
-        assert_eq(-4000.0, $r['net_salary']);   // advances are never reduced: flagged for review
-        assert_true(str_contains(implode(' ', $r['warnings']), 'negative'));
+        assert_eq(0.0, $r['net_salary']);
+        assert_eq(1000.0, $r['advance']);
+        assert_eq(4000.0, $r['advance_carried']);
+        assert_true(str_contains(implode(' ', $r['warnings']), 'carried forward'));
     },
     'paid days capped at the divisor; day basis' => function () use ($e) {
         $r = $e->calculate(['type' => 'permanent', 'days' => 26, 'basic' => 26000, 'work_days' => 26, 'rest_days' => 4]);
@@ -140,5 +143,27 @@ return [
         assert_eq(3929.0, (new PayrollEngine('up'))->round(3928.01));
         assert_eq(4500.0, (new PayrollEngine('up'))->round(4500.0000000001));
         assert_eq(-3.0, (new PayrollEngine('half_up'))->round(-2.5));
+    },
+    'net never negative: loan capped first, then advance, penalty, fine carried forward' => function () use ($e) {
+        // work pay 3,000; deductions: fine 500, penalty 1,000, advance 2,000, loan 1,500
+        $r = $e->calculate(['type' => 'permanent', 'days' => 30, 'basic' => 30000, 'work_days' => 3,
+            'fine' => 500, 'penalty' => 1000, 'advance' => 2000, 'loan_planned' => 1500]);
+        assert_eq(0.0, $r['loan_deduction']);    // loan gives way first
+        assert_eq(1500.0, $r['advance']);        // then the advance: 500 carried
+        assert_eq(500.0, $r['advance_carried']);
+        assert_eq(1000.0, $r['penalty']);
+        assert_eq(500.0, $r['fine']);
+        assert_eq(0.0, $r['net_salary']);
+        // only the penalty and fine exceed the pay: advance fully carried, fine deducted first
+        $r = $e->calculate(['type' => 'permanent', 'days' => 30, 'basic' => 30000, 'work_days' => 1, 'fine' => 600, 'penalty' => 700, 'advance' => 100]);
+        assert_eq(600.0, $r['fine']);
+        assert_eq(400.0, $r['penalty']);
+        assert_eq(300.0, $r['penalty_carried']);
+        assert_eq(100.0, $r['advance_carried']);
+        assert_eq(0.0, $r['net_salary']);
+        // enough pay: nothing carried
+        $r = $e->calculate(['type' => 'permanent', 'days' => 30, 'basic' => 30000, 'work_days' => 30, 'fine' => 600, 'advance' => 1000, 'loan_planned' => 2000]);
+        assert_eq(26400.0, $r['net_salary']);
+        assert_eq(0.0, $r['advance_carried'] + $r['penalty_carried'] + $r['fine_carried']);
     },
 ];

@@ -41,6 +41,8 @@ const NAV = [
   { group: 'Payroll', items: [
     { path: '/salary/permanent', label: 'Salary Sheet — Permanent', ico: '₨', perm: ['salary', 'view'] },
     { path: '/salary/daily', label: 'Salary Sheet — Daily Wages', ico: '⚒', perm: ['salary', 'view'] },
+    { path: '/increments', label: 'Salary Increment', ico: '↗', perm: ['employees', 'view'] },
+    { path: '/increments/bulk', label: 'Bulk Increment', ico: '⇈', perm: ['employees', 'view'], admin: true },
   ] },
   { group: 'Reports', items: [
     { path: '/reports', label: 'Reports & ID Cards', ico: '⎙', perm: ['reports', 'view'] },
@@ -80,6 +82,9 @@ route('/accounts', page('masters'), { title: 'Chart of Accounts', perm: ['journa
 route('/devices', page('masters'), { title: 'Attendance Devices, Kiosk & TV', perm: ['devices', 'view'], kind: 'devices' });
 route('/salary/permanent', page('salary'), { title: 'Salary Sheet — Permanent', perm: ['salary', 'view'], kind: 'permanent' });
 route('/salary/daily', page('salary'), { title: 'Salary Sheet — Daily Wages', perm: ['salary', 'view'], kind: 'daily_wages' });
+route('/increments/bulk', page('increments'), { title: 'Bulk Salary Increment', perm: ['employees', 'view'], kind: 'bulk' });
+route('/increments', page('increments'), { title: 'Salary Increment', perm: ['employees', 'view'] });
+route('/increments/:id', page('increments'), { title: 'Salary Increment', perm: ['employees', 'view'] });
 route('/settings/rates', page('rates'), { title: 'EOBI / PESSI / SESSI & Income Tax Slabs', perm: ['settings', 'view'] });
 route('/audit', page('audit'), { title: 'Audit Log', perm: ['audit', 'view'] });
 route('/system', page('system'), { title: 'System Health', perm: ['settings', 'edit'] });

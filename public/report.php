@@ -17,6 +17,8 @@ declare(strict_types=1);
  *   report.php?r=journal&from=&to=&account_id=&id=
  *   report.php?r=daybook&from=&to=&types=ADV,LOAN,...&include_drafts=1
  *   report.php?r=voucher&id=   (printable voucher slip)
+ *   report.php?r=increment_register&from=&to=&department_id=&include_joining=1
+ *   report.php?r=employee_increments&employee_id=|code=
  */
 require dirname(__DIR__) . '/app/bootstrap.php';
 
@@ -44,6 +46,8 @@ const REPORTS = [
     'payslips'            => Reports\PayslipReport::class,
     'salary_bank'         => Reports\BankTransferReport::class,
     'salary_departments'  => Reports\DepartmentSalaryReport::class,
+    'increment_register'  => Reports\IncrementRegisterReport::class,
+    'employee_increments' => Reports\EmployeeIncrementReport::class,
 ];
 
 Http::noStore();

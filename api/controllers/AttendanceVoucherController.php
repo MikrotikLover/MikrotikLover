@@ -8,6 +8,7 @@ use App\AttendanceEngine;
 use App\Audit;
 use App\Auth;
 use App\Database;
+use App\DayLock;
 use App\PayrollLock;
 use App\Request;
 use App\Validator;
@@ -95,7 +96,7 @@ final class AttendanceVoucherController
                 'source'       => $a['source'] ?? null,
                 'saved'        => $a !== null,
                 'flag_reason'  => $a['flag_reason'] ?? null,
-                'locked'       => PayrollLock::isLocked($e['emp_type'], $date, $id),
+                'locked'       => PayrollLock::isLocked($e['emp_type'], $date, $id) || DayLock::isPosted($date),
             ];
         }
         return [
@@ -153,6 +154,7 @@ final class AttendanceVoucherController
             $a = Database::one('SELECT a.*, e.emp_type, e.code FROM attendance_daily a JOIN employees e ON e.id = a.employee_id WHERE a.employee_id = ? AND a.att_date = ?', [$eid, $date]);
             if ($a) {
                 PayrollLock::assertOpen($a['emp_type'], $date, 'Attendance', (int)$a['employee_id']);
+                DayLock::assertOpen($date);
                 $deletes[] = $a;
             }
         }
@@ -200,6 +202,7 @@ final class AttendanceVoucherController
         $rows = Database::all('SELECT a.*, e.emp_type FROM attendance_daily a JOIN employees e ON e.id = a.employee_id WHERE a.voucher_id = ?', [$v['id']]);
         foreach ($rows as $a) {
             PayrollLock::assertOpen($a['emp_type'], $a['att_date'], 'Attendance', (int)$a['employee_id']);
+            DayLock::assertOpen($a['att_date']);
         }
         Database::transaction(function () use ($v, $rows) {
             foreach ($rows as $a) {

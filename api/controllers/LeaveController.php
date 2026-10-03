@@ -9,6 +9,7 @@ use App\Audit;
 use App\Auth;
 use App\Calendar;
 use App\Database;
+use App\DayLock;
 use App\PayrollLock;
 use App\Request;
 use App\Validator;
@@ -204,6 +205,9 @@ final class LeaveController
             $emp = Database::one('SELECT * FROM employees WHERE id = ?', [$l['employee_id']]);
             foreach (Calendar::dates($l['from_date'], $l['to_date']) as $dt) {
                 PayrollLock::assertOpen($emp['emp_type'], $dt, 'Leave', (int)$emp['id']);
+                if ($dt <= date('Y-m-d')) {
+                    DayLock::assertOpen($dt, 'Leave'); // leave fills attendance of past days
+                }
             }
             Database::update('leave_register', [
                 'status' => $status,

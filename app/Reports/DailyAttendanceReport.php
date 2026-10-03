@@ -130,7 +130,7 @@ final class DailyAttendanceReport extends Report
                 . '<td>' . self::time($r['time_in']) . '</td><td>' . self::time($r['time_out']) . '</td>'
                 . '<td class="num">' . self::hm($r['work_minutes']) . '</td><td class="num">' . self::hm($r['late_minutes']) . '</td>'
                 . '<td class="num">' . self::hm($r['early_minutes']) . '</td><td class="num">' . self::hm($r['ot_minutes']) . '</td>'
-                . '<td><b>' . self::e($r['status'] ?? '—') . '</b></td>'
+                . '<td><b>' . self::e($r['status'] === null ? '—' : self::statusCode($r['status'])) . '</b></td>'
                 . '<td>' . self::e(trim(($r['remarks'] ?? '') . ' ' . ($r['flag_reason'] ?? ''))) . '</td></tr>';
         }
         $flush();
@@ -142,7 +142,7 @@ final class DailyAttendanceReport extends Report
         $out = [['Date', 'Department', 'Code', 'Name', 'Designation', 'Shift', 'Time In', 'Time Out', 'Work Minutes', 'Late Minutes', 'Early Minutes', 'OT Minutes', 'Status', 'Remarks']];
         foreach ($this->fetch() as $r) {
             $out[] = [$this->day(), $r['department'], $r['code'], $r['name'], $r['designation'], $r['shift_code'], self::time($r['time_in']),
-                self::time($r['time_out']), $r['work_minutes'], $r['late_minutes'], $r['early_minutes'], $r['ot_minutes'], $r['status'],
+                self::time($r['time_out']), $r['work_minutes'], $r['late_minutes'], $r['early_minutes'], $r['ot_minutes'], self::statusCode($r['status']),
                 trim(($r['remarks'] ?? '') . ' ' . ($r['flag_reason'] ?? ''))];
         }
         return $out;

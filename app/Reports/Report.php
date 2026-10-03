@@ -207,8 +207,16 @@ HTML;
         return $name ? "$label: " . self::e((string)$name) : null;
     }
 
+    /** Printed codes: stored L / LW are shown as LWP (leave with pay) / LWOP (leave without pay). */
+    public const STATUS_CODES = ['L' => 'LWP', 'LW' => 'LWOP'];
+
+    public static function statusCode(?string $status): string
+    {
+        return $status === null ? '' : (self::STATUS_CODES[$status] ?? $status);
+    }
+
     public const STATUS_NAMES = [
-        'P' => 'Present', 'A' => 'Absent', 'L' => 'Leave', 'LW' => 'Leave w/o pay', 'S' => 'Joined',
+        'P' => 'Present', 'A' => 'Absent', 'L' => 'Leave with pay', 'LW' => 'Leave without pay', 'S' => 'Joined',
         'R' => 'Rest day', 'H' => 'Holiday', 'HD' => 'Half day', 'O' => 'Off',
     ];
 }

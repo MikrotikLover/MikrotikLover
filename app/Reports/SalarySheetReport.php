@@ -12,9 +12,16 @@ use App\Settings;
  */
 final class SalarySheetReport extends SalaryReport
 {
+    /** "Salary Sheet For The Month Of February, 2017"; a weekly / fortnightly daily-wages sheet names its period. */
     public function title(): string
     {
-        return ($this->isDaily() ? 'Daily Wages' : 'Permanent') . ' Salary Sheet';
+        $s = $this->sheet();
+        $kind = $this->isDaily() ? 'Daily Wages ' : '';
+        $fullMonth = substr($s['period_from'], 8) === '01' && $s['period_to'] === date('Y-m-t', strtotime($s['period_from']));
+        if ($this->isDaily() && !$fullMonth) {
+            return $kind . 'Salary Sheet For The Period ' . date('d-m-Y', strtotime($s['period_from'])) . ' To ' . date('d-m-Y', strtotime($s['period_to']));
+        }
+        return $kind . 'Salary Sheet For The Month Of ' . date('F, Y', strtotime($s['salary_month']));
     }
 
     public function orientation(): string
@@ -27,28 +34,37 @@ final class SalarySheetReport extends SalaryReport
         return true;
     }
 
-    /** [key, header, width mm, kind] kind: money | days | text | rate */
+    /**
+     * [key, header, width mm, kind] kind: money | days | text | rate. Columns of the printed sheet:
+     * Sr, ID, Name, Designation, Paid Days, Basic, Gross, OT Hour, OT Rate, Overtime, Advance, Loan Ded.,
+     * Remaining Bal., Incentive, Penalty, Fine, Net Salary, Signature. EOBI / social security / tax columns are
+     * added only when the sheet has such amounts (they are off unless enabled on an employee).
+     */
     private function columns(): array
     {
         $ss = (string)Settings::get('social_security', 'PESSI');
-        return [
-            ['sr', 'Sr', 5, 'sr'], ['department', 'Department', 14, 'text'], ['name', 'Name', 26, 'name'], ['designation', 'Designation', 16, 'text'],
-            ['basic', $this->isDaily() ? 'Rate / Day' : 'Basic', 12, 'money'], ['fine', 'Fine', 9, 'money'],
-            ['absent_days', 'Absent', 7, 'days'], ['leave_wp_days', 'Leave WP', 7, 'days'], ['leave_wop_days', 'Leave WOP', 7, 'days'],
-            ['rest_days', 'Rest Days', 7, 'days'], ['work_days', 'Work Days', 7, 'days'], ['paid_days', 'Paid Days', 7, 'days'],
-            ['pay', 'Work Pay', 13, 'money'], ['ot_hours', 'OT Hours', 7, 'days'], ['ot_rate', 'OT Rate', 11, 'rate'], ['ot_amount', 'OT Amount', 10, 'money'],
-            ['gross', 'Gross', 13, 'money'], ['advance', 'Advance', 10, 'money'], ['loan_deduction', 'Loan Ded.', 10, 'money'],
-            ['loan_balance', 'Loan Bal.', 11, 'money'], ['incentive', 'Incentive', 10, 'money'], ['penalty', 'Penalty', 9, 'money'],
-            ['eobi', 'EOBI', 8, 'money'], ['pessi', $ss, 8, 'money'], ['income_tax', 'Income Tax', 9, 'money'], ['net_salary', 'Net Salary', 14, 'money'],
-            ['sign', 'Signature', 18, 'sign'],
+        $cols = [
+            ['sr', 'Sr', 6, 'sr'], ['code', 'ID', 10, 'text'], ['name', 'Employee Name', 34, 'name'], ['designation', 'Designation', 20, 'text'],
+            ['paid_days', 'Paid Days', 9, 'days'], ['basic', $this->isDaily() ? 'Rate / Day' : 'Basic Salary', 14, 'money'],
+            ['pay', 'Gross', 14, 'money'], ['ot_hours', 'OT Hour', 9, 'days'], ['ot_rate', 'OT Rate', 11, 'rate'], ['ot_amount', 'Overtime', 12, 'money'],
+            ['advance', 'Advance', 12, 'money'], ['loan_deduction', 'Loan Ded.', 11, 'money'], ['loan_balance', 'Remaining Bal.', 13, 'money'],
+            ['incentive', 'Incentive', 11, 'money'], ['penalty', 'Penalty', 10, 'money'], ['fine', 'Fine', 9, 'money'],
         ];
+        foreach (['eobi' => 'EOBI', 'pessi' => $ss, 'income_tax' => 'Income Tax'] as $k => $label) {
+            if (self::sum($this->lines(), $k) != 0.0) {
+                $cols[] = [$k, $label, 10, 'money'];
+            }
+        }
+        $cols[] = ['net_salary', 'Net Salary', 15, 'money'];
+        $cols[] = ['sign', 'Signature', 22, 'sign'];
+        return $cols;
     }
 
     private static function value(array $l, string $key): mixed
     {
         return match ($key) {
             'basic' => (float)$l['daily_rate'] > 0 && (float)$l['basic_salary'] == 0.0 ? $l['daily_rate'] : $l['basic_salary'],
-            'pay' => (float)$l['work_pay'] + (float)$l['allowance_pay'],
+            'pay' => (float)$l['work_pay'] + (float)$l['allowance_pay'], // gross before overtime (Net = Gross + Overtime + Incentive - deductions)
             default => $l[$key] ?? '',
         };
     }
@@ -65,7 +81,8 @@ final class SalarySheetReport extends SalaryReport
             table.sal td.net { font-weight: 700; }
             .sal-foot { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12mm; margin-top: 16mm; font-size: 8pt; }
             .sal-foot div { border-top: 1px solid #000; text-align: center; padding-top: 3px; }
-            .sal-sum { margin-top: 4mm; font-size: 8pt; }';
+            .sal-sum { margin-top: 4mm; font-size: 8pt; }
+            .inc-mark { color: #b45309; font-size: 6pt; }';
     }
 
     private function cell(array $c, mixed $v, bool $total = false): string
@@ -84,6 +101,7 @@ final class SalarySheetReport extends SalaryReport
     {
         $cols = $this->columns();
         $h = '<tr class="' . $class . '"><td colspan="4">' . self::e($label) . ' (' . count($lines) . ')</td>';
+        // columns after the first four: paid days onward
         foreach (array_slice($cols, 4) as $c) {
             if ($c[0] === 'basic' || $c[3] === 'rate' || $c[3] === 'sign') {
                 $h .= '<td></td>';
@@ -118,7 +136,8 @@ final class SalarySheetReport extends SalaryReport
                 foreach ($cols as $c) {
                     $h .= match ($c[3]) {
                         'sr' => '<td class="c">' . ++$sr . '</td>',
-                        'name' => '<td class="nm"><b>' . self::e($l['code']) . '</b> ' . self::e($l['name']) . '</td>',
+                        'name' => '<td class="nm">' . self::e($l['name'])
+                            . (!empty($l['increment_note']) ? ' <span class="inc-mark" title="' . self::e($l['increment_note']) . '">▲</span>' : '') . '</td>',
                         default => $this->cell($c, self::value($l, $c[0])),
                     };
                 }
@@ -133,7 +152,21 @@ final class SalarySheetReport extends SalaryReport
             $l['payment_mode'] === 'bank' ? $bank += (float)$l['net_salary'] : $cash += (float)$l['net_salary'];
         }
         $h .= '<div class="sal-sum">Net payable: <b>Rs. ' . self::money($cash + $bank) . '</b> &nbsp; (Cash ' . self::money($cash)
-            . ' &nbsp;·&nbsp; Bank ' . self::money($bank) . ') &nbsp;·&nbsp; Work Pay includes prorated allowances; OT Amount includes fixed OT voucher amounts.</div>';
+            . ' &nbsp;·&nbsp; Bank ' . self::money($bank) . ') &nbsp;·&nbsp; Net = Gross + Overtime + Incentive − Advance − Loan − Penalty − Fine. '
+            . 'Gross includes prorated allowances; Overtime includes fixed OT voucher amounts.</div>';
+        $carried = array_filter($lines, fn($l) => (float)($l['advance_carried'] ?? 0) + (float)($l['penalty_carried'] ?? 0) + (float)($l['fine_carried'] ?? 0) > 0);
+        if ($carried) {
+            $h .= '<div class="sal-sum"><b>Carried forward to the next period</b> (salary not sufficient; net is never negative):<br>'
+                . implode('<br>', array_map(fn($l) => '<b>' . self::e($l['code']) . '</b> ' . self::e($l['name']) . ': '
+                    . implode(', ', array_filter([(float)$l['advance_carried'] > 0 ? 'advance ' . self::money($l['advance_carried']) : null,
+                        (float)$l['penalty_carried'] > 0 ? 'penalty ' . self::money($l['penalty_carried']) : null,
+                        (float)$l['fine_carried'] > 0 ? 'fine ' . self::money($l['fine_carried']) : null])), $carried)) . '</div>';
+        }
+        $notes = array_filter($lines, fn($l) => !empty($l['increment_note']));
+        if ($notes) {
+            $h .= '<div class="sal-sum"><b>▲ Salary changed within the period</b> (work pay is split pro rata; OT is priced at the salary of each OT date):<br>'
+                . implode('<br>', array_map(fn($l) => '<b>' . self::e($l['code']) . '</b> ' . self::e($l['name']) . ': ' . self::e($l['increment_note']), $notes)) . '</div>';
+        }
         $h .= '<div class="sal-foot"><div>Prepared by</div><div>Checked by (HR)</div><div>Accounts</div><div>Approved by</div></div>';
         return $h;
     }
@@ -141,13 +174,13 @@ final class SalarySheetReport extends SalaryReport
     public function csv(): array
     {
         $cols = array_values(array_filter($this->columns(), fn($c) => !in_array($c[3], ['sr', 'sign'], true)));
-        $out = [array_merge(['Code'], array_map(fn($c) => $c[1], $cols), ['Payment', 'Bank Account', 'Remarks'])];
+        $out = [array_merge(array_map(fn($c) => $c[1], $cols), ['Advance carried', 'Penalty carried', 'Fine carried', 'Remarks', 'Increment in period'])];
         foreach ($this->lines() as $l) {
-            $row = [$l['code']];
+            $row = [];
             foreach ($cols as $c) {
                 $row[] = self::value($l, $c[0]);
             }
-            $out[] = array_merge($row, [$l['payment_mode'], $l['bank_account'], $l['remarks']]);
+            $out[] = array_merge($row, [$l['advance_carried'] ?? 0, $l['penalty_carried'] ?? 0, $l['fine_carried'] ?? 0, $l['remarks'], $l['increment_note'] ?? '']);
         }
         return $out;
     }

@@ -163,7 +163,7 @@ final class EmployeeAttendanceReport extends Report
                     . '<td class="nowrap">' . ($a ? self::time($a['time_out']) . ($a['time_out'] && substr($a['time_out'], 0, 10) !== $dt ? ' (+1)' : '') : '') . '</td>'
                     . '<td class="num">' . self::hm($a['work_minutes'] ?? 0) . '</td>'
                     . '<td class="num">' . ($a && $a['ot_status'] === 'approved' ? self::hm($a['approved_minutes']) : '') . '</td>'
-                    . '<td><b>' . self::e($a['status'] ?? '') . '</b></td>'
+                    . '<td><b>' . self::e(self::statusCode($a['status'] ?? null)) . '</b></td>'
                     . '<td>' . self::e($this->description($e, $dt, $a, $d)) . '</td></tr>';
             }
             $counts = [];
@@ -187,7 +187,7 @@ final class EmployeeAttendanceReport extends Report
                 $a = $d['rows'][(int)$e['id']][$dt] ?? null;
                 $out[] = [$e['code'], $e['name'], $a['vr_no'] ?? '', $dt, $a['shift_code'] ?? '', $a ? ($a['time_in'] ?? '') : '',
                     $a ? ($a['time_out'] ?? '') : '', $a['work_minutes'] ?? '', $a && $a['ot_status'] === 'approved' ? $a['approved_minutes'] : '',
-                    $a['status'] ?? '', $this->description($e, $dt, $a, $d)];
+                    self::statusCode($a['status'] ?? null), $this->description($e, $dt, $a, $d)];
             }
         }
         return $out;

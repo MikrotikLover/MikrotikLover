@@ -40,10 +40,7 @@ final class EmployeeListReport extends Report
                 'SELECT e.id, e.code, e.name, e.name_ur, e.relation, e.father_name, e.cnic, e.cell, e.city, e.emp_type, e.status,
                         e.joining_date, e.leaving_date, e.machine_id, d.name AS department, d.name_ur AS department_ur,
                         g.name AS designation, sg.code AS shift_group,
-                        (SELECT CASE WHEN e.emp_type = \'daily_wages\' THEN h.daily_rate ELSE h.basic_salary END
-                           FROM employee_salary_history h
-                          WHERE h.employee_id = e.id AND h.effective_from <= CURDATE()
-                          ORDER BY h.effective_from DESC LIMIT 1) AS salary,
+                        e.basic_salary AS salary,
                         e.emp_type = \'daily_wages\' AS is_daily
                    FROM employees e
                    JOIN departments d ON d.id = e.department_id

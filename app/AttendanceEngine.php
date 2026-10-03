@@ -30,6 +30,8 @@ final class AttendanceEngine
 {
     private Calendar $cal;
     private int $maxHours;
+    /** Company late grace (minutes), used when the shift has no grace of its own. */
+    private int $companyGrace;
     /** @var array<int,true> punch ids already used for an earlier date */
     private array $consumed = [];
     /** @var array<int,array<string,array{0:int,1:int}>> */
@@ -39,6 +41,7 @@ final class AttendanceEngine
     {
         $this->cal = new Calendar($from, $to);
         $this->maxHours = min(24, max(1, (int)Settings::get('max_daily_hours', 16)));
+        $this->companyGrace = max(0, (int)Settings::get('late_grace_minutes', 0));
     }
 
     public function calendar(): Calendar
@@ -97,7 +100,8 @@ final class AttendanceEngine
             $minOt = (int)$shift['min_ot_minutes'];
             if ($dayType === null) {
                 $lateBy = intdiv($inTs - $startTs, 60);
-                $r['late_minutes'] = $lateBy > (int)$shift['grace_minutes'] ? $lateBy : 0;
+                $grace = (int)$shift['grace_minutes'] > 0 ? (int)$shift['grace_minutes'] : $this->companyGrace;
+                $r['late_minutes'] = $lateBy > $grace ? $lateBy : 0;
                 if ($outTs !== null) {
                     $r['early_minutes'] = $outTs < $endTs ? intdiv($endTs - $outTs, 60) : 0;
                     $extra = intdiv($outTs - $endTs, 60);
@@ -130,11 +134,12 @@ final class AttendanceEngine
         }
         $inTs = $in === null ? null : strtotime("$date $in");
         $outTs = $out === null ? null : strtotime("$date $out");
-        if ($inTs !== null && $outTs !== null && $outTs <= $inTs) {
-            if ($shift && (int)$shift['is_overnight']) {
-                $outTs += 86400;
-            } else {
-                throw ApiException::validation(['time_out' => 'Time Out must be after Time In (only overnight shifts may end the next day).']);
+        if ($inTs !== null && $outTs !== null) {
+            if ($outTs === $inTs) {
+                throw ApiException::validation(['time_out' => 'Time Out cannot be the same as Time In.']);
+            }
+            if ($outTs < $inTs) {
+                $outTs += 86400; // Time Out earlier than Time In = a night shift crossing midnight (ends the next day)
             }
         }
         return [$inTs, $outTs];
@@ -156,6 +161,7 @@ final class AttendanceEngine
             throw ApiException::validation(['status' => 'Attendance cannot be entered for a future date.']);
         }
         PayrollLock::assertOpen($emp['emp_type'], $date, 'Attendance', (int)$emp['id']);
+        DayLock::assertOpen($date);
         $status = (string)($in['status'] ?? '');
         if (!in_array($status, ['P', 'A', 'L', 'LW', 'S', 'R', 'H', 'HD', 'O'], true)) {
             throw ApiException::validation(['status' => "Select a valid status for $who."]);
@@ -228,8 +234,8 @@ final class AttendanceEngine
     public static function syncOvertime(int $attId, int $empId, string $date, int $ot): void
     {
         $row = Database::one('SELECT * FROM overtime WHERE employee_id = ? AND ot_date = ?', [$empId, $date]);
-        if ($row && $row['salary_sheet_id']) {
-            return; // consumed by payroll
+        if ($row && ($row['salary_sheet_id'] || (int)$row['is_manual'])) {
+            return; // consumed by payroll, or a manual entry (its own ceiling)
         }
         $uid = Auth::id();
         if ($ot <= 0) {
@@ -249,7 +255,9 @@ final class AttendanceEngine
             Database::update('overtime', ['computed_minutes' => $ot, 'approved_minutes' => $ot, 'attendance_id' => $attId, 'updated_by' => $uid],
                 'id = :id', ['id' => $row['id']]);
         } elseif ((int)$row['computed_minutes'] !== $ot) {
-            Database::update('overtime', ['computed_minutes' => $ot, 'attendance_id' => $attId, 'updated_by' => $uid], 'id = :id', ['id' => $row['id']]);
+            // a decided row keeps its decision, but approved time never exceeds the overtime actually worked
+            Database::update('overtime', ['computed_minutes' => $ot, 'approved_minutes' => min((int)$row['approved_minutes'], $ot),
+                'attendance_id' => $attId, 'updated_by' => $uid], 'id = :id', ['id' => $row['id']]);
         }
     }
 
@@ -377,6 +385,10 @@ final class AttendanceEngine
                 }
                 if (PayrollLock::isLocked($emp['emp_type'], $date, (int)$emp['id'])) {
                     $sum['locked']++;
+                    continue;
+                }
+                if (DayLock::isPosted($date)) { // verified and locked: punches wait until an admin unposts the date
+                    $sum['day_locked'] = ($sum['day_locked'] ?? 0) + 1;
                     continue;
                 }
                 $ex = $existing[$eid][$date] ?? null;

@@ -6,8 +6,11 @@ import { DataGrid } from '../core/grid.js';
 import { setKeys } from '../core/keys.js';
 import { can, lookups, opt } from '../core/store.js';
 
+/** Stored codes L / LW are shown as LWP / LWOP. */
+export const statusCode = (s) => ({ L: 'LWP', LW: 'LWOP' }[s] || s || '');
+
 export const STATUSES = [
-  ['P', 'P - Present'], ['A', 'A - Absent'], ['L', 'L - Leave (paid)'], ['LW', 'LW - Leave w/o pay'], ['S', 'S - Shift start / joined'],
+  ['P', 'P - Present'], ['A', 'A - Absent'], ['L', 'LWP - Leave with pay'], ['LW', 'LWOP - Leave without pay'], ['S', 'S - Shift start / joined'],
   ['R', 'R - Rest day'], ['H', 'H - Holiday'], ['HD', 'HD - Half day'], ['O', 'O - Off / not joined'],
 ];
 const TIMED = ['P', 'HD', 'S', 'R', 'H'];
@@ -25,6 +28,17 @@ export default {
       opt.departments().map((o) => h('option', { value: o.value }, o.label)));
     const auto = h('input', { type: 'checkbox', id: 'auto_att' });
     const remarks = h('input', { class: 'input', maxlength: 255, placeholder: 'Voucher remarks' });
+    // status filter: shows only the rows with that status (nothing is changed)
+    const statusFilter = h('select', { class: 'input' }, h('option', { value: '' }, 'All statuses'), h('option', { value: '-' }, 'Not marked'),
+      STATUSES.map(([v, l]) => h('option', { value: v }, l)));
+    function applyFilter() {
+      const f = statusFilter.value;
+      [...tbody.children].forEach((tr, i) => {
+        const r = st.rows[i];
+        tr.style.display = !f || !r || (f === '-' ? !r.status : r.status === f) ? '' : 'none';
+      });
+    }
+    statusFilter.addEventListener('change', applyFilter);
     const dayInfo = h('div', { class: 'muted', style: 'font-size:12px' });
     const vrLabel = h('span', { class: 'rec' });
     const counts = h('span');
@@ -105,6 +119,7 @@ export default {
       if (!st.rows.length) tbody.append(h('tr', null, h('td', { colspan: 11, class: 'muted', style: 'padding:20px;text-align:center' },
         st.data ? 'No employees in this department on this date.' : 'Select date and department, then press Show (F7).')));
       updateCounts();
+      applyFilter();
     }
 
     function updateCounts() {
@@ -271,8 +286,9 @@ export default {
       h('div', { class: 'panel', style: 'margin-bottom:10px' }, h('div', { class: 'panel-body form-grid' },
         h('div', { class: 'fld s2 req' }, h('label', null, 'Date'), date, dayInfo),
         h('div', { class: 'fld s3 req' }, h('label', null, 'Department'), dept),
+        h('div', { class: 'fld s2' }, h('label', null, 'Status filter'), statusFilter),
         h('div', { class: 'fld check s2' }, auto, h('label', { for: 'auto_att' }, 'Auto Attendance (all Present)')),
-        h('div', { class: 'fld s5' }, h('label', null, 'Remarks'), remarks))),
+        h('div', { class: 'fld s3' }, h('label', null, 'Remarks'), remarks))),
       h('div', { style: 'overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:6px' }, table),
       h('div', { class: 'grid-foot' }, counts, h('span', { class: 'spacer' }),
         'Enter = next cell · type the first letter to pick a status · times are optional · hours are calculated from In/Out'),

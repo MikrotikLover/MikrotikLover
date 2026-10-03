@@ -19,14 +19,18 @@ namespace App;
  * Daily wages
  *   Work Pay       = round(Daily Rate x Present (work) Days)
  *   Allowance Pay  = round(Allowances / Days in Month x Present Days)
+ * Increments (salary_increments): the period is split into segments at each effective date and every
+ *   segment pays (segment salary / Days in Month) x its own paid days (absent / leave / half days counted
+ *   per segment). Daily wages: segment rate x segment present days.
  * Both
- *   OT Rate        = override from salary info, else Basic / Days / Shift Hours x Multiplier
- *                    (daily wages: Daily Rate / Shift Hours x Multiplier)
- *   Overtime       = round(OT Hours x OT Rate) + fixed OT voucher amounts
+ *   OT Rate        = override from salary info, else Salary / (Days x Shift Hours) x Multiplier, using
+ *                    the salary effective on each OT date (daily wages: Daily Rate / Shift Hours x Multiplier)
+ *   Overtime       = round(sum of OT Hours x OT Rate per rate) + fixed OT voucher amounts
+ *   Work pay and overtime are computed in integer paisa (App\Money), never float.
  *   Gross          = Work Pay + Allowance Pay + Overtime
- *   Net            = Gross + Incentive - Advance - Loan - Penalty - Fine - EOBI - PESSI/SESSI - Income Tax
- *   Loan installments are reduced (carried forward) when the salary cannot cover them; other
- *   deductions are never reduced, so a negative net is flagged for review instead.
+ *   Net            = Gross + Incentive - Advance - Loan - Penalty - Fine (- EOBI - PESSI/SESSI - Income Tax when enabled)
+ *   Net is never negative: the loan installment is reduced first (balance rescheduled), then advance,
+ *   penalty and fine; whatever is not deducted is carried forward to the next period.
  */
 final class PayrollEngine
 {
@@ -44,6 +48,21 @@ final class PayrollEngine
             (float)Settings::get('ot_multiplier', 2),
             (float)Settings::get('default_shift_hours', 8),
         );
+    }
+
+    /** Legacy numeric input (float / int / string) -> 2-decimal string for paisa maths. */
+    private static function amount(mixed $v): string
+    {
+        if (is_string($v) && preg_match('/^-?\d+(\.\d{1,2})?$/', $v)) {
+            return $v;
+        }
+        return number_format((float)$v, 2, '.', '');
+    }
+
+    /** Day / hour count with 2 decimals -> integer hundredths. */
+    private static function hundredths(float $v): int
+    {
+        return (int)round($v * 100);
     }
 
     public function round(float $v): float
@@ -111,46 +130,99 @@ final class PayrollEngine
      *   ot_applicable (bool), ot_rate (override|null), shift_hours (|null), ot_minutes, ot_voucher_hours, ot_voucher_amount,
      *   incentive, penalty, fine, advance, loan_planned,
      *   eobi_rate (row|null), pessi_rate (row|null), tax_slabs (rows|null)
+     *   segments  (optional) [{salary, work_days, rest_days, paid_leave, unpaid_days, len}] one per salary
+     *             period inside the sheet; salary = monthly basic (daily wages: rate per day) as a decimal string
+     *   ot_items  (optional) [{minutes, hours, salary}] OT minutes / voucher hours with the salary of their date
+     *   Without segments / ot_items the single basic (daily_rate) is used, as before.
      */
     public function calculate(array $in): array
     {
         $g = fn(string $k, $d = 0) => $in[$k] ?? $d;
         $days = max(1, (int)$g('days', 30));
         $daily = $g('type') === 'daily_wages';
-        $basic = (float)$g('basic');
-        $rate = (float)$g('daily_rate');
         $work = round((float)$g('work_days'), 2);
         $warnings = [];
 
-        if ($daily) {
-            $paid = $work; // daily wages: paid for present days only
-            $workPay = $this->round($rate * $work);
-        } elseif (in_array($g('basis', 'calendar'), ['fixed30', 'fixed26'], true) && isset($in['unpaid_days'])) {
-            // Fixed 30 / 26-day month: a full month earns the full basic whatever its calendar length;
-            // only unpaid days (absent, leave without pay, unmarked, unworked part of half days, not
-            // employed) are deducted, each worth Basic / Days.
-            $paid = round(max(0.0, $days - (float)$in['unpaid_days']), 2);
-            $workPay = $this->round($basic / $days * $paid);
-        } else {
-            $paid = round($work + (float)$g('rest_days') + (float)$g('paid_leave'), 2);
-            if ($paid > $days) {
-                $warnings[] = "Paid days capped at $days";
-                $paid = (float)$days;
+        // Salary segments: the period split at increment effective dates (one segment when the salary did
+        // not change). Each segment pays (segment salary / days in month) x its own paid days.
+        $segments = $in['segments'] ?? [[
+            'salary' => self::amount($daily ? $g('daily_rate') : $g('basic')),
+            'work_days' => $work, 'rest_days' => (float)$g('rest_days'), 'paid_leave' => (float)$g('paid_leave'),
+            'unpaid_days' => (float)$g('unpaid_days'), 'len' => $days,
+        ]];
+        $fixed = !$daily && in_array($g('basis', 'calendar'), ['fixed30', 'fixed26'], true) && (isset($in['unpaid_days']) || isset($in['segments']));
+        $segPaid = []; // paid days per segment, in hundredths
+        foreach ($segments as $s) {
+            if ($daily) {
+                $segPaid[] = self::hundredths((float)$s['work_days']); // daily wages: present days only
+            } elseif ($fixed) {
+                // Fixed 30 / 26-day month: a full month earns the full basic whatever its calendar length;
+                // only unpaid days (absent, leave without pay, unmarked, unworked part of half days, not
+                // employed) are deducted, each worth Basic / Days.
+                $segPaid[] = self::hundredths((float)$s['len'] - (float)$s['unpaid_days']);
+            } else {
+                $segPaid[] = self::hundredths((float)$s['work_days'] + (float)$s['rest_days'] + (float)$s['paid_leave']);
             }
-            $workPay = $this->round($basic / $days * $paid);
         }
+        $cap = $days * 100;
+        if ($fixed) {
+            // the divisor (30 / 26) differs from the calendar length: the last segment absorbs the difference
+            $segPaid[count($segPaid) - 1] += $cap - self::hundredths(array_sum(array_map(fn($s) => (float)$s['len'], $segments)));
+            $segPaid = array_map(fn($p) => max(0, $p), $segPaid);
+            for ($i = count($segPaid) - 1, $over = array_sum($segPaid) - $cap; $i >= 0 && $over > 0; $i--) {
+                $cut = min($over, $segPaid[$i]);
+                $segPaid[$i] -= $cut;
+                $over -= $cut;
+            }
+        } elseif (!$daily && array_sum($segPaid) > $cap) {
+            $warnings[] = "Paid days capped at $days";
+            for ($i = count($segPaid) - 1, $over = array_sum($segPaid) - $cap; $i >= 0 && $over > 0; $i--) {
+                $cut = min($over, $segPaid[$i]);
+                $segPaid[$i] -= $cut;
+                $over -= $cut;
+            }
+        }
+        $num = 0; // sum of salary(paisa) x paid days(hundredths)
+        foreach ($segments as $i => $s) {
+            $num += Money::toPaisa($s['salary']) * $segPaid[$i];
+        }
+        $paid = array_sum($segPaid) / 100.0;
+        $workPay = (float)Money::divRound($num, ($daily ? 1 : $days) * 100 * 100, $this->rounding);
         $allowancePay = $this->round((float)$g('allowances') / $days * $paid);
 
-        // Overtime
-        $otHours = round(((int)$g('ot_minutes')) / 60 + (float)$g('ot_voucher_hours'), 2);
-        $shiftHours = (float)($g('shift_hours') ?: $this->defaultShiftHours);
-        $override = $in['ot_rate'] ?? null; // null / '' = calculate from basic (or daily rate)
-        if ($override !== null && $override !== '') {
-            $otRate = round((float)$override, 2);
-        } else {
-            $otRate = $daily
-                ? round($rate / $shiftHours * $this->otMultiplier, 2)
-                : round($basic / $days / $shiftHours * $this->otMultiplier, 2);
+        // Overtime: each OT date is priced with the salary effective on that date
+        //   rate/hour = salary / (days x shift hours) x multiplier   (daily wages: rate / shift hours x multiplier)
+        $shiftMinutes = (int)round((float)($g('shift_hours') ?: $this->defaultShiftHours) * 60);
+        $mult = (int)round($this->otMultiplier * 100);
+        $items = $in['ot_items'] ?? [['minutes' => (int)$g('ot_minutes'), 'hours' => (float)$g('ot_voucher_hours'),
+            'salary' => self::amount($daily ? $g('daily_rate') : $g('basic'))]];
+        $override = $in['ot_rate'] ?? null; // null / '' = calculate from the salary
+        $rateOf = fn($salary) => $override !== null && $override !== ''
+            ? Money::toPaisa(self::amount($override))
+            : Money::divRound(Money::toPaisa(self::amount($salary)) * $mult * 60, ($daily ? 1 : $days) * max(1, $shiftMinutes) * 100);
+        $groups = []; // rate paisa => hours (hundredths)
+        foreach ($items as $it) {
+            $hrs = Money::divRound((int)($it['minutes'] ?? 0) * 100, 60) + self::hundredths((float)($it['hours'] ?? 0));
+            if ($hrs > 0) {
+                $rp = $rateOf($it['salary']);
+                $groups[$rp] = ($groups[$rp] ?? 0) + $hrs;
+            }
+        }
+        $hoursH = array_sum($groups);
+        $otNum = 0;
+        foreach ($groups as $rp => $hh) {
+            $otNum += $rp * $hh;
+        }
+        $otRate = match (true) {
+            count($groups) > 1 => Money::divRound($otNum, $hoursH) / 100.0, // blended: OT hours x OT rate = OT amount on print
+            count($groups) === 1 => array_key_first($groups) / 100.0,
+            default => $rateOf($items ? end($items)['salary'] : 0) / 100.0,  // no OT: rate shown for reference
+        };
+        $otHours = $hoursH / 100.0;
+        $otRates = [];
+        krsort($groups);
+        foreach ($groups as $rp => $hh) {
+            $otRates[] = ['rate' => $rp / 100.0, 'hours' => $hh / 100.0];
         }
         if (!$g('ot_applicable', true)) {
             if ($otHours > 0 || (float)$g('ot_voucher_amount') > 0) {
@@ -159,9 +231,10 @@ final class PayrollEngine
             $otHours = 0.0;
             $otAmount = 0.0;
             $otVoucherAmount = 0.0;
+            $otRates = [];
         } else {
             $otVoucherAmount = $this->round((float)$g('ot_voucher_amount'));
-            $otAmount = $this->round($otHours * $otRate) + $otVoucherAmount;
+            $otAmount = (float)Money::divRound($otNum, 100 * 100, $this->rounding) + $otVoucherAmount;
         }
 
         $gross = $workPay + $allowancePay + $otAmount;
@@ -177,23 +250,52 @@ final class PayrollEngine
         $fine = $this->round((float)$g('fine'));
         $loanPlanned = $this->round((float)$g('loan_planned'));
 
-        $beforeLoan = $gross + $incentive - $advance - $penalty - $fine - $eobi - $pessi - $tax;
-        $loan = min($loanPlanned, max(0.0, $beforeLoan));
+        // Net salary is never negative. What the pay cannot cover is not deducted now:
+        //   1. the loan installment is reduced first (the loan balance is rescheduled),
+        //   2. then the advance, the penalty and the fine are reduced, in that order; the unrecovered
+        //      amounts are carried forward to the next salary period (system vouchers created on posting).
+        // Statutory amounts (only when enabled on the employee) are capped at the pay itself.
+        $avail = $gross + $incentive;
+        $cap = function (float $v, string $label) use (&$avail, &$warnings): float {
+            if ($v > $avail) {
+                $warnings[] = "$label reduced to " . number_format(max(0.0, $avail)) . ' (salary not sufficient)';
+                $v = max(0.0, $avail);
+            }
+            $avail -= $v;
+            return $v;
+        };
+        $tax = $cap($tax, 'Income tax');
+        $pessi = $cap($pessi, 'PESSI / SESSI');
+        $eobi = $cap($eobi, 'EOBI');
+        $take = function (float $want) use (&$avail): float {
+            $got = min($want, max(0.0, $avail));
+            $avail -= $got;
+            return $got;
+        };
+        $fineD = $take($fine);
+        $penaltyD = $take($penalty);
+        $advanceD = $take($advance);
+        $loan = $take($loanPlanned);
+        $carried = ['advance' => $advance - $advanceD, 'penalty' => $penalty - $penaltyD, 'fine' => $fine - $fineD];
         if ($loan < $loanPlanned) {
             $warnings[] = 'Loan installment reduced to ' . number_format($loan) . ' (balance carried forward)';
         }
-        $net = $beforeLoan - $loan;
-        if ($net < 0) {
-            $warnings[] = 'Net salary is negative: ' . number_format(-$net) . ' stays owed (booked to Employee Advances on posting) — recover it with an advance voucher next month';
+        foreach ($carried as $k => $c) {
+            if ($c > 0) {
+                $warnings[] = ucfirst($k) . ' ' . number_format($c) . ' not deducted (salary not sufficient) — carried forward to the next period';
+            }
         }
+        $net = max(0.0, $avail);
         if ($paid <= 0 && $gross <= 0) {
             $warnings[] = 'No paid days in this period';
         }
 
         return [
             'paid_days' => $paid, 'work_pay' => $workPay, 'allowance_pay' => $allowancePay,
-            'ot_hours' => $otHours, 'ot_rate' => $otRate, 'ot_amount' => $otAmount, 'ot_voucher_amount' => $otVoucherAmount,
-            'gross' => $gross, 'incentive' => $incentive, 'advance' => $advance, 'penalty' => $penalty, 'fine' => $fine,
+            'ot_hours' => $otHours, 'ot_rate' => $otRate, 'ot_amount' => $otAmount, 'ot_voucher_amount' => $otVoucherAmount, 'ot_rates' => $otRates,
+            'segment_paid_days' => array_map(fn($p) => $p / 100.0, $segPaid),
+            'gross' => $gross, 'incentive' => $incentive, 'advance' => $advanceD, 'penalty' => $penaltyD, 'fine' => $fineD,
+            'fine_entered' => $fine, 'advance_carried' => $carried['advance'], 'penalty_carried' => $carried['penalty'], 'fine_carried' => $carried['fine'],
             'eobi' => $eobi, 'pessi' => $pessi, 'income_tax' => $tax, 'loan_deduction' => $loan, 'net_salary' => $net,
             'warnings' => $warnings,
         ];
