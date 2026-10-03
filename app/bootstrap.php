@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 define('APP_DIR', __DIR__);
 define('APP_ROOT', dirname(__DIR__));      // the deploy folder (public_html)
-define('APP_VERSION', '1.4.0-batch5');
+define('APP_VERSION', '1.5.0-batch6');
 
 ini_set('display_errors', '0');
 ini_set('log_errors', '1');

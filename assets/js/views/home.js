@@ -1,12 +1,17 @@
 import { t, fmtDate, todayPK, getLang } from '../core/i18n.js';
 import { session, can } from '../core/session.js';
-import { esc } from '../core/ui.js';
+import { esc, spinner, errorState } from '../core/ui.js';
 import { icon } from '../core/icons.js';
+import { loadLookups } from '../core/lookups.js';
+import { REPORTS, REPORT_LOOKUPS, toQuery } from './reports/defs.js';
+import { mountReportForm } from './reports/form.js';
+import { renderDashboard } from './dashboard.js';
+import { navigate } from '../app.js';
 
 /**
  * Home: "Transactions" vertical card list, "Reporting" accordion, "Setup" list.
- * `batch` marks modules that are delivered in a later batch; they are shown
- * (so the layout is complete) but not clickable until their batch lands.
+ * Reports open into their filter form; "View" goes to #/r/<key>, Excel / CSV /
+ * PDF download straight from here. The dashboard sits on top (dashboard.view).
  */
 const TRANSACTIONS = [
   { key: 'igp', icon: 'gate_in', perm: 'igp.view' },
@@ -17,17 +22,6 @@ const TRANSACTIONS = [
   { key: 'bom_production', icon: 'layers', perm: 'bom_production.view' },
   { key: 'manual_production', icon: 'wrench', perm: 'manual_production.view' },
   { key: 'chalan', icon: 'truck', perm: 'chalan.view' },
-];
-
-const REPORTS = [
-  { key: 'inward', perm: 'reports.inward', filters: ['date_from', 'date_to', 'party', 'item', 'warehouse'] },
-  { key: 'transfer', perm: 'reports.transfer', filters: ['date_from', 'date_to', 'item', 'warehouse'] },
-  { key: 'consumption', perm: 'reports.consumption', filters: ['date_from', 'date_to', 'item', 'machine', 'design'] },
-  { key: 'production', perm: 'reports.production', filters: ['date_from', 'date_to', 'party', 'design', 'machine'] },
-  { key: 'delivery', perm: 'reports.delivery', filters: ['date_from', 'date_to', 'party', 'item'] },
-  { key: 'ink', perm: 'reports.ink', filters: ['date_from', 'date_to', 'colour', 'machine', 'design'] },
-  { key: 'stock', perm: 'reports.stock', filters: ['date_from', 'date_to', 'item', 'warehouse'] },
-  { key: 'jobwork', perm: 'reports.jobwork', filters: ['date_from', 'date_to', 'party'] },
 ];
 
 const SETUP = [
@@ -71,6 +65,12 @@ export default {
         </div>
       </section>
 
+      ${can('dashboard.view') ? `
+      <section class="section" aria-labelledby="h-dash">
+        <h2 class="section-title" id="h-dash">${esc(t('home.dashboard'))}</h2>
+        <div class="dashboard" data-dashboard>${spinner()}</div>
+      </section>` : ''}
+
       ${tx.length ? `
       <section class="section" aria-labelledby="h-tx">
         <h2 class="section-title" id="h-tx">${esc(t('home.transactions'))}</h2>
@@ -88,14 +88,10 @@ export default {
         <h2 class="section-title" id="h-rpt">${esc(t('home.reporting'))}</h2>
         <div class="accordion card">
           ${reports.map((r) => `
-            <details class="acc-item">
-              <summary><span class="tile-icon">${icon('chart')}</span><span class="tile-title">${esc(t(`rpt.${r.key}`))}</span>
-                <span class="badge">${esc(t('common.coming', { n: 6 }))}</span><span class="acc-caret">${icon('chevron_down', { size: 20 })}</span></summary>
-              <div class="acc-body">
-                <p class="muted">${esc(t('home.report_filters'))}:</p>
-                <div class="chips">${r.filters.map((f) => `<span class="chip">${esc(t(`filter.${f}`))}</span>`).join('')}</div>
-                <p class="note">${esc(t('common.coming_note', { n: 6 }))}</p>
-              </div>
+            <details class="acc-item" data-report="${esc(r.key)}">
+              <summary><span class="tile-icon">${icon(r.icon || 'chart')}</span><span class="tile-title">${esc(t(`rpt.${r.key}`))}</span>
+                <span class="acc-caret">${icon('chevron_down', { size: 20 })}</span></summary>
+              <div class="acc-body" data-report-body></div>
             </details>`).join('')}
         </div>
       </section>` : ''}
@@ -108,10 +104,32 @@ export default {
         </ul>
       </section>` : ''}`;
 
-    // Only one report open at a time keeps the list tidy on phones.
+    const dash = main.querySelector('[data-dashboard]');
+    if (dash) renderDashboard(dash).catch((err) => { dash.innerHTML = errorState(err.message); });
+
+    // Each report's filter form is built the first time it is opened.
+    const forms = new Map();
     const items = [...main.querySelectorAll('.acc-item')];
-    items.forEach((d) => d.addEventListener('toggle', () => {
-      if (d.open) items.forEach((o) => { if (o !== d) o.open = false; });
+    items.forEach((d) => d.addEventListener('toggle', async () => {
+      if (!d.open) return;
+      // Only one report open at a time keeps the list tidy on phones.
+      items.forEach((o) => { if (o !== d) o.open = false; });
+      const def = REPORTS.find((x) => x.key === d.dataset.report);
+      const body = d.querySelector('[data-report-body]');
+      if (!forms.has(def.key)) {
+        body.innerHTML = spinner();
+        try {
+          const lk = await loadLookups(REPORT_LOOKUPS);
+          forms.set(def.key, mountReportForm(body, def, lk, {
+            onView: (q) => { navigate(`/r/${def.key}?${new URLSearchParams(toQuery(q))}`); return true; },
+          }));
+        } catch (err) {
+          body.innerHTML = errorState(err.message);
+          return;
+        }
+      }
+      forms.get(def.key).nav.focusFirst();
     }));
+    return () => forms.forEach((f) => f.destroy());
   },
 };

@@ -62,13 +62,52 @@ function page(doc, copyLabel) {
     </div>`;
 }
 
+/**
+ * Report layout (A4 landscape, header repeated on every page by the browser):
+ *   printReport({ title, lines: ['Period: …', 'Party: …'], columns: [{ label, num }],
+ *                 rows: [['cell', …]], totals: ['Total', '', '1,234'] | null, meta })
+ * Cells are already formatted text. "Save as PDF" in the print dialog gives the PDF.
+ */
+function reportPage(doc) {
+  const app = session.app;
+  const company = getLang() === 'ur' && app.name_ur ? app.name_ur : app.name;
+  const td = (c, v, tag = 'td') => `<${tag} class="${c.num ? 'num' : ''}" ${c.num ? 'dir="ltr"' : ''}>${esc(v ?? '')}</${tag}>`;
+  return `
+    <div class="pdoc pdoc-report">
+      <header class="pdoc-head">
+        <div>
+          <h1>${esc(company || '')}</h1>
+          ${app.address ? `<p>${esc(app.address)}</p>` : ''}
+        </div>
+        <div class="pdoc-title">
+          <h2>${esc(doc.title)}</h2>
+          ${(doc.lines || []).map((l) => `<p>${esc(l)}</p>`).join('')}
+        </div>
+      </header>
+      <table class="pdoc-lines">
+        <thead><tr>${doc.columns.map((c) => `<th class="${c.num ? 'num' : ''}">${esc(c.label)}</th>`).join('')}</tr></thead>
+        <tbody>${doc.rows.map((r) => `<tr>${doc.columns.map((c, i) => td(c, r[i])).join('')}</tr>`).join('')}</tbody>
+        ${doc.totals ? `<tfoot><tr>${doc.columns.map((c, i) => td(c, doc.totals[i])).join('')}</tr></tfoot>` : ''}
+      </table>
+      <p class="pdoc-meta">${esc(doc.meta || '')}</p>
+    </div>`;
+}
+
+export function printReport(doc) {
+  openPrint(reportPage(doc));
+}
+
 export function printDocument(doc) {
+  const copies = doc.copies && doc.copies.length ? doc.copies : [null];
+  openPrint(copies.map((c) => page(doc, c)).join(''));
+}
+
+function openPrint(html) {
   document.getElementById('print-root')?.remove();
   const root = document.createElement('div');
   root.id = 'print-root';
   root.setAttribute('dir', document.documentElement.dir);
-  const copies = doc.copies && doc.copies.length ? doc.copies : [null];
-  root.innerHTML = copies.map((c) => page(doc, c)).join('');
+  root.innerHTML = html;
   document.body.appendChild(root);
   document.body.classList.add('printing');
   const done = () => {

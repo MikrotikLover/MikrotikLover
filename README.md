@@ -13,7 +13,7 @@ Timezone **Asia/Karachi**, currency **PKR**.
 | 3 | Inward Gate Pass, Stock Transfer, Stock Consumption, Ink Loading | ✅ delivered |
 | 4 | Estimation, BOM Production, Manual Production | ✅ delivered |
 | 5 | Delivery Chalan + print layouts | ✅ delivered |
-| 6 | Reports, exports, dashboard | pending |
+| 6 | Reports, exports, dashboard | ✅ delivered |
 
 ## Folder structure
 
@@ -35,7 +35,7 @@ public_html/                 ← deploy folder (this repository)
 │   │                        StockConsumption, InkLoad, Estimation,
 │   │                        ProductionController → BomProduction, ManualProduction,
 │   │                        DeliveryChalan;
-│   │                        Stock (balances)
+│   │                        Stock (balances), Report (all reports + dashboard)
 │   └── services/            Settings, InkService, Stock (ledger), VoucherNumber,
 │                            ProductionService (requirements + costing)
 ├── assets/
@@ -43,16 +43,17 @@ public_html/                 ← deploy folder (this repository)
 │   └── js/
 │       ├── app.js           boot + hash router + top bar + WhatsApp button
 │       ├── core/            enterNav.js, searchSelect.js, lineGrid.js, formKit.js,
-│       │                    lookups.js, stockCache.js, print.js, api.js, i18n.js,
-│       │                    session.js, ui.js, icons.js
+│       │                    lookups.js, stockCache.js, print.js, export.js (CSV / XLSX),
+│       │                    api.js, i18n.js, session.js, ui.js, icons.js
 │       ├── i18n/            en.js, ur.js
 │       └── views/           login, setup, home, users, userForm, roles, audit, profile,
 │                            masterList / masterForm + masters/config.js, designs,
 │                            designForm, settings, voucherList / voucherForm /
-│                            voucherView + vouchers/defs.js, productionDefs.js, deliveryDefs.js
+│                            voucherView + vouchers/defs.js, productionDefs.js, deliveryDefs.js,
+│                            dashboard, report + reports/defs.js, form.js, runner.js
 ├── database/schema.sql      full schema for ALL batches (33 tables + stock view)
 ├── database/seed.sql        roles, permission matrix, units, warehouses, ink colours, settings
-└── tests/                   api_smoke.sh, enternav.html + enternav.test.cjs, app_e2e.test.cjs
+└── tests/                   API (bash + curl) and browser (Playwright) tests — see Tests
 
 fabric_private/              ← OUTSIDE the deploy folder (survives redeploys)
 ├── config.php
@@ -182,6 +183,42 @@ stock OUT of the dispatch warehouse (default Finished Store).
 Settings → Printing: number of chalan copies and the declaration text.
 All other vouchers print through the same layout engine (`assets/js/core/print.js`).
 
+## Reports, exports & dashboard (Batch 6)
+
+**Reporting** on the home screen is an accordion: opening a report shows its filter form.
+Enter walks the filters, Enter on the last filter (or Ctrl+S) opens the report page
+`#/r/<report>?date_from=…&…` (filters stay in the URL, so a report can be bookmarked).
+**Excel**, **CSV** and **PDF** download straight from the filter form (permission `reports.export`).
+Every report has a date range (default: 1st of this month → today) plus the filters below.
+
+| Report | Views | Filters |
+|---|---|---|
+| Inward Gate Pass | voucher lines; type all / own / job work | party, item, warehouse |
+| Stock Transfer | voucher lines | item, warehouse (from or to) |
+| Stock Consumption | lines · by item · by machine · by job (design / party) | item, machine, design, party, warehouse |
+| Production (All / BOM / Manual) | vouchers (printed, produced, wastage %, ink est. vs actual, costs, cost/m) · estimated vs actual materials · by machine (m/hour, cost/m) | party, design, machine |
+| Delivery Chalan | chalan lines · party-wise pending vs delivered meters (+ ready stock) | party, item, design, warehouse |
+| Ink | by colour · by machine (loaded ml/m) · by design · ink cost per meter · ink stock ledger · reorder alert list | colour, machine, design, ink item, warehouse |
+| Stock | current stock (per item, warehouse, lot, owner, value) as at *To date* · stock ledger (one item, opening + running balance) · below reorder level | item, warehouse, party (owner), lot, item type |
+| Party-wise job-work balance | per fabric owner: opening, received, delivered, process loss, balance, grey + printed stock, difference | party |
+
+All numbers come from the vouchers and the `stock_movements` ledger; cancelled vouchers are excluded.
+Large results are capped at 5,000 rows with a notice ("narrow the filters").
+
+**Exports** (no library, no server process — works on shared hosting):
+
+- **Excel** — a real `.xlsx` written in the browser (`assets/js/core/export.js`): title, company,
+  filter lines, bold header with auto-filter and frozen panes, numbers as numbers, dates as Excel
+  dates, totals row, right-to-left sheet when the app is in Urdu.
+- **CSV** — UTF-8 with BOM, so Excel shows Urdu names correctly.
+- **PDF** — A4 landscape report layout opened in the print dialog → *Save as PDF*
+  (the header row repeats on every page). The same button prints on paper.
+
+**Dashboard** (top of home, permission `dashboard.view`): today's inward / outward / produced
+meters and ink loaded (each opens the matching report for today), production by machine
+(last 7 days, with today's meters), ink & paper below reorder level, pending deliveries
+(received − delivered, with ready stock) and top customers of the last 30 days.
+
 ## Database rules (implemented in schema, used from Batch 3)
 
 - `stock_movements` is the only stock ledger (`item, warehouse, lot, qty_in, qty_out,
@@ -233,5 +270,7 @@ ADMIN_PASS=... tests/api_production.sh            # 58 estimation / production /
 ADMIN_PASS=... NODE_PATH=$(npm root -g) node tests/production_e2e.test.cjs # 22 production UI checks
 ADMIN_PASS=... tests/api_chalan.sh                # 26 delivery chalan checks
 ADMIN_PASS=... NODE_PATH=$(npm root -g) node tests/chalan_e2e.test.cjs   # 19 chalan + print UI checks
+ADMIN_PASS=... tests/api_reports.sh               # 65 report / dashboard / permission checks
+ADMIN_PASS=... NODE_PATH=$(npm root -g) node tests/reports_e2e.test.cjs  # 42 report UI + export checks (openpyxl re-reads the .xlsx if installed)
 # Use PHP_CLI_SERVER_WORKERS=6 with php -S so the concurrency test really runs in parallel.
 ```

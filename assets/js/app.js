@@ -31,6 +31,8 @@ import { DELIVERY_VOUCHERS } from './views/vouchers/deliveryDefs.js';
 import { voucherListView } from './views/voucherList.js';
 import { voucherFormView } from './views/voucherForm.js';
 import { voucherViewView } from './views/voucherView.js';
+import { REPORTS } from './views/reports/defs.js';
+import { reportView } from './views/report.js';
 
 const VOUCHERS = { ...STOCK_VOUCHERS, ...PRODUCTION_VOUCHERS, ...DELIVERY_VOUCHERS };
 
@@ -61,6 +63,8 @@ const routes = [
     { path: `/v/${key}/:id`, view: voucherViewView(key, def), perm: `${def.perm}.view` },
     { path: `/v/${key}/:id/edit`, view: voucherFormView(key, def), perm: `${def.perm}.edit` },
   ]),
+  // Reports: #/r/<key>?date_from=…&date_to=…&…
+  ...REPORTS.map((def) => ({ path: `/r/${def.key}`, view: reportView(def), perm: def.perm })),
 ];
 
 const appEl = document.getElementById('app');

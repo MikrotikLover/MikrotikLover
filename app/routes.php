@@ -87,4 +87,10 @@ $r->get('stock/balance', [StockController::class, 'balance'], ['perm' => [
     'chalan.create', 'chalan.edit',
 ]]);
 
+// --- Reports + dashboard (Batch 6) -------------------------------------
+foreach (['inward', 'transfer', 'consumption', 'production', 'delivery', 'ink', 'stock', 'jobwork'] as $rep) {
+    $r->get("reports/$rep", [ReportController::class, $rep], ['perm' => "reports.$rep"]);
+}
+$r->get('dashboard', [ReportController::class, 'dashboard'], ['perm' => 'dashboard.view']);
+
 return $r;
