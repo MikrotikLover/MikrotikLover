@@ -107,7 +107,7 @@ final class AuthController
         $settings = [];
         try {
             foreach (DB::all("SELECT setting_key, setting_value FROM settings
-                              WHERE setting_key IN ('company_name','company_name_ur','whatsapp_support','company_address','company_phone','company_ntn')") as $row) {
+                              WHERE setting_key IN ('company_name','company_name_ur','whatsapp_support','company_address','company_phone','company_ntn','chalan_copies','chalan_terms')") as $row) {
                 $settings[$row['setting_key']] = (string) $row['setting_value'];
             }
         } catch (PDOException) {
@@ -120,6 +120,8 @@ final class AuthController
             'address'   => $settings['company_address'] ?? '',
             'phone'     => $settings['company_phone'] ?? '',
             'ntn'       => $settings['company_ntn'] ?? '',
+            'chalan_copies' => max(1, min(3, (int) ($settings['chalan_copies'] ?? 2) ?: 2)),
+            'chalan_terms'  => $settings['chalan_terms'] ?? '',
             'currency'  => Config::get('app.currency', 'PKR'),
             'timezone'  => 'Asia/Karachi',
             'today'     => date('Y-m-d'),

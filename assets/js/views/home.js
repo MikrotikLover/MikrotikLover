@@ -16,7 +16,7 @@ const TRANSACTIONS = [
   { key: 'estimation', icon: 'calculator', perm: 'estimation.view' },
   { key: 'bom_production', icon: 'layers', perm: 'bom_production.view' },
   { key: 'manual_production', icon: 'wrench', perm: 'manual_production.view' },
-  { key: 'chalan', icon: 'truck', perm: 'chalan.view', batch: 5 },
+  { key: 'chalan', icon: 'truck', perm: 'chalan.view' },
 ];
 
 const REPORTS = [

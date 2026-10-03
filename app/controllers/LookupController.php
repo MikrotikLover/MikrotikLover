@@ -25,7 +25,7 @@ final class LookupController
                     fn ($r) => ['sub' => $r['code']]
                 ),
                 'parties' => $this->rows(
-                    'SELECT id, code, name, name_ur, is_customer, is_supplier, is_fabric_owner, city FROM parties
+                    'SELECT id, code, name, name_ur, is_customer, is_supplier, is_fabric_owner, city, address FROM parties
                      WHERE is_active = 1 AND deleted_at IS NULL ORDER BY name',
                     fn ($r) => ['sub' => trim($r['code'] . ($r['city'] ? ' · ' . $r['city'] : ''))]
                 ),

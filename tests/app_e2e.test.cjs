@@ -129,6 +129,8 @@ const check = (name, cond, extra = '') => {
   await enter();
   await page.waitForSelector('[name=password][aria-invalid=true]');
   check('wrong password message beside password', (await page.locator('.field-error').first().textContent()).length > 3);
+  // Wait until focus is back on the (cleared) password field before retyping.
+  await page.waitForFunction(() => document.activeElement?.name === 'password' && document.activeElement.value === '');
   await page.keyboard.type('Store12345');
   await enter();
   await page.waitForFunction(() => location.hash === '#/profile');

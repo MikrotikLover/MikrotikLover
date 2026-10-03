@@ -5,7 +5,10 @@ import { esc, spinner, errorState, toast, formDialog, field } from '../core/ui.j
 import { icon } from '../core/icons.js';
 import { printDocument } from '../core/print.js';
 
-/** Read-only voucher with Print / Edit / Cancel (#/v/<key>/<id>, ?print=1 opens the print dialog). */
+/**
+ * Read-only voucher with Print / Edit / Cancel (#/v/<key>/<id>; ?print=1 opens the first print format).
+ * def.view.prints() may return several formats [{label, build(doc, voucher) → doc}].
+ */
 export function voucherViewView(key, def) {
   return {
     title: () => t(def.title),
@@ -36,12 +39,14 @@ export function voucherViewView(key, def) {
           return;
         }
         const posted = v.status === 'posted';
+        // Print formats: def.view.prints() (e.g. chalan + gate pass) or the standard voucher print.
+        const printFormats = def.view.prints ? def.view.prints() : [{ label: t('voucher.print'), build: (d) => d }];
         const doc = docFor(v);
         main.innerHTML = `
           <div class="voucher-bar">
             <a class="btn btn-ghost btn-sm" href="#/v/${key}">${icon('history', { size: 18 })}<span>${esc(t('voucher.all'))}</span></a>
             <span class="spacer"></span>
-            <button type="button" class="btn btn-ghost btn-sm" data-print>${icon('printer', { size: 18 })}<span>${esc(t('voucher.print'))}</span></button>
+            ${printFormats.map((f, i) => `<button type="button" class="btn btn-ghost btn-sm" data-print="${i}">${icon('printer', { size: 18 })}<span>${esc(f.label)}</span></button>`).join('')}
             ${posted && can(`${def.perm}.edit`) ? `<a class="btn btn-ghost btn-sm" href="#/v/${key}/${v.id}/edit">${icon('edit', { size: 18 })}<span>${esc(t('common.edit'))}</span></a>` : ''}
             ${posted && can(`${def.perm}.cancel`) ? `<button type="button" class="btn btn-ghost btn-sm danger-text" data-cancel>${icon('close', { size: 18 })}<span>${esc(t('voucher.cancel'))}</span></button>` : ''}
             ${can(`${def.perm}.create`) ? `<a class="btn btn-primary btn-sm" href="#/v/${key}/new">${icon('plus', { size: 18 })}<span>${esc(t('common.new'))}</span></a>` : ''}
@@ -61,7 +66,7 @@ export function voucherViewView(key, def) {
             ${v.remarks ? `<p class="vd-remarks"><strong>${esc(t('f.remarks'))}:</strong> ${esc(v.remarks)}</p>` : ''}
           </article>`;
 
-        main.querySelector('[data-print]').addEventListener('click', () => printDocument(docFor(v)));
+        main.querySelectorAll('[data-print]').forEach((b) => b.addEventListener('click', () => printDocument(printFormats[Number(b.dataset.print)].build(docFor(v), v))));
         main.querySelector('[data-cancel]')?.addEventListener('click', async () => {
           const res = await formDialog({
             title: `${t('voucher.cancel')} — ${v.voucher_no}`,
@@ -75,7 +80,7 @@ export function voucherViewView(key, def) {
         if (query.print === '1') {
           query.print = '0';
           history.replaceState(null, '', `#/v/${key}/${v.id}`);
-          printDocument(doc);
+          printDocument(printFormats[0].build(doc, v));
         }
       }
       load().catch((err) => toast(err.message, 'error'));

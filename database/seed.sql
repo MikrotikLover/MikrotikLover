@@ -193,5 +193,7 @@ INSERT INTO settings (setting_key, setting_value, description) VALUES
 ('ink_ml_per_sqm_full',  '12',                      'ml of ONE colour per square meter at 100% coverage on reference GSM fabric'),
 ('ink_reference_gsm',    '100',                     'Fabric GSM the ink ml/sqm figure refers to'),
 ('default_wastage_pct',  '3',                       'Default wastage % used in estimation'),
-('fiscal_year_start_month', '7',                    'Fiscal year start month (Pakistan = 7, July)')
+('fiscal_year_start_month', '7',                    'Fiscal year start month (Pakistan = 7, July)'),
+('chalan_copies',        '2',                       'Copies printed per delivery chalan (1-3)'),
+('chalan_terms',         'Goods received in good condition. Please check rolls and meters before signing.', 'Declaration printed on delivery chalans')
 ON DUPLICATE KEY UPDATE description = VALUES(description);

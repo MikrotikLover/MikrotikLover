@@ -12,7 +12,7 @@ Timezone **Asia/Karachi**, currency **PKR**.
 | 2 | Master data CRUD, design library, ink master | ✅ delivered |
 | 3 | Inward Gate Pass, Stock Transfer, Stock Consumption, Ink Loading | ✅ delivered |
 | 4 | Estimation, BOM Production, Manual Production | ✅ delivered |
-| 5 | Delivery Chalan + print layouts | pending |
+| 5 | Delivery Chalan + print layouts | ✅ delivered |
 | 6 | Reports, exports, dashboard | pending |
 
 ## Folder structure
@@ -33,7 +33,8 @@ public_html/                 ← deploy folder (this repository)
 │   │                        InkColour, Machine, Design; Settings, Lookup
 │   │                        VoucherController (base) → InwardGatePass, StockTransfer,
 │   │                        StockConsumption, InkLoad, Estimation,
-│   │                        ProductionController → BomProduction, ManualProduction;
+│   │                        ProductionController → BomProduction, ManualProduction,
+│   │                        DeliveryChalan;
 │   │                        Stock (balances)
 │   └── services/            Settings, InkService, Stock (ledger), VoucherNumber,
 │                            ProductionService (requirements + costing)
@@ -48,7 +49,7 @@ public_html/                 ← deploy folder (this repository)
 │       └── views/           login, setup, home, users, userForm, roles, audit, profile,
 │                            masterList / masterForm + masters/config.js, designs,
 │                            designForm, settings, voucherList / voucherForm /
-│                            voucherView + vouchers/defs.js, vouchers/productionDefs.js
+│                            voucherView + vouchers/defs.js, productionDefs.js, deliveryDefs.js
 ├── database/schema.sql      full schema for ALL batches (33 tables + stock view)
 ├── database/seed.sql        roles, permission matrix, units, warehouses, ink colours, settings
 └── tests/                   api_smoke.sh, enternav.html + enternav.test.cjs, app_e2e.test.cjs
@@ -158,6 +159,29 @@ machine hours × hourly cost → **cost per good meter**. Machine hours = entere
 else printed meters ÷ machine speed. Meters convert to the fabric item's unit (yard, or kg via GSM × width).
 Edit and cancel follow the voucher rules: refused when the finished fabric was already moved or used.
 
+## Delivery chalan & print layouts (Batch 5)
+
+**Outward Gate Pass / Delivery Chalan** (`DCV-…`, `#/v/chalan`): dispatch fabric to a party,
+stock OUT of the dispatch warehouse (default Finished Store).
+
+- Choosing the party fills the delivery address and shows its **job-work position**: fabric
+  received, printed, delivered, pending delivery, ready in the finished store, grey still in stock.
+- **Add this party's lots** fills the grid with every lot the party owns in that warehouse
+  (full meters, rolls and design).
+- **Job-work protection**: a lot owned by one party (job work) cannot be delivered to another.
+  Own stock can go to anyone. Only fabric (finished or grey) can be dispatched.
+- Design and production are filled from the production that made the lot.
+
+**Print layouts** (A4, from the voucher view):
+
+| Format | Contents |
+|---|---|
+| Delivery Chalan | Company header, *Deliver to* box (party, address, phone, NTN), PO/ref, vehicle, driver, items with design / lot / rolls / meters and totals, declaration, receiver block (name, CNIC, signature & stamp, date/time), signatures. 1–3 labelled copies (Party / Office / Gate), one per page. |
+| Outward Gate Pass | Compact half-page for the gate: party, vehicle, driver, item / lot / rolls / meters, store keeper / gate keeper / driver signatures. No rates. |
+
+Settings → Printing: number of chalan copies and the declaration text.
+All other vouchers print through the same layout engine (`assets/js/core/print.js`).
+
 ## Database rules (implemented in schema, used from Batch 3)
 
 - `stock_movements` is the only stock ledger (`item, warehouse, lot, qty_in, qty_out,
@@ -207,5 +231,7 @@ ADMIN_PASS=... tests/api_vouchers.sh              # 52 voucher / stock / concurr
 ADMIN_PASS=... NODE_PATH=$(npm root -g) node tests/vouchers_e2e.test.cjs # 33 voucher UI checks
 ADMIN_PASS=... tests/api_production.sh            # 58 estimation / production / costing checks
 ADMIN_PASS=... NODE_PATH=$(npm root -g) node tests/production_e2e.test.cjs # 22 production UI checks
+ADMIN_PASS=... tests/api_chalan.sh                # 26 delivery chalan checks
+ADMIN_PASS=... NODE_PATH=$(npm root -g) node tests/chalan_e2e.test.cjs   # 19 chalan + print UI checks
 # Use PHP_CLI_SERVER_WORKERS=6 with php -S so the concurrency test really runs in parallel.
 ```

@@ -14,6 +14,8 @@ final class SettingsController
         'ink_ml_per_sqm_full' => 'required|numeric|gte:0.01|lte:1000',
         'ink_reference_gsm'   => 'required|numeric|gte:1|lte:5000',
         'default_wastage_pct' => 'required|numeric|gte:0|lte:100',
+        'chalan_copies'       => 'required|integer|gte:1|lte:3',
+        'chalan_terms'        => 'nullable|string|max:500',
     ];
 
     /** GET settings */
@@ -22,7 +24,7 @@ final class SettingsController
         $all = Settings::all();
         $out = [];
         foreach (array_keys(self::RULES) as $key) {
-            $out[$key] = $all[$key] ?? '';
+            $out[$key] = $all[$key] ?? ($key === 'chalan_copies' ? '2' : '');
         }
         return $out;
     }
@@ -30,7 +32,8 @@ final class SettingsController
     /** PUT settings */
     public function update(): never
     {
-        $data = Validator::make(Request::body(), self::RULES);
+        // Keys not sent keep their current value (partial updates, older clients).
+        $data = Validator::make(Request::body() + $this->index(), self::RULES);
         if ($data['whatsapp_support'] !== null) {
             $data['whatsapp_support'] = ltrim((string) $data['whatsapp_support'], '+');
         }
