@@ -234,3 +234,18 @@ table.ot td input, table.ot td select { height: 26px; }
 table.ot tr.ot-approved td { background: #f0fdf4; }
 table.ot tr.ot-rejected td { color: #9ca3af; }
 table.ot tr.dirty td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+
+/* Salary sheet grid (batch 4) */
+table.salgrid th, table.salgrid td { padding: 3px 6px; font-size: 12px; }
+table.salgrid th.num, table.salgrid td.num { text-align: right; }
+table.salgrid tr.grp td { background: #eef2f7; font-weight: 700; position: sticky; left: 0; }
+table.salgrid tr.total td { background: #e5e7eb; font-weight: 700; border-top: 2px solid var(--line); position: sticky; bottom: 0; }
+table.salgrid tr.neg td { background: var(--danger-soft); }
+table.salgrid td.net { font-weight: 700; }
+table.salgrid input.cell { width: 72px; padding: 2px 4px; height: 24px; font-size: 12px; }
+table.salgrid input.cell.num { text-align: right; }
+table.salgrid input.cell[data-col="remarks"] { width: 140px; }
+table.salgrid td.warn-cell { cursor: help; }
+.btn.ok { background: var(--ok); border-color: var(--ok); color: #fff; }
+.btn.ok:disabled { opacity: .5; }
+.sal-list { display: flex; gap: 6px; flex-wrap: wrap; }

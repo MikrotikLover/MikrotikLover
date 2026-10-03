@@ -1,5 +1,6 @@
 // Reports launcher. Each report opens as print-ready HTML in a new tab (Print / Save as PDF / Excel-CSV).
 // Only the reports the user may print are shown.
+import { get } from '../core/api.js';
 import { h, openReport, today, TYPES } from '../core/dom.js';
 import { Form } from '../core/form.js';
 import { setKeys } from '../core/keys.js';
@@ -79,14 +80,28 @@ const REPORTS = [
     desc: 'Every voucher by date: journal lines for advances, loans and JVs; salary adjustments for incentives, penalties and overtime.',
     fields: [...range, { name: 'include_drafts', label: 'Include drafts', type: 'checkbox', span: 3 }],
     defaults: () => ({ from: firstOfMonth(), to: today() }) },
+  ...[['salary_sheet', 'Salary Sheet', 'A4 landscape, grouped by department with sub-totals, grand total, paid date and signature column.', true],
+    ['payslips', 'Payslips (English / Urdu)', 'Two payslips per A4 page with attendance, earnings, deductions and net salary in words. Pick a department or print all.', false],
+    ['salary_bank', 'Bank Transfer List', 'Employees paid by bank: CNIC, bank, account number and net salary. CSV for the bank portal.', true],
+    ['salary_departments', 'Department Salary Summary', 'Head count, gross, each deduction and net salary per department; cash / bank split.', true],
+  ].map(([key, title, desc, csv]) => ({
+    group: 'Payroll', key, title, desc, csv, perm: ['salary', 'print'],
+    fields: [{ name: 'id', label: 'Salary sheet', type: 'select', required: true, span: 6, numeric: true, blankLabel: '— choose —',
+      options: () => salarySheets.map((x) => ({ value: x.id, label: `${new Date(x.salary_month + 'T12:00:00').toLocaleString('en-GB', { month: 'long', year: 'numeric' })} — ${x.sheet_type === 'daily_wages' ? 'Daily Wages' : 'Permanent'} (${x.status})` })) },
+    ...(key === 'salary_bank' ? [] : [dept()])],
+    defaults: () => ({ id: salarySheets[0]?.id || '' }),
+  })),
 ];
 
 export function canAnyReport() {
   return REPORTS.some((r) => can(...r.perm) || (can('reports', 'print') && can(r.perm[0], 'view')));
 }
 
+let salarySheets = [];
+
 export default {
-  mount(root) {
+  async mount(root) {
+    if (can('salary', 'view')) salarySheets = await get('salary/sheets').catch(() => []);
     const visible = REPORTS.filter((r) => can(...r.perm) || (can('reports', 'print') && can(r.perm[0], 'view')));
     let first = null;
     let group = null;

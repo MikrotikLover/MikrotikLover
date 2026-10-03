@@ -30,6 +30,7 @@ use App\Controllers\HolidayController;
 use App\Controllers\JournalController;
 use App\Controllers\LookupController;
 use App\Controllers\RoleController;
+use App\Controllers\SalaryController;
 use App\Controllers\SettingsController;
 use App\Controllers\ShiftController;
 use App\Controllers\ShiftGroupController;
@@ -120,6 +121,15 @@ $routes = array_merge(
         ['GET',    '/journal/{id}', [JournalController::class, 'show'],   'journal.view'],
         ['POST',   '/journal',      [JournalController::class, 'store'],  'journal.add'],
         ['PUT',    '/journal/{id}', [JournalController::class, 'update'], 'journal.edit'],
+
+        // Salary sheets: type = permanent | daily_wages
+        ['GET',    '/salary/sheets',                [SalaryController::class, 'index'],    'salary.view'],
+        ['GET',    '/salary/preview',               [SalaryController::class, 'preview'],  'salary.view'],
+        ['GET',    '/salary/sheets/{id}',           [SalaryController::class, 'show'],     'salary.view'],
+        ['POST',   '/salary/sheets',                [SalaryController::class, 'store'],    'salary.add'],
+        ['POST',   '/salary/sheets/{id}/post',      [SalaryController::class, 'post'],     'salary.post'],
+        ['PUT',    '/salary/sheets/{id}/paid-date', [SalaryController::class, 'paidDate'], 'salary.edit'],
+        ['DELETE', '/salary/sheets/{id}',           [SalaryController::class, 'destroy'],  'salary.delete'],
 
         ['GET',    '/leaves/balance',    [LeaveController::class, 'balance'],    'leave.view'],
         ['POST',   '/leaves/{id}/status', [LeaveController::class, 'status'],    'leave.post'],

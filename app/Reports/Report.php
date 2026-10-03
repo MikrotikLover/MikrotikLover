@@ -50,6 +50,12 @@ abstract class Report
         return '';
     }
 
+    /** False when every printed item carries its own header (payslips). */
+    protected function showHeader(): bool
+    {
+        return true;
+    }
+
     public function load(Request $r): void
     {
         $this->request = $r;
@@ -93,6 +99,7 @@ abstract class Report
         $title = self::e($this->title());
         $pageContent = self::cssString($printed);
         $extraCss = $this->pageCss();
+        $header = $this->showHeader() ? $this->companyHeader() : '';
 
         return <<<HTML
 <!doctype html>
@@ -122,7 +129,7 @@ abstract class Report
   <span class="hint">Tip: choose "Save as PDF" in the print dialog for a PDF file.</span>
 </div>
 <main class="rpt">
-{$this->companyHeader()}
+{$header}
 {$body}
 <div class="rpt-printed screen-only">{$printed}</div>
 </main>

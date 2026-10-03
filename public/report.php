@@ -40,6 +40,10 @@ const REPORTS = [
     'journal'             => Reports\JournalReport::class,
     'daybook'             => Reports\DayBookReport::class,
     'voucher'             => Reports\VoucherSlipReport::class,
+    'salary_sheet'        => Reports\SalarySheetReport::class,
+    'payslips'            => Reports\PayslipReport::class,
+    'salary_bank'         => Reports\BankTransferReport::class,
+    'salary_departments'  => Reports\DepartmentSalaryReport::class,
 ];
 
 Http::noStore();

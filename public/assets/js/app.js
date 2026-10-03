@@ -37,6 +37,10 @@ const NAV = [
     { path: '/journal', label: 'Journal Voucher', ico: '⇄', perm: ['journal', 'view'] },
     { path: '/accounts', label: 'Chart of Accounts', ico: '☷', perm: ['journal', 'view'] },
   ] },
+  { group: 'Payroll', items: [
+    { path: '/salary/permanent', label: 'Salary Sheet — Permanent', ico: '₨', perm: ['salary', 'view'] },
+    { path: '/salary/daily', label: 'Salary Sheet — Daily Wages', ico: '⚒', perm: ['salary', 'view'] },
+  ] },
   { group: 'Reports', items: [
     { path: '/reports', label: 'Reports & ID Cards', ico: '⎙', perm: ['reports', 'view'] },
   ] },
@@ -71,6 +75,8 @@ route('/loans', page('loans'), { title: 'Loan Voucher', perm: ['loans', 'view'] 
 route('/journal', page('journal'), { title: 'Journal Voucher', perm: ['journal', 'view'] });
 route('/accounts', page('masters'), { title: 'Chart of Accounts', perm: ['journal', 'view'], kind: 'accounts' });
 route('/devices', page('masters'), { title: 'Attendance Devices, Kiosk & TV', perm: ['devices', 'view'], kind: 'devices' });
+route('/salary/permanent', page('salary'), { title: 'Salary Sheet — Permanent', perm: ['salary', 'view'], kind: 'permanent' });
+route('/salary/daily', page('salary'), { title: 'Salary Sheet — Daily Wages', perm: ['salary', 'view'], kind: 'daily_wages' });
 route('/users', page('users'), { title: 'Users', perm: ['users', 'view'] });
 route('/roles', page('roles'), { title: 'Roles & Permissions', perm: ['users', 'view'] });
 

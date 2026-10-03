@@ -11,8 +11,8 @@ Web-based payroll and HR system for Pakistani factories. It rebuilds the workflo
 | 1 | Schema + migrations, auth/roles, SPA shell, Setup module (Employee + photo, Department, Designation, Shift, Shift Group, Holidays/rest days, Company settings), Employee List report, ID cards | **Delivered** |
 | 2 | Attendance: manual voucher, barcode kiosk, ZKTeco ADMS push + CSV/Excel import, daily post, OT approval, leave register, attendance reports, live TV screen | **Delivered** |
 | 3 | Accounts vouchers + loan schedule + JV + voucher reports + DayBook | **Delivered** |
-| 4 | PayrollEngine, salary sheets, posting/locking, payslips, salary reports, unit tests | Next |
-| 5 | Dashboard, audit log viewer, rate settings, hardening, Hostinger deployment guide | — |
+| 4 | PayrollEngine, salary sheets, posting/locking, payslips, salary reports, unit tests | **Delivered** |
+| 5 | Dashboard, audit log viewer, rate settings, hardening, Hostinger deployment guide | Next |
 
 The **full database schema for every module** is already in place (`migrations/001`–`005`), so later batches only add code.
 
@@ -261,9 +261,97 @@ All have Print/PDF and Excel/CSV. **Advance Salary**, **Incentive**, **Penalty**
 9. As `hr`: vouchers and loans are view/print only. As `accounts`: everything in Accounts.
 10. `php tests/run.php` → 26 passed.
 
+## Batch 4 — Payroll
+
+### Workflow (Payroll → Salary Sheet — Permanent / Daily Wages)
+
+1. Choose **From / To** (defaults to the previous month; any period of up to 31 days, e.g. 26th–25th). The salary month is the month of **To**.
+2. **Show (F7)** computes every employee from attendance, approved overtime, posted vouchers and loan installments. Nothing is written.
+3. Review. Enter **Fine** and **Remarks** per row (Enter / ↓ moves to the next row). Rows with warnings show ⚠ (hover for details); a negative net is highlighted.
+4. **Save (F10)** stores a **draft** (one per type and month). Show again at any time to recalculate; saved fines and remarks are kept.
+5. **Post & Lock** recalculates and compares with the saved draft. If attendance, overtime or vouchers changed in the meantime it refuses with "press Show and Save again". Otherwise it:
+   - marks the vouchers, overtime rows and loan installments as consumed by the sheet (a short installment is carried forward and the loan is re-scheduled);
+   - creates the system **salary JV**: Dr Salaries (work pay + allowances), Overtime, Incentives / Cr Employee Advances, Employee Loans, Penalty income (penalties + fines), EOBI payable, PESSI/SESSI payable, Income tax payable, Salaries payable (net). It always balances;
+   - locks the period. Attendance, vouchers, OT approval and leave for that period and employee type can no longer change. A posted sheet can't be edited, re-saved or deleted; only its **Paid Date** can still be set.
+6. **F9** prints the salary sheet. Payslips, Bank List and Department Summary are buttons on the same toolbar, and also under Reports → Payroll.
+
+**Sheet types.** The *Permanent* sheet covers permanent and contract employees; *Daily Wages* covers daily-wage employees. Each locks only its own employee types.
+
+### Calculation rules (`app/PayrollEngine.php`, pure, covered by `tests/PayrollEngineTest.php`)
+
+| Item | Rule |
+|---|---|
+| Days in month | Days in the selected period (`salary_day_basis` = `calendar`; `fixed30` / `fixed26` also supported) |
+| Work days | P / S = 1; **HD = worked minutes ÷ shift net minutes** (max 1, actual hours, no fixed ½) |
+| Rest days | R + paid holidays (H) |
+| Paid days (permanent) | Work + Rest + Paid leave (L), capped at days in month |
+| Work Pay | `round(Basic ÷ Days × Paid days)`; Allowance pay = `round(Allowances ÷ Days × Paid days)` |
+| Daily wages | Pay = `round(Daily rate × Work days)`; rest days and leave are not paid; allowances prorate on work days |
+| OT rate | Employee's fixed OT rate, else `Basic ÷ Days ÷ Shift hours × OT multiplier` (daily: `Rate ÷ Shift hours × multiplier`) |
+| OT amount | `round(OT hours × OT rate)` + fixed OT-voucher amounts. OT hours = approved OT + OT-voucher hours. Employees without OT: not paid, with a warning |
+| Gross | Work Pay + Allowance pay + OT |
+| EOBI / PESSI / SESSI | Employee share from `statutory_rates` effective on the period end (only when applicable on the employee) |
+| Income tax | `tax_slabs` effective on the period end: annual tax on (Gross + Incentive) × 12, ÷ 12 |
+| Net | Gross + Incentive − Advance − Loan − Penalty − Fine − EOBI − PESSI − Tax |
+| Rounding | Whole rupees using the company rounding rule (half up by default; up / down available) |
+
+Every verified example from the specification is a unit test: 4,500 · 3,929 · 5,357 · 4,685 · 7,131 · OT 75/h → 750 · daily wages 33,000 + 750.
+
+**Assumptions (please confirm or correct):**
+- The salary rate is the salary-info record effective on the **last day** of the period. A mid-period increment is not split.
+- **Unmarked days** (employed, no attendance row) are unpaid and flagged. Post attendance before running payroll.
+- A **half day without times** pays 0 hours and is flagged (enter the times in attendance).
+- If the salary can't cover the loan installment, the installment is reduced and the balance carried forward. Advances, penalties and statutory amounts are never reduced, so a **negative net** is shown and highlighted for review instead.
+- Income tax is annualised from the month's salary, with no year-to-date reconciliation. The JV books only the **employee share** of EOBI / PESSI (the employer share is a separate challan entry).
+- **Fine** is entered on the salary sheet. **Penalty** comes from posted penalty vouchers.
+- Posted salary sheets can't be unposted (per the "posted months are locked" rule).
+
+### Reports (Print / PDF; CSV where noted)
+
+- **Salary Sheet** (CSV). A4 landscape, every column from the spec, grouped by department with sub-totals, grand total, paid date, page X of Y and a signature column. Work Pay includes prorated allowances, so each row adds up.
+- **Payslips**. English / Urdu, two per A4 page: attendance, earnings, deductions, loan balance, net in figures and words, signatures. Filter by department, or `employee_id` for one employee.
+- **Bank Transfer List** (CSV). Employees paid by bank, with CNIC, bank, account (missing accounts flagged), total in words.
+- **Department Salary Summary** (CSV). Head count, earnings, each deduction, net and the cash/bank split per department.
+
+### API endpoints added in batch 4
+
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/api/salary/sheets?type=&year=` | salary.view |
+| GET | `/api/salary/preview?type=permanent\|daily_wages&from=&to=` (computes; a posted month returns the stored sheet) | salary.view |
+| GET | `/api/salary/sheets/{id}` | salary.view |
+| POST | `/api/salary/sheets` `{sheet_type, period_from, period_to, paid_date?, remarks?, lines:[{employee_id, fine, remarks}]}` (save draft) | salary.add |
+| POST | `/api/salary/sheets/{id}/post` `{paid_date?}` | salary.post |
+| PUT | `/api/salary/sheets/{id}/paid-date` `{paid_date}` | salary.edit |
+| DELETE | `/api/salary/sheets/{id}` (draft only) | salary.delete |
+| GET | `report.php?r=salary_sheet\|payslips\|salary_bank\|salary_departments&id=` (`&department_id=`, `&employee_id=`) | salary.print |
+
+Migration `010_payroll_lines.sql` makes day counts fractional, adds allowance, holiday, unmarked and warning columns, adds the `salary_sheet_loans` table, and gives HR salary view/print.
+
+### Manual test checklist (batch 4)
+
+1. Run `php migrations/migrate.php --seed` (applies 010), then `php tests/run.php` → 42 passed.
+2. **Salary Sheet — Permanent**, 01-09-2026 → 30-09-2026, **F7**. You get 12 employees grouped by department. Check:
+   - `0011` OT 6 h × 714.29 = 4,286 (OT voucher, 7-hour shift);
+   - `0005` incentive 6,774 and loan 2,000 (balance 10,000);
+   - `0003` advance 5,000; `0009` advance 3,000; `0006` penalty 500;
+   - half days paid by hours (e.g. `0006` 22.42 work days).
+3. Type a fine of 300 for `0004`. Net and grand total update immediately. **F10** → "Draft saved".
+4. Change attendance (or post a new incentive) for a September employee, then press Post → refused with "press Show and Save again". Show, Save, then **Post & Lock** and confirm.
+5. After posting:
+   - the vouchers show as used (Unpost refused) and `LN-0001` Sep is deducted;
+   - Journal Voucher has a new system JV for "Permanent salary September 2026" with Dr = Cr;
+   - editing September attendance for a permanent employee → "belongs to a posted salary month";
+   - a new advance for September is refused.
+6. Show again → "posted and locked", and the grid is read only. Save, Post and Delete are disabled; the Paid Date can still be changed.
+7. **F9** Salary Sheet: landscape, department sub-totals, grand total, page X of Y. **Payslips**: 2 per page, Urdu labels and amount in words. **Bank List**: `0001`, `0002`, `0011`. **Dept. Summary**: totals equal the sheet.
+8. **Daily Wages** sheet for September: 3 employees, Pay = rate × work days. Rest days are not paid.
+9. Try an overlapping period (26-09 → 25-10) for Permanent → refused.
+10. As `hr`: view and print only (no Save / Post). As `accounts`: full access.
+
 ## Notes and open questions
 
-- **Payroll decisions (confirmed for batch 4):**
+- **Payroll decisions (confirmed, implemented in batch 4):**
   - **Paid days from actual hours.** A full Present day counts as 1 day, so the verified examples still hold (e.g. 9,000 ÷ 28 × 14 = 4,500). A half day or short day counts as `worked minutes ÷ shift net minutes`, capped at 1, instead of a fixed ½.
   - **Allowances** are added to gross and prorated the same way: `Allowance pay = Allowances ÷ days in month × paid days`. Gross = Work Pay + Allowance pay + Overtime.
 - **Statutory rates and tax slabs** in `006_base_data.sql` are clearly marked *samples* (EOBI 1%/5% of minimum wage, PESSI/SESSI employer 6%, FY 2025-26 salaried slabs). They are effective-dated rows that admins can edit; check them against current notifications.
