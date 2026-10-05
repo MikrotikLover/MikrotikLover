@@ -1,0 +1,12 @@
+# Used only when the whole production/ folder is uploaded into a web root.
+# Everything is served from public/; code, config, migrations and storage are never exposed.
+Options -Indexes
+<FilesMatch "^(config\.php|config\.sample\.php|.*\.(sql|md|log|sh))$">
+    Require all denied
+</FilesMatch>
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^(src|migrations|storage|tools|tests)(/|$) - [F,L]
+    RewriteCond %{ENV:REDIRECT_STATUS} ^$
+    RewriteRule ^(.*)$ public/$1 [L]
+</IfModule>

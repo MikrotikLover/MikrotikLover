@@ -6,3 +6,6 @@
 *.log
 *.whl
 /-b
+/production/config.php
+/production/storage/*
+!/production/storage/.htaccess
