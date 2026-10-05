@@ -13,10 +13,12 @@ final class Entries
         LEFT JOIN masters qu ON qu.id = e.quality_id
         LEFT JOIN masters ar ON ar.id = e.article_id
         LEFT JOIN masters ca ON ca.id = e.calibration_id
-        LEFT JOIN masters op ON op.id = e.operator_id';
+        LEFT JOIN masters op ON op.id = e.operator_id
+        LEFT JOIN ink_companies ic ON ic.id = e.ink_company_id';
 
     public const SELECT = 'e.id, e.entry_date, e.lot_no, e.design, e.printed_mtr, e.ink_ml_per_mtr, e.shift, e.remarks, e.ink_rate, e.ink_ml, e.ink_cost,
-        e.source, e.machine_id, mc.name AS machine, pa.name AS party, qu.name AS quality, ar.name AS article, ca.name AS calibration, op.name AS operator';
+        e.ink_company_id, e.ink_company_manual, ic.name AS ink_company, e.machine_rate, e.machine_cost,
+        COALESCE(e.ink_cost, 0) + e.machine_cost AS total_cost, e.source, e.machine_id, mc.name AS machine, pa.name AS party, qu.name AS quality, ar.name AS article, ca.name AS calibration, op.name AS operator';
 
     /** Data-check flags usable as ?flag= */
     public const FLAGS = ['no_ink', 'high_ink', 'high_mtr', 'no_operator', 'no_party', 'no_article', 'no_quality'];
@@ -40,7 +42,7 @@ final class Entries
             $w[] = 'e.entry_date <= :to';
             $p['to'] = $d;
         }
-        foreach (['machine_id', 'party_id', 'operator_id', 'quality_id', 'article_id', 'calibration_id', 'import_batch_id'] as $col) {
+        foreach (['machine_id', 'party_id', 'operator_id', 'quality_id', 'article_id', 'calibration_id', 'ink_company_id', 'import_batch_id'] as $col) {
             $key = $col === 'import_batch_id' ? 'batch_id' : $col;
             $v = $q[$key] ?? '';
             if (is_scalar($v) && ctype_digit((string)$v)) {
@@ -157,6 +159,12 @@ final class Entries
         if (!in_array($shift, ['A', 'B', 'C'], true)) {
             $errors['shift'] = 'Choose shift A, B or C.';
         }
+        // Ink company: empty = the one the machine uses on that date
+        $inkCompany = (string)($in['ink_company_id'] ?? '');
+        $inkCompany = ctype_digit($inkCompany) && $inkCompany !== '0' ? (int)$inkCompany : null;
+        if ($inkCompany !== null && !Database::value('SELECT id FROM ink_companies WHERE id = ?', [$inkCompany])) {
+            $errors['ink_company_id'] = 'Choose an ink company.';
+        }
         foreach (['lot_no' => 40, 'design' => 80, 'remarks' => 255] as $f => $max) {
             if (mb_strlen(Text::clean($in[$f] ?? '')) > $max) {
                 $errors[$f] = "At most $max characters.";
@@ -184,8 +192,7 @@ final class Entries
             'calibration_id' => Masters::resolve('calibration', $in['calibration'] ?? ''),
             'article_id'     => Masters::resolve('article', $in['article'] ?? ''),
             'operator_id'    => Masters::resolve('operator', $in['operator'] ?? ''),
-            'ink_rate'       => Machines::rateFor($machineId, $date),
-        ];
+        ] + Pricing::forEntry($machineId, $date, $inkCompany);
     }
 
     public static function create(array $in): array

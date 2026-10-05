@@ -93,7 +93,10 @@ final class AdminController
         if (array_key_exists('company_name', $in) && Text::clean($in['company_name']) === '') {
             $errors['company_name'] = 'Company name is required.';
         }
-        foreach (['default_ink_rate', 'ink_high_ml', 'mtr_high'] as $k) {
+        if (array_key_exists('default_ink_company_id', $in) && !Database::value('SELECT id FROM ink_companies WHERE id = ?', [(int)$in['default_ink_company_id']])) {
+            $errors['default_ink_company_id'] = 'Choose an ink company.';
+        }
+        foreach (['ink_high_ml', 'mtr_high'] as $k) {
             if (array_key_exists($k, $in) && (Text::number($in[$k]) === null || Text::number($in[$k]) < 0)) {
                 $errors[$k] = 'Enter a number.';
             }

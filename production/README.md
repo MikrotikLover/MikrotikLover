@@ -11,14 +11,23 @@ It uses the same stack and hosting model as the payroll app in this repository, 
 | Dashboard | Metres, ink litres, ink cost, average ml/m, cost per metre and entries/lots for any date range, compared with the previous period. Also a daily (or monthly) chart and breakdowns by machine, shift, operator, party and article. |
 | New Entry | Fast keyboard entry. Enter moves to the next field and Ctrl+S saves. After a save, date, machine, shift, operator, party, lot and quality stay filled for the next row. Party, quality and other names are suggested from the lists. |
 | Entries | Filter by date, machine, shift, party, operator, quality, article, lot or free text. Shows totals and pages through results, with CSV export, print, edit and delete. |
-| Reports | Summary grouped by any one or two of: party, **customer** (party without "Vol N"), lot, machine, operator, shift, date, month, quality, article, calibration, design. Exports to CSV and prints. |
+| Reports | Summary grouped by any one or two of: party, **customer** (party without "Vol N"), lot, machine, operator, shift, date, month, quality, article, calibration, design, ink company. Exports to CSV and prints. |
 | Import Excel | Upload the workbook as it is. The app finds the sheet and heading row itself, shows a preview with any problem rows, then imports. **Add new rows only** skips rows that were already imported, so you can re-import the same growing workbook every day. **Replace** re-imports a date range after old rows were corrected in Excel. |
 | Data Check | Lists rows with missing ink, very high ink (thresholds in Settings), very high metres, or a missing operator, party, article or quality. Also finds spelling variants in the lists (Dupatta/Duppata, Mahmood/Mehmood, Allovar/Allover) and merges them in one click. |
-| Machines & Ink Rates | **Each machine has its own ink rate (Rs/litre) with a history.** A new rate applies from its date onward, and that machine's entries are re-priced automatically. |
+| Ink Companies | Ink comes from different companies, and **each company has its own ink rate (Rs/litre)** with a dated history. |
+| Machines & Rates | **Each machine has its own machine rate (Rs per printed metre)** with a dated history. Each machine also records **which ink company's ink it uses from which date**. One entry can still be given a different ink company in the entry form. Any change re-prices the affected entries automatically. |
 | Lists | Parties, operators, qualities, articles and calibrations. You can rename, merge, hide or delete them. |
-| Users / Settings / Audit Log | Roles: **admin** (everything), **manager** (entries, import, lists, rates), **entry** (add and edit entries), **viewer** (read only). Every change is written to the audit log. |
+| Users / Settings / Audit Log | Roles: **admin** (everything), **manager** (entries, import, lists, ink and machine rates), **entry** (add and edit entries), **viewer** (read only). Every change is written to the audit log. |
 
-**Ink cost** = Printed Mtr × Ink use (ml/m) ÷ 1000 × machine rate (Rs/L) on the entry date. This matches the workbook's formula with Rs 1450/L. The average ml/m only counts metres that have an ink figure, so a row with a blank ink cell doesn't pull the average down.
+**Costs of an entry**, using the rates in force on the entry date:
+
+- **Ink cost** = Printed Mtr × Ink use (ml/m) ÷ 1000 × ink rate (Rs/L) of the entry's ink company. This matches the workbook's formula, which uses Rs 1450/L.
+- **Machine cost** = Printed Mtr × machine rate (Rs/m).
+- **Total cost** = ink cost + machine cost. The dashboard, entries and reports show all three, along with total cost per metre.
+
+A rate also applies to dates before its first row, so an opening rate covers old production. The average ml/m only counts metres that have an ink figure, so a row with a blank ink cell doesn't pull the average down.
+
+After the first import every machine uses the company **Default ink** at Rs 1450/L and has no machine rate. Rename that company, add the other companies, and set each machine's rate and ink company.
 
 Names are trimmed and matched without regard to case. So `Bana Dora ` and `Bana Dora`, or `MS` and `Ms`, become one record.
 
@@ -57,8 +66,8 @@ From the workbook as uploaded on 5 Oct 2026. You can check all of these in the a
 
 ```
 public/       web root: index.php (SPA shell), api.php, migrate.php, assets/app.js, assets/app.css
-src/          bootstrap, Config, Database, Auth, Audit, XlsxReader (streaming), Importer, Entries, Reports, Machines, Masters, Controllers/
-migrations/   001_schema.sql + migrate.php
+src/          bootstrap, Config, Database, Auth, Audit, XlsxReader (streaming), Importer, Entries, Reports, Pricing, Machines, InkCompanies, Masters, Controllers/
+migrations/   001_schema.sql, 002_ink_companies_machine_rates.sql + migrate.php
 tests/        php tests/run.php
 tools/        devserver.php (router for PHP's built-in server)
 ```

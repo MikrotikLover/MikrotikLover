@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace Prod\Controllers;
 
 use Prod\Database;
+use Prod\InkCompanies;
 use Prod\Machines;
 use Prod\Masters;
 use Prod\Request;
@@ -14,7 +15,10 @@ final class MasterController
     /** Active names of every list (for the entry form and filters). */
     public function lookups(Request $r): array
     {
-        $out = ['machines' => Database::all('SELECT id, name, is_active FROM machines ORDER BY name')];
+        $out = [
+            'machines'      => Database::all('SELECT id, name, is_active FROM machines ORDER BY name'),
+            'ink_companies' => Database::all('SELECT id, name, is_active FROM ink_companies ORDER BY name'),
+        ];
         foreach (array_keys(Masters::KINDS) as $kind) {
             $out[$kind] = Database::all('SELECT id, name, is_active FROM masters WHERE kind = ? ORDER BY name', [$kind]);
         }
@@ -76,11 +80,13 @@ final class MasterController
 
     public function machineStore(Request $r): array
     {
-        $rate = Text::number($r->input('rate_per_litre'));
-        if ($rate === null || $rate < 0) {
-            throw \Prod\ApiException::validation(['rate_per_litre' => 'Enter the ink rate in Rs per litre.']);
+        $raw = $r->input('rate_per_mtr');
+        $rate = Text::number($raw);
+        if (($rate === null && Text::clean($raw ?? '') !== '') || ($rate !== null && $rate < 0)) {
+            throw \Prod\ApiException::validation(['rate_per_mtr' => 'Enter the machine rate in Rs per metre (or leave it empty).']);
         }
-        return Machines::find(Machines::create((string)$r->input('name', ''), $rate));
+        $ink = (string)$r->input('ink_company_id', '');
+        return Machines::find(Machines::create($r->input('name', ''), ctype_digit($ink) ? (int)$ink : null, $rate));
     }
 
     public function machineUpdate(Request $r): array
@@ -108,13 +114,61 @@ final class MasterController
 
     public function rateStore(Request $r): array
     {
-        Machines::saveRate($r->id(), $r->input('effective_from'), $r->input('rate_per_litre'), $r->input('note', ''));
-        return Machines::rates($r->id());
+        Machines::saveRate($r->id(), $r->input('effective_from'), $r->input('rate_per_mtr'), $r->input('note', ''));
+        return ['ok' => 1];
     }
 
     public function rateDestroy(Request $r): array
     {
         Machines::deleteRate($r->id(), $r->id('rid'));
-        return Machines::rates($r->id());
+        return ['ok' => 1];
+    }
+
+    public function inkStore(Request $r): array
+    {
+        Machines::saveInk($r->id(), $r->input('effective_from'), $r->input('ink_company_id'));
+        return ['ok' => 1];
+    }
+
+    public function inkDestroy(Request $r): array
+    {
+        Machines::deleteInk($r->id(), $r->id('iid'));
+        return ['ok' => 1];
+    }
+
+    // ---- ink companies --------------------------------------------------------------------
+
+    public function inkCompanies(Request $r): array
+    {
+        return InkCompanies::list();
+    }
+
+    public function inkCompanyStore(Request $r): array
+    {
+        return InkCompanies::find(InkCompanies::create($r->input('name', ''), $r->input('rate_per_litre')));
+    }
+
+    public function inkCompanyUpdate(Request $r): array
+    {
+        InkCompanies::update($r->id(), $r->body());
+        return InkCompanies::find($r->id());
+    }
+
+    public function inkCompanyDestroy(Request $r): array
+    {
+        InkCompanies::delete($r->id());
+        return ['deleted' => 1];
+    }
+
+    public function inkRateStore(Request $r): array
+    {
+        InkCompanies::saveRate($r->id(), $r->input('effective_from'), $r->input('rate_per_litre'), $r->input('note', ''));
+        return ['ok' => 1];
+    }
+
+    public function inkRateDestroy(Request $r): array
+    {
+        InkCompanies::deleteRate($r->id(), $r->id('rid'));
+        return ['ok' => 1];
     }
 }

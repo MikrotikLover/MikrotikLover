@@ -7,7 +7,7 @@ final class Settings
 {
     public const KEYS = [
         'company_name'     => 'string',
-        'default_ink_rate' => 'number', // Rs per litre, first rate of a newly created machine
+        'default_ink_company_id' => 'number', // ink company given to a machine created by an import
         'ink_high_ml'      => 'number', // Data check: ink use above this (ml/m) is suspicious
         'mtr_high'         => 'number', // Data check: printed metres above this in one row is suspicious
     ];

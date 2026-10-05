@@ -144,7 +144,8 @@ const ROUTES = {
   reports: { title: 'Reports', render: pageReports },
   import: { title: 'Import Excel', render: pageImport, perm: 'import' },
   check: { title: 'Data Check', render: pageCheck },
-  machines: { title: 'Machines & Ink Rates', render: pageMachines },
+  machines: { title: 'Machines & Rates', render: pageMachines },
+  inks: { title: 'Ink Companies', render: pageInks },
   lists: { title: 'Lists', render: pageLists },
   users: { title: 'Users', render: pageUsers, perm: 'users' },
   settings: { title: 'Settings', render: pageSettings },
@@ -200,7 +201,8 @@ function renderShell() {
         link('check', 'Data Check'),
         can('import') && link('import', 'Import Excel'),
         h('h4', {}, 'Setup'),
-        link('machines', 'Machines & Ink Rates'),
+        link('machines', 'Machines & Rates'),
+        link('inks', 'Ink Companies'),
         link('lists', 'Parties, Operators…'),
         can('users') && link('users', 'Users'),
         can('settings') && link('settings', 'Settings'),
@@ -260,6 +262,7 @@ function filterBar(L, q, extra = []) {
     quality: h('input', { name: 'quality', list: 'dl-quality', value: nameById(L.quality, q.quality_id), placeholder: 'Any quality', style: 'width:140px' }),
     article: h('input', { name: 'article', list: 'dl-article', value: nameById(L.article, q.article_id), placeholder: 'Any article', style: 'width:120px' }),
     lot: h('input', { name: 'lot', value: q.lot || '', placeholder: 'Lot #', style: 'width:90px' }),
+    ink_company_id: select('ink_company_id', [['', 'All'], ...L.ink_companies.map((c) => [c.id, c.name])], q.ink_company_id),
   };
   const presets = h('select', { 'aria-label': 'Quick range', onchange: (e) => {
     const v = e.target.value; const d = new Date(); let a, b = today();
@@ -274,7 +277,7 @@ function filterBar(L, q, extra = []) {
   } }, [['', 'Quick range…'], ['7', 'Last 7 days'], ['30', 'Last 30 days'], ['month', 'This month'], ['last', 'Last month'], ['year', 'This year'], ['all', 'All dates']].map(([v, l]) => h('option', { value: v }, l)));
   const el = h('div', { class: 'row' },
     field('From', f.from), field('To', f.to), field('Range', presets), field('Machine', f.machine_id), field('Shift', f.shift),
-    field('Party', f.party), field('Operator', f.operator), field('Quality', f.quality), field('Article', f.article), field('Lot', f.lot),
+    field('Party', f.party), field('Operator', f.operator), field('Quality', f.quality), field('Article', f.article), field('Lot', f.lot), field('Ink company', f.ink_company_id),
     extra,
     ['party', 'operator', 'quality', 'article'].map((k) => datalist('dl-' + k, L[k], false)));
   return {
@@ -282,7 +285,7 @@ function filterBar(L, q, extra = []) {
     values: () => ({
       from: f.from.value, to: f.to.value, machine_id: f.machine_id.value, shift: f.shift.value,
       party_id: idByName(L.party, f.party.value), operator_id: idByName(L.operator, f.operator.value),
-      quality_id: idByName(L.quality, f.quality.value), article_id: idByName(L.article, f.article.value), lot: f.lot.value.trim(),
+      quality_id: idByName(L.quality, f.quality.value), article_id: idByName(L.article, f.article.value), lot: f.lot.value.trim(), ink_company_id: f.ink_company_id.value,
       all: f.from.value || f.to.value ? '' : '1', // keeps "all dates" from falling back to the default range
     }),
   };
@@ -400,22 +403,24 @@ async function pageDashboard(r) {
     h('div', { class: 'tiles' },
       tile('Printed metres', fmt.n0(T.meters), delta(T.meters, P.meters)),
       tile('Ink used', fmt.n0(T.ink_litres) + ' L', delta(T.ink_litres, P.ink_litres)),
-      tile('Ink cost', 'Rs ' + fmt.short(T.ink_cost), delta(T.ink_cost, P.ink_cost), fmt.rs(T.ink_cost)),
+      tile('Total cost', 'Rs ' + fmt.short(T.total_cost), delta(T.total_cost, P.total_cost), fmt.rs(T.total_cost)),
+      tile('Ink cost', 'Rs ' + fmt.short(T.ink_cost), T.cost_per_mtr === null ? '' : `Rs ${fmt.n2(T.cost_per_mtr)} per metre`, fmt.rs(T.ink_cost)),
+      tile('Machine cost', 'Rs ' + fmt.short(T.machine_cost), T.meters ? `Rs ${fmt.n2(T.machine_cost / T.meters)} per metre` : '', fmt.rs(T.machine_cost)),
       tile('Avg ink', T.avg_ml === null ? '–' : fmt.n2(T.avg_ml) + ' ml/m', P.avg_ml ? 'Previous: ' + fmt.n2(P.avg_ml) + ' ml/m' : ''),
-      tile('Ink cost per metre', T.cost_per_mtr === null ? '–' : 'Rs ' + fmt.n2(T.cost_per_mtr), P.cost_per_mtr ? 'Previous: Rs ' + fmt.n2(P.cost_per_mtr) : ''),
+      tile('Total cost per metre', T.total_per_mtr === null ? '–' : 'Rs ' + fmt.n2(T.total_per_mtr), P.total_per_mtr ? 'Previous: Rs ' + fmt.n2(P.total_per_mtr) : ''),
       tile('Entries / Lots', fmt.n0(T.entries) + ' / ' + fmt.n0(T.lots), fmt.n0(T.meters / Math.max(1, days)) + ' m per day')),
     panel((days > 62 ? 'Printed metres per month' : 'Printed metres per day'),
       h('div', {}, barChart(pts, (v) => fmt.n0(v) + ' m', 'Printed metres over time'), tableView),
       h('button', { class: 'btn small no-print', onclick: (e) => { tableView.classList.toggle('hidden'); e.target.textContent = tableView.classList.contains('hidden') ? 'Show table' : 'Hide table'; } }, 'Show table')),
     h('div', { class: 'cols' },
       panel('By machine', hbars(d.machines.map((x) => ({ ...x, k: x.k })), 'k', 'meters',
-        (v, x) => `${fmt.n0(v)} m · ${x.avg_ml === null ? '–' : fmt.n1(x.avg_ml)} ml/m · Rs ${fmt.short(x.ink_cost)}`,
+        (v, x) => `${fmt.n0(v)} m · ${x.avg_ml === null ? '–' : fmt.n1(x.avg_ml)} ml/m · Rs ${fmt.short(x.total_cost)}`,
         (x) => toEntries({ machine_id: (L.machines.find((m) => m.name === x.k) || {}).id }))),
       panel('By shift', hbars(d.shifts.map((x) => ({ ...x, k: 'Shift ' + x.k })), 'k', 'meters',
         (v, x) => `${fmt.n0(v)} m · ${x.avg_ml === null ? '–' : fmt.n1(x.avg_ml)} ml/m`)),
       panel('Top operators', hbars(d.operators, 'k', 'meters', (v, x) => `${fmt.n0(v)} m · ${x.avg_ml === null ? '–' : fmt.n1(x.avg_ml)} ml/m`,
         (x) => toEntries({ operator_id: idByName(L.operator, x.k) }))),
-      panel('Top parties', hbars(d.parties, 'k', 'meters', (v, x) => `${fmt.n0(v)} m · Rs ${fmt.short(x.ink_cost)}`,
+      panel('Top parties', hbars(d.parties, 'k', 'meters', (v, x) => `${fmt.n0(v)} m · Rs ${fmt.short(x.total_cost)}`,
         (x) => toEntries({ party_id: idByName(L.party, x.k) }))),
       panel('By article', hbars(d.articles, 'k', 'meters', (v) => `${fmt.n0(v)} m`)),
     ));
@@ -443,7 +448,8 @@ async function pageEntries(r) {
     h('td', { class: 'num' }, fmt.n0(e.printed_mtr)), h('td', {}, e.calibration),
     h('td', { class: 'num' + (e.ink_ml_per_mtr === null || +e.ink_ml_per_mtr > highInk ? ' flag' : '') }, e.ink_ml_per_mtr === null ? '—' : fmt.ink(e.ink_ml_per_mtr)),
     h('td', {}, e.article), h('td', { class: 'nowrap' }, e.machine), h('td', {}, e.shift), h('td', {}, e.operator),
-    h('td', { class: 'num' }, e.ink_ml === null ? '' : fmt.n1(e.ink_ml / 1000)), h('td', { class: 'num' }, fmt.n0(e.ink_cost))));
+    h('td', { class: 'num' }, e.ink_ml === null ? '' : fmt.n1(e.ink_ml / 1000)), h('td', { class: 'num', title: e.ink_company || '' }, fmt.n0(e.ink_cost)),
+    h('td', { class: 'num' }, fmt.n0(e.machine_cost)), h('td', { class: 'num' }, fmt.n0(e.total_cost))));
   const pager = h('div', { class: 'pager' },
     h('button', { class: 'btn small', disabled: data.page <= 1, onclick: () => go('entries', { ...q, page: data.page - 1 }) }, '‹ Prev'),
     h('span', {}, `Page ${data.page} of ${data.pages} · ${fmt.n0(T.entries)} entries`),
@@ -468,10 +474,11 @@ async function pageEntries(r) {
     h('div', { class: 'print-head' }, h('strong', {}, S.company), ' — Production entries ', q.from ? fmt.date(q.from) : '', ' to ', q.to ? fmt.date(q.to) : ''),
     h('div', { class: 'table-wrap' }, h('table', { class: 'grid' },
       h('thead', {}, h('tr', {}, ['Date', 'Lot #', 'Quality', 'Party', 'Design'].map((t) => h('th', {}, t)), h('th', { class: 'num' }, 'Printed Mtr'), h('th', {}, 'Calibration'),
-        h('th', { class: 'num' }, 'Ink ml/m'), h('th', {}, 'Article'), h('th', {}, 'Machine'), h('th', {}, 'Shift'), h('th', {}, 'Operator'), h('th', { class: 'num' }, 'Ink L'), h('th', { class: 'num' }, 'Cost Rs'))),
-      h('tbody', {}, rows.length ? rows : h('tr', {}, h('td', { colspan: 14, class: 'muted' }, 'No entries match these filters.'))),
+        h('th', { class: 'num' }, 'Ink ml/m'), h('th', {}, 'Article'), h('th', {}, 'Machine'), h('th', {}, 'Shift'), h('th', {}, 'Operator'), h('th', { class: 'num' }, 'Ink L'), h('th', { class: 'num' }, 'Ink Rs'), h('th', { class: 'num' }, 'Machine Rs'), h('th', { class: 'num' }, 'Total Rs'))),
+      h('tbody', {}, rows.length ? rows : h('tr', {}, h('td', { colspan: 16, class: 'muted' }, 'No entries match these filters.'))),
       h('tfoot', {}, h('tr', {}, h('td', { colspan: 5 }, `Total (${fmt.n0(T.entries)} entries, ${fmt.n0(T.lots)} lots)`), h('td', { class: 'num' }, fmt.n0(T.meters)), h('td'),
-        h('td', { class: 'num' }, T.avg_ml === null ? '' : fmt.n2(T.avg_ml)), h('td', { colspan: 4 }), h('td', { class: 'num' }, fmt.n0(T.ink_litres)), h('td', { class: 'num' }, fmt.n0(T.ink_cost)))))),
+        h('td', { class: 'num' }, T.avg_ml === null ? '' : fmt.n2(T.avg_ml)), h('td', { colspan: 4 }), h('td', { class: 'num' }, fmt.n0(T.ink_litres)), h('td', { class: 'num' }, fmt.n0(T.ink_cost)),
+        h('td', { class: 'num' }, fmt.n0(T.machine_cost)), h('td', { class: 'num' }, fmt.n0(T.total_cost)))))),
     pager);
 }
 const FLAG_LABELS = {
@@ -506,6 +513,8 @@ async function pageEntry(r) {
       field('Calibration', inp('calibration', { list: 'f-calibration', maxlength: 120 })),
       field('Article', inp('article', { list: 'f-article', maxlength: 120 })),
       field('Machine', select('machine_id', [['', 'Choose…'], ...machines.map((m) => [m.id, m.name])], src.machine_id, { required: true })),
+      field('Ink company', select('ink_company_id', [['', 'As set for the machine'], ...L.ink_companies.filter((c) => +c.is_active || String(c.id) === String(e?.ink_company_id)).map((c) => [c.id, c.name])],
+        e && +e.ink_company_manual ? e.ink_company_id : '')),
       field('Shift', select('shift', [['A', 'A'], ['B', 'B'], ['C', 'C']], src.shift || 'A')),
       field('Operator', inp('operator', { list: 'f-operator', maxlength: 120 })),
       field('Remarks', inp('remarks', { maxlength: 255 }), { wide: true })),
@@ -517,7 +526,7 @@ async function pageEntry(r) {
       h('span', { class: 'grow' }),
       id && can('entries.delete') && h('button', { class: 'btn danger', type: 'button', onclick: del }, 'Delete'),
       h('a', { class: 'btn', href: '#/entries' }, 'Back to list')),
-    e ? h('p', { class: 'muted' }, `Source: ${e.source}. Ink rate on this date: Rs ${fmt.n2(e.ink_rate)}/L. Created ${e.created_at}${e.updated_at ? ', changed ' + e.updated_at : ''}.`) : '');
+    e ? h('p', { class: 'muted' }, `Source: ${e.source}. Ink: ${e.ink_company || 'none'} at Rs ${fmt.n2(e.ink_rate)}/L = Rs ${fmt.n0(e.ink_cost)}. Machine: Rs ${fmt.n2(e.machine_rate)}/m = Rs ${fmt.n0(e.machine_cost)}. Total Rs ${fmt.n0(e.total_cost)}. Created ${e.created_at}${e.updated_at ? ', changed ' + e.updated_at : ''}.`) : '');
   const calc = form.querySelector('#calc');
   const recalc = () => {
     const m = +form.printed_mtr.value, ink = +form.ink_ml_per_mtr.value;
@@ -559,12 +568,12 @@ async function pageEntry(r) {
 
 // ---------------------------------------------------------------- Reports
 const DIMS = [['party', 'Party'], ['customer', 'Customer (party without Vol)'], ['lot', 'Lot #'], ['machine', 'Machine'], ['operator', 'Operator'], ['shift', 'Shift'], ['date', 'Date'], ['month', 'Month'],
-  ['quality', 'Quality'], ['article', 'Article'], ['calibration', 'Calibration'], ['design', 'Design']];
+  ['quality', 'Quality'], ['article', 'Article'], ['calibration', 'Calibration'], ['design', 'Design'], ['ink_company', 'Ink company']];
 async function pageReports(r) {
   const L = await loadLookups();
   const q = Object.keys(r.q).length ? { group: 'machine', ...r.q } : { group: 'machine', from: iso(new Date(new Date().getFullYear(), new Date().getMonth(), 1)) };
   const g1 = select('group', DIMS, q.group), g2 = select('group2', [['', '— none —'], ...DIMS], q.group2);
-  const sort = select('sort', [['key', 'By name / date'], ['meters', 'Most metres'], ['cost', 'Highest cost'], ['avg', 'Highest ink ml/m']], q.sort);
+  const sort = select('sort', [['key', 'By name / date'], ['meters', 'Most metres'], ['cost', 'Highest total cost'], ['avg', 'Highest ink ml/m']], q.sort);
   const fb = filterBar(L, q, [field('Group by', g1), field('Then by', g2), field('Order', sort)]);
   const run = (e) => { e?.preventDefault(); go('reports', { ...fb.values(), group: g1.value, group2: g2.value, sort: sort.value }); };
   const d = await api('GET', '/reports/summary' + qs(q));
@@ -572,7 +581,8 @@ async function pageReports(r) {
   const keyCell = (dim, v) => dim === 'date' ? fmt.date(v) : dim === 'month' ? fmt.month(v) : dim === 'shift' ? 'Shift ' + v : (v === '' ? '(blank)' : v);
   const metricCells = (x) => [h('td', { class: 'num' }, fmt.n0(x.entries)), h('td', { class: 'num' }, fmt.n0(x.lots)), h('td', { class: 'num' }, fmt.n0(x.meters)),
     h('td', { class: 'num' }, fmt.n1(x.ink_litres)), h('td', { class: 'num' }, x.avg_ml === null ? '' : fmt.n2(x.avg_ml)), h('td', { class: 'num' }, fmt.n0(x.ink_cost)),
-    h('td', { class: 'num' }, x.cost_per_mtr === null ? '' : fmt.n2(x.cost_per_mtr))];
+    h('td', { class: 'num' }, fmt.n0(x.machine_cost)), h('td', { class: 'num' }, fmt.n0(x.total_cost)),
+    h('td', { class: 'num' }, x.total_per_mtr === null ? '' : fmt.n2(x.total_per_mtr))];
   const body = [];
   let prev = null;
   for (const x of d.rows) {
@@ -591,8 +601,8 @@ async function pageReports(r) {
     d.truncated ? h('div', { class: 'msg warn' }, 'Only the first 20,000 rows are shown. Narrow the filters.') : '',
     h('div', { class: 'print-head' }, h('strong', {}, S.company), ` — Production by ${lab[0]}${lab[1] ? ' and ' + lab[1] : ''}, `, q.from ? fmt.date(q.from) : 'start', ' to ', q.to ? fmt.date(q.to) : 'today'),
     h('div', { class: 'table-wrap' }, h('table', { class: 'grid' },
-      h('thead', {}, h('tr', {}, h('th', {}, lab[0]), d.group2 && h('th', {}, lab[1]), ['Entries', 'Lots', 'Printed Mtr', 'Ink (L)', 'Avg ml/m', 'Ink Cost Rs', 'Rs per Mtr'].map((t) => h('th', { class: 'num' }, t)))),
-      h('tbody', {}, body.length ? body : h('tr', {}, h('td', { colspan: cols + 7, class: 'muted' }, 'No data.'))),
+      h('thead', {}, h('tr', {}, h('th', {}, lab[0]), d.group2 && h('th', {}, lab[1]), ['Entries', 'Lots', 'Printed Mtr', 'Ink (L)', 'Avg ml/m', 'Ink Rs', 'Machine Rs', 'Total Rs', 'Total Rs/m'].map((t) => h('th', { class: 'num' }, t)))),
+      h('tbody', {}, body.length ? body : h('tr', {}, h('td', { colspan: cols + 9, class: 'muted' }, 'No data.'))),
       h('tfoot', {}, h('tr', {}, h('td', { colspan: cols }, 'Total'), metricCells(d.totals))))));
 }
 
@@ -721,53 +731,111 @@ async function pageCheck(r) {
 }
 
 // ---------------------------------------------------------------- Machines & rates
+// A dated history (rates, ink changes) with an add form. cols: [[label, (row) => text, numeric?]]
+function historyBlock(title, rows, cols, onDelete, formFields, onAdd, emptyText) {
+  const box = h('div');
+  const form = h('form', { class: 'row', style: 'margin-top:8px', onsubmit: async (e) => {
+    e.preventDefault();
+    try { await onAdd(Object.fromEntries(new FormData(form))); } catch (err) { showErrors(form, err, box); }
+  } }, formFields, h('button', { class: 'btn primary', type: 'submit' }, 'Add'));
+  return h('div', { class: 'history' },
+    h('h4', {}, title),
+    rows.length ? h('table', { class: 'grid' },
+      h('thead', {}, h('tr', {}, cols.map(([l, , n]) => h('th', { class: n ? 'num' : '' }, l)), h('th'))),
+      h('tbody', {}, rows.map((r) => h('tr', {}, cols.map(([, f, n]) => h('td', { class: n ? 'num' : '' }, f(r))),
+        h('td', {}, onDelete && h('button', { class: 'btn small danger', type: 'button', onclick: () => onDelete(r).catch((err) => msg(box, err.message)) }, 'Delete'))))))
+      : h('p', { class: 'muted' }, emptyText),
+    box,
+    onAdd && form);
+}
+const fromLabel = (d) => d === '2000-01-01' ? 'Start' : fmt.date(d);
+
 async function pageMachines() {
-  const rows = await api('GET', '/machines');
+  const [rows, L] = await Promise.all([api('GET', '/machines'), loadLookups(true)]);
   const box = h('div');
   const edit = can('masters.edit'), rates = can('rates.edit');
   const refresh = () => { S.lookups = null; route(); };
+  const companies = L.ink_companies.filter((c) => +c.is_active);
+  const companySel = (name = 'ink_company_id', value = '') => select(name, [['', 'Choose…'], ...companies.map((c) => [c.id, c.name])], value, { required: true });
   const add = async () => {
     const st = await settingsCache();
-    const f = h('form', {}, h('div', { class: 'form-grid' }, field('Name', h('input', { name: 'name', required: true, maxlength: 60 })),
-      field('Ink rate (Rs per litre)', h('input', { name: 'rate_per_litre', type: 'number', step: '0.01', min: 0, value: st.default_ink_rate ?? '', required: true }))), h('div', { class: 'err-box' }));
+    const f = h('form', {}, h('div', { class: 'form-grid' },
+      field('Name', h('input', { name: 'name', required: true, maxlength: 60 })),
+      field('Machine rate (Rs per metre)', h('input', { name: 'rate_per_mtr', type: 'number', step: '0.001', min: 0, placeholder: 'can be added later' })),
+      field('Ink company', companySel('ink_company_id', st.default_ink_company_id ?? ''))), h('div', { class: 'err-box' }));
     const d = dialog('Add machine', f, [h('button', { class: 'btn primary', onclick: async () => {
       try { await api('POST', '/machines', Object.fromEntries(new FormData(f))); d.close(); refresh(); } catch (err) { showErrors(f, err, f.querySelector('.err-box')); }
     } }, 'Save'), h('button', { class: 'btn', onclick: () => d.close() }, 'Cancel')]);
   };
-  const card = (m) => {
-    const rf = h('form', { class: 'row', onsubmit: async (e) => {
-      e.preventDefault();
-      try { await api('POST', `/machines/${m.id}/rates`, Object.fromEntries(new FormData(rf))); msg(box, `Rate saved for ${m.name}; its entries were re-priced.`, 'ok'); refresh(); }
-      catch (err) { showErrors(rf, err, box); }
-    } },
-    field('New rate from date', h('input', { type: 'date', name: 'effective_from', value: today(), required: true })),
-    field('Rs per litre', h('input', { type: 'number', name: 'rate_per_litre', step: '0.01', min: 0, required: true, style: 'width:120px' })),
-    field('Note', h('input', { name: 'note', maxlength: 150, placeholder: 'e.g. new ink supplier' })),
-    h('button', { class: 'btn primary', type: 'submit' }, 'Add rate'));
-    return h('section', { class: 'panel' },
-      h('div', { class: 'row', style: 'align-items:center;margin-bottom:8px' },
-        h('h3', { style: 'margin:0' }, m.name), +m.is_active ? '' : h('span', { class: 'badge off' }, 'inactive'),
-        h('span', { class: 'muted' }, `${fmt.n0(m.entries)} entries · ${fmt.n0(m.meters)} m · current rate Rs ${fmt.n2(m.current_rate)}/L`),
-        h('span', { class: 'grow' }),
-        edit && h('button', { class: 'btn small', onclick: () => renameDialog(m.name, (name) => api('PUT', '/machines/' + m.id, { name }), refresh) }, 'Rename'),
-        edit && h('button', { class: 'btn small', onclick: async () => { await api('PUT', '/machines/' + m.id, { is_active: +m.is_active ? 0 : 1 }); refresh(); } }, +m.is_active ? 'Deactivate' : 'Activate'),
-        edit && rows.length > 1 && h('button', { class: 'btn small', onclick: () => mergeDialog(m, rows.filter((x) => x.id !== m.id), (t) => api('POST', `/machines/${m.id}/merge`, { target_id: t }), refresh) }, 'Merge…'),
-        edit && +m.entries === 0 && h('button', { class: 'btn small danger', onclick: async () => { if (await confirmBox(`Delete machine ${m.name}?`, 'Delete')) { try { await api('DELETE', '/machines/' + m.id); refresh(); } catch (err) { msg(box, err.message); } } } }, 'Delete')),
-      h('table', { class: 'grid', style: 'max-width:640px' },
-        h('thead', {}, h('tr', {}, h('th', {}, 'Effective from'), h('th', { class: 'num' }, 'Rs per litre'), h('th', {}, 'Note'), h('th'))),
-        h('tbody', {}, m.rates.map((rt) => h('tr', {}, h('td', {}, rt.effective_from === '2000-01-01' ? 'Start' : fmt.date(rt.effective_from)), h('td', { class: 'num' }, fmt.n2(rt.rate_per_litre)), h('td', {}, rt.note),
-          h('td', {}, rates && m.rates.length > 1 && h('button', { class: 'btn small danger', onclick: async () => {
-            if (!(await confirmBox(`Delete the rate from ${rt.effective_from}? Entries will be re-priced.`, 'Delete'))) return;
-            try { await api('DELETE', `/machines/${m.id}/rates/${rt.id}`); refresh(); } catch (err) { msg(box, err.message); }
-          } }, 'Delete')))))),
-      rates && h('div', { style: 'margin-top:10px' }, rf));
-  };
+  const card = (m) => h('section', { class: 'panel' },
+    h('div', { class: 'row', style: 'align-items:center;margin-bottom:8px' },
+      h('h3', { style: 'margin:0' }, m.name), +m.is_active ? '' : h('span', { class: 'badge off' }, 'inactive'),
+      h('span', { class: 'muted' }, `${fmt.n0(m.entries)} entries · ${fmt.n0(m.meters)} m`),
+      h('span', { class: 'grow' }),
+      edit && h('button', { class: 'btn small', onclick: () => renameDialog(m.name, (name) => api('PUT', '/machines/' + m.id, { name }), refresh) }, 'Rename'),
+      edit && h('button', { class: 'btn small', onclick: async () => { await api('PUT', '/machines/' + m.id, { is_active: +m.is_active ? 0 : 1 }); refresh(); } }, +m.is_active ? 'Deactivate' : 'Activate'),
+      edit && rows.length > 1 && h('button', { class: 'btn small', onclick: () => mergeDialog(m, rows.filter((x) => x.id !== m.id), (t) => api('POST', `/machines/${m.id}/merge`, { target_id: t }), refresh) }, 'Merge…'),
+      edit && +m.entries === 0 && h('button', { class: 'btn small danger', onclick: async () => { if (await confirmBox(`Delete machine ${m.name}?`, 'Delete')) { try { await api('DELETE', '/machines/' + m.id); refresh(); } catch (err) { msg(box, err.message); } } } }, 'Delete')),
+    h('div', { class: 'cols' },
+      historyBlock(`Machine rate — now ${m.current_rate === null ? 'not set' : 'Rs ' + fmt.n2(m.current_rate) + ' per metre'}`, m.rates,
+        [['From', (r) => fromLabel(r.effective_from)], ['Rs per metre', (r) => fmt.n2(r.rate_per_mtr), true], ['Note', (r) => r.note]],
+        rates ? async (r) => { if (await confirmBox(`Delete the machine rate from ${fromLabel(r.effective_from)}? Entries will be re-priced.`, 'Delete')) { await api('DELETE', `/machines/${m.id}/rates/${r.id}`); refresh(); } } : null,
+        [field('From date', h('input', { type: 'date', name: 'effective_from', value: m.rates.length ? today() : '2000-01-01', required: true })),
+          field('Rs per metre', h('input', { type: 'number', name: 'rate_per_mtr', step: '0.001', min: 0, required: true, style: 'width:110px' })),
+          field('Note', h('input', { name: 'note', maxlength: 150, style: 'width:140px' }))],
+        rates ? async (body) => { await api('POST', `/machines/${m.id}/rates`, body); refresh(); } : null,
+        'No machine rate yet: machine cost is 0. Use 01/01/2000 as the date to cover all old entries.'),
+      historyBlock(`Ink company — now ${m.current_ink_company || 'none'}`, m.inks,
+        [['From', (r) => fromLabel(r.effective_from)], ['Ink company', (r) => r.ink_company]],
+        rates && m.inks.length > 1 ? async (r) => { if (await confirmBox(`Remove the ink change of ${fromLabel(r.effective_from)}? Entries will be re-priced.`, 'Remove')) { await api('DELETE', `/machines/${m.id}/inks/${r.id}`); refresh(); } } : null,
+        [field('From date', h('input', { type: 'date', name: 'effective_from', value: today(), required: true })), field('Ink company', companySel())],
+        rates ? async (body) => { await api('POST', `/machines/${m.id}/inks`, body); refresh(); } : null,
+        'No ink company: ink cost is 0.')));
   return h('div', {},
-    h('div', { class: 'msg warn' }, 'Ink cost = Printed Mtr × Ink use (ml/m) ÷ 1000 × machine rate (Rs/L) on the entry date. Changing a rate re-prices that machine\'s entries from that date on.'),
+    h('div', { class: 'msg warn' }, 'Machine cost = Printed Mtr × machine rate (Rs/m). Ink cost = Printed Mtr × Ink use (ml/m) ÷ 1000 × rate (Rs/L) of the ink company the machine uses on that date. Rates of each ink company are on the ',
+      h('a', { href: '#/inks' }, 'Ink Companies'), ' page. Any change re-prices the entries from its date on.'),
     box,
     edit && h('div', { class: 'actions', style: 'margin:0 0 12px' }, h('button', { class: 'btn primary', onclick: add }, '+ Add machine')),
     rows.map(card));
 }
+
+async function pageInks() {
+  const rows = await api('GET', '/ink-companies');
+  const box = h('div');
+  const edit = can('rates.edit');
+  const refresh = () => { S.lookups = null; route(); };
+  const add = () => {
+    const f = h('form', {}, h('div', { class: 'form-grid' },
+      field('Company name', h('input', { name: 'name', required: true, maxlength: 80 })),
+      field('Ink rate (Rs per litre)', h('input', { name: 'rate_per_litre', type: 'number', step: '0.01', min: 0, required: true }))), h('div', { class: 'err-box' }));
+    const d = dialog('Add ink company', f, [h('button', { class: 'btn primary', onclick: async () => {
+      try { await api('POST', '/ink-companies', Object.fromEntries(new FormData(f))); d.close(); refresh(); } catch (err) { showErrors(f, err, f.querySelector('.err-box')); }
+    } }, 'Save'), h('button', { class: 'btn', onclick: () => d.close() }, 'Cancel')]);
+  };
+  const card = (c) => h('section', { class: 'panel' },
+    h('div', { class: 'row', style: 'align-items:center;margin-bottom:8px' },
+      h('h3', { style: 'margin:0' }, c.name), +c.is_active ? '' : h('span', { class: 'badge off' }, 'inactive'),
+      h('span', { class: 'muted' }, `Rs ${fmt.n2(c.current_rate)} per litre now · ${fmt.n0(c.litres)} L used in ${fmt.n0(c.entries)} entries`),
+      h('span', { class: 'grow' }),
+      edit && h('button', { class: 'btn small', onclick: () => renameDialog(c.name, (name) => api('PUT', '/ink-companies/' + c.id, { name }), refresh) }, 'Rename'),
+      edit && h('button', { class: 'btn small', onclick: async () => { await api('PUT', '/ink-companies/' + c.id, { is_active: +c.is_active ? 0 : 1 }); refresh(); } }, +c.is_active ? 'Deactivate' : 'Activate'),
+      edit && +c.entries === 0 && !c.machines.length && h('button', { class: 'btn small danger', onclick: async () => { if (await confirmBox(`Delete ${c.name}?`, 'Delete')) { try { await api('DELETE', '/ink-companies/' + c.id); refresh(); } catch (err) { msg(box, err.message); } } } }, 'Delete')),
+    h('p', { class: 'muted', style: 'margin:0 0 8px' }, 'Machines using it now: ', c.machines.length ? c.machines.join(', ') : 'none'),
+    historyBlock('Ink rate history', c.rates,
+      [['From', (r) => fromLabel(r.effective_from)], ['Rs per litre', (r) => fmt.n2(r.rate_per_litre), true], ['Note', (r) => r.note]],
+      edit && c.rates.length > 1 ? async (r) => { if (await confirmBox(`Delete the rate from ${fromLabel(r.effective_from)}? Entries will be re-priced.`, 'Delete')) { await api('DELETE', `/ink-companies/${c.id}/rates/${r.id}`); refresh(); } } : null,
+      [field('New rate from date', h('input', { type: 'date', name: 'effective_from', value: today(), required: true })),
+        field('Rs per litre', h('input', { type: 'number', name: 'rate_per_litre', step: '0.01', min: 0, required: true, style: 'width:110px' })),
+        field('Note', h('input', { name: 'note', maxlength: 150, style: 'width:160px', placeholder: 'e.g. new price list' }))],
+      edit ? async (body) => { await api('POST', `/ink-companies/${c.id}/rates`, body); refresh(); } : null, ''));
+  return h('div', {},
+    h('div', { class: 'msg warn' }, 'Each ink company has its own rate per litre. Which company a machine uses (and from which date) is set on ', h('a', { href: '#/machines' }, 'Machines & Rates'),
+      '. One entry can also be given a different company in the entry form.'),
+    box,
+    edit && h('div', { class: 'actions', style: 'margin:0 0 12px' }, h('button', { class: 'btn primary', onclick: add }, '+ Add ink company')),
+    rows.map(card));
+}
+
 function renameDialog(current, saveFn, done) {
   const input = h('input', { name: 'name', value: current, maxlength: 120, style: 'width:100%' });
   const f = h('form', { onsubmit: (e) => { e.preventDefault(); go2(); } }, field('New name', input), h('div', { class: 'err-box' }));
@@ -858,6 +926,7 @@ async function pageUsers() {
 // ---------------------------------------------------------------- Settings
 async function pageSettings() {
   settingsPromise = null;
+  await loadLookups(true);
   const st = await settingsCache();
   const box = h('div');
   const ro = !can('settings');
@@ -867,11 +936,11 @@ async function pageSettings() {
     catch (err) { showErrors(f, err, box); }
   } }, box, h('div', { class: 'form-grid' },
     field('Company name', h('input', { name: 'company_name', value: st.company_name ?? '', disabled: ro }), { wide: true }),
-    field('Default ink rate for new machines (Rs/L)', h('input', { name: 'default_ink_rate', type: 'number', step: '0.01', value: st.default_ink_rate ?? '', disabled: ro })),
+    field('Ink company for machines added by an import', select('default_ink_company_id', (S.lookups?.ink_companies || []).map((c) => [c.id, c.name]), st.default_ink_company_id, { disabled: ro })),
     field('Data check: ink use above (ml/m)', h('input', { name: 'ink_high_ml', type: 'number', step: '0.1', value: st.ink_high_ml ?? '', disabled: ro })),
     field('Data check: printed metres above', h('input', { name: 'mtr_high', type: 'number', step: '1', value: st.mtr_high ?? '', disabled: ro }))),
   !ro && h('div', { class: 'actions' }, h('button', { class: 'btn primary', type: 'submit' }, 'Save')),
-  h('p', { class: 'muted' }, 'Ink rates per machine are set under Machines & Ink Rates.'));
+  h('p', { class: 'muted' }, 'Machine rates and ink company rates are set under Machines & Rates and Ink Companies.'));
   return f;
 }
 

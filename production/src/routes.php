@@ -52,6 +52,15 @@ const PROD_ROUTES = [
     ['DELETE', '/machines/{id}',              [Master::class, 'machineDestroy'],'masters.edit'],
     ['POST',   '/machines/{id}/rates',        [Master::class, 'rateStore'],     'rates.edit'],
     ['DELETE', '/machines/{id}/rates/{rid}',  [Master::class, 'rateDestroy'],   'rates.edit'],
+    ['POST',   '/machines/{id}/inks',         [Master::class, 'inkStore'],      'rates.edit'],
+    ['DELETE', '/machines/{id}/inks/{iid}',   [Master::class, 'inkDestroy'],    'rates.edit'],
+
+    ['GET',    '/ink-companies',              [Master::class, 'inkCompanies'],      'view'],
+    ['POST',   '/ink-companies',              [Master::class, 'inkCompanyStore'],   'rates.edit'],
+    ['PUT',    '/ink-companies/{id}',         [Master::class, 'inkCompanyUpdate'],  'rates.edit'],
+    ['DELETE', '/ink-companies/{id}',         [Master::class, 'inkCompanyDestroy'], 'rates.edit'],
+    ['POST',   '/ink-companies/{id}/rates',   [Master::class, 'inkRateStore'],      'rates.edit'],
+    ['DELETE', '/ink-companies/{id}/rates/{rid}', [Master::class, 'inkRateDestroy'], 'rates.edit'],
 
     ['GET',    '/masters/{kind}',             [Master::class, 'index'],         'view'],
     ['POST',   '/masters/{kind}',             [Master::class, 'store'],         'masters.edit'],

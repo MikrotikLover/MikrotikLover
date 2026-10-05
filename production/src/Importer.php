@@ -249,11 +249,12 @@ final class Importer
                     continue;
                 }
                 $machineId = Machines::resolve($r['machine']);
+                $price = Pricing::forEntry($machineId, $r['date']);
                 $buffer[] = [
                     $r['date'], $r['lot_no'], Masters::resolve('quality', $r['quality']), Masters::resolve('party', $r['party']),
                     $r['design'], $r['mtr'], Masters::resolve('calibration', $r['calibration']), $r['ink'],
                     Masters::resolve('article', $r['article']), $machineId, $r['shift'], Masters::resolve('operator', $r['operator']),
-                    Machines::rateFor($machineId, $r['date']), 'import', $batchId, $r['fp'], $uid,
+                    $price['ink_company_id'], $price['ink_rate'], $price['machine_rate'], 'import', $batchId, $r['fp'], $uid,
                 ];
                 if (count($buffer) >= self::BATCH) {
                     $added += self::flush($buffer);
@@ -275,8 +276,8 @@ final class Importer
         if (!$buffer) {
             return 0;
         }
-        $cols = '(entry_date, lot_no, quality_id, party_id, design, printed_mtr, calibration_id, ink_ml_per_mtr, article_id, machine_id, shift, operator_id, ink_rate, source, import_batch_id, fingerprint, created_by)';
-        $one = '(' . implode(',', array_fill(0, 17, '?')) . ')';
+        $cols = '(entry_date, lot_no, quality_id, party_id, design, printed_mtr, calibration_id, ink_ml_per_mtr, article_id, machine_id, shift, operator_id, ink_company_id, ink_rate, machine_rate, source, import_batch_id, fingerprint, created_by)';
+        $one = '(' . implode(',', array_fill(0, 19, '?')) . ')';
         $sql = "INSERT INTO production_entries $cols VALUES " . implode(',', array_fill(0, count($buffer), $one));
         $n = Database::run($sql, array_merge(...$buffer))->rowCount();
         $buffer = [];

@@ -6,6 +6,7 @@ use Prod\Auth;
 use Prod\Database;
 use Prod\Entries;
 use Prod\Importer;
+use Prod\InkCompanies;
 use Prod\Machines;
 use Prod\Masters;
 use Prod\Reports;
@@ -118,22 +119,60 @@ return [
         assert_eq(1, (int)Database::value("SELECT COUNT(*) FROM production_entries WHERE source = 'manual'"));
         assert_eq(650.0, (float)Database::value("SELECT printed_mtr FROM production_entries WHERE lot_no = '2273'"));
     },
-    'ink cost uses the machine rate on the entry date and follows rate changes' => function () {
+    'ink cost follows the ink company of the machine, machine cost follows the machine rate' => function () {
         act_as('manager');
         $a5 = (int)Database::value("SELECT id FROM machines WHERE name = 'Atexco 5'");
-        // lot 2273: 650 m x 2.85 ml/m = 1852.5 ml at the default 1450 Rs/L
-        $cost = fn() => (float)Database::value("SELECT ink_cost FROM production_entries WHERE lot_no = '2273'");
-        assert_eq(round(1852.5 * 1450 / 1000, 2), $cost());
-        Machines::saveRate($a5, '2026-01-02', 2000, 'new supplier');
-        assert_eq(round(1852.5 * 2000 / 1000, 2), $cost(), 'entry on 2026-01-02 re-priced');
-        Machines::saveRate($a5, '2026-01-03', 2500);
-        assert_eq(round(1852.5 * 2000 / 1000, 2), $cost(), 'later rate does not touch older entries');
-        $rid = (int)Database::value("SELECT id FROM machine_rates WHERE machine_id = ? AND effective_from = '2026-01-02'", [$a5]);
-        Machines::deleteRate($a5, $rid);
-        assert_eq(round(1852.5 * 1450 / 1000, 2), $cost(), 'back to the opening rate');
-        $only = (int)Database::value('SELECT id FROM machine_rates WHERE machine_id = ? ORDER BY effective_from LIMIT 1', [$a5]);
-        Machines::deleteRate($a5, (int)Database::value("SELECT id FROM machine_rates WHERE machine_id = ? AND effective_from = '2026-01-03'", [$a5]));
-        assert_throws(fn() => Machines::deleteRate($a5, $only), ApiException::class, 409);
+        $default = (int)Database::value("SELECT id FROM ink_companies WHERE name = 'Default ink'");
+        // lot 2273: 650 m x 2.85 ml/m = 1852.5 ml
+        $e = fn() => Database::one("SELECT ink_company_id, ink_cost, machine_cost FROM production_entries WHERE lot_no = '2273'");
+        assert_eq($default, (int)$e()['ink_company_id'], 'imported rows use the default company');
+        assert_eq(round(1852.5 * 1450 / 1000, 2), (float)$e()['ink_cost']);
+        assert_eq(0.0, (float)$e()['machine_cost'], 'no machine rate yet');
+
+        // Machine rate: Rs per metre, from a date
+        Machines::saveRate($a5, '2026-01-02', 3.5);
+        assert_eq(650 * 3.5, (float)$e()['machine_cost']);
+        Machines::saveRate($a5, '2026-01-03', 4);
+        assert_eq(650 * 3.5, (float)$e()['machine_cost'], 'a later rate does not touch older entries');
+
+        // New ink company; the machine switches to it on 2 Jan
+        $azeem = InkCompanies::create('Azeem Inks', 2000);
+        assert_throws(fn() => InkCompanies::create('azeem inks', 1), ApiException::class, 409);
+        Machines::saveInk($a5, '2026-01-02', $azeem);
+        assert_eq($azeem, (int)$e()['ink_company_id']);
+        assert_eq(round(1852.5 * 2000 / 1000, 2), (float)$e()['ink_cost']);
+        assert_eq($default, (int)Database::value("SELECT ink_company_id FROM production_entries WHERE lot_no = '2153'"), 'other machine unchanged');
+
+        // Company rate change re-prices only its entries from that date
+        InkCompanies::saveRate($azeem, '2026-01-02', 2200);
+        assert_eq(round(1852.5 * 2200 / 1000, 2), (float)$e()['ink_cost']);
+
+        // Totals: ink + machine
+        $t = Reports::summary(['lot' => '2273'], 'machine')['totals'];
+        assert_eq(round(1852.5 * 2.2 + 650 * 3.5, 2), $t['total_cost']);
+
+        // Undo the ink switch -> back to the default company
+        $row = (int)Database::value("SELECT id FROM machine_inks WHERE machine_id = ? AND effective_from = '2026-01-02'", [$a5]);
+        Machines::deleteInk($a5, $row);
+        assert_eq($default, (int)$e()['ink_company_id']);
+        $only = (int)Database::value('SELECT id FROM machine_inks WHERE machine_id = ?', [$a5]);
+        assert_throws(fn() => Machines::deleteInk($a5, $only), ApiException::class, 409);
+        assert_throws(fn() => InkCompanies::delete($default), ApiException::class, 409);
+    },
+    'ink company picked on an entry stays when the machine changes ink' => function () {
+        act_as('entry');
+        $ms = (int)Database::value("SELECT id FROM machines WHERE name = 'MS'");
+        $azeem = (int)Database::value("SELECT id FROM ink_companies WHERE name = 'Azeem Inks'");
+        $row = Entries::create(['entry_date' => '2026-01-05', 'printed_mtr' => 100, 'ink_ml_per_mtr' => 10, 'machine_id' => $ms, 'shift' => 'A', 'ink_company_id' => $azeem]);
+        assert_eq($azeem, (int)$row['ink_company_id']);
+        assert_eq(2200.0, (float)$row['ink_cost'], '100 m x 10 ml = 1 L at Rs 2200');
+        act_as('manager');
+        $other = InkCompanies::create('Shah Gee', 1000);
+        Machines::saveInk($ms, '2026-01-01', $other);
+        assert_eq($azeem, (int)Database::value('SELECT ink_company_id FROM production_entries WHERE id = ?', [(int)$row['id']]), 'manual pick kept');
+        Database::run('DELETE FROM production_entries WHERE id = ?', [(int)$row['id']]);
+        $first = (int)Database::value("SELECT id FROM machine_inks WHERE machine_id = ? AND effective_from = '2026-01-01'", [$ms]);
+        Machines::deleteInk($ms, $first);
     },
     'missing ink counts in metres but not in the ink average' => function () {
         $t = Reports::summary(['from' => '2026-01-02', 'to' => '2026-01-02'], 'machine')['totals'];
@@ -171,6 +210,7 @@ return [
         assert_eq('Moin', $row['operator'], 'matched existing operator case-insensitively');
         assert_eq(12500.0, (float)$row['ink_ml']);
         assert_eq(18125.0, (float)$row['ink_cost']);
+        assert_eq('Default ink', $row['ink_company']);
         Machines::setActive($ms, false);
         assert_throws(fn() => Entries::create(['entry_date' => '2026-03-01', 'printed_mtr' => 1, 'machine_id' => $ms, 'shift' => 'A']), ApiException::class, 422);
         Entries::update((int)$row['id'], ['entry_date' => '2026-03-01', 'printed_mtr' => 10, 'machine_id' => $ms, 'shift' => 'A']); // editing old entries still works

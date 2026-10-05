@@ -21,12 +21,12 @@ final class EntryController
         $stmt = Database::run('SELECT ' . Entries::SELECT . ' FROM ' . Entries::FROM . " WHERE $where ORDER BY e.entry_date, e.id", $p);
         Csv::send('production-entries-' . date('Ymd-His') . '.csv',
             ['Date', 'Lot #', 'Quality', 'Party Name', 'Design', 'Printed Mtr', 'Calibration', 'Ink use (ml/m)', 'Article', 'Machine', 'Shift',
-                'Operator', 'Total Ink (ml)', 'Ink Rate (Rs/L)', 'Ink Cost (Rs)', 'Remarks', 'Source'],
+                'Operator', 'Total Ink (ml)', 'Ink Company', 'Ink Rate (Rs/L)', 'Ink Cost (Rs)', 'Machine Rate (Rs/m)', 'Machine Cost (Rs)', 'Total Cost (Rs)', 'Remarks', 'Source'],
             (function () use ($stmt) {
                 while ($e = $stmt->fetch()) {
                     yield [$e['entry_date'], $e['lot_no'], $e['quality'], $e['party'], $e['design'], $e['printed_mtr'], $e['calibration'],
-                        $e['ink_ml_per_mtr'], $e['article'], $e['machine'], $e['shift'], $e['operator'], $e['ink_ml'], $e['ink_rate'],
-                        $e['ink_cost'], $e['remarks'], $e['source']];
+                        $e['ink_ml_per_mtr'], $e['article'], $e['machine'], $e['shift'], $e['operator'], $e['ink_ml'], $e['ink_company'], $e['ink_rate'],
+                        $e['ink_cost'], $e['machine_rate'], $e['machine_cost'], $e['total_cost'], $e['remarks'], $e['source']];
                 }
             })()
         );

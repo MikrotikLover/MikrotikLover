@@ -4,26 +4,24 @@ declare(strict_types=1);
 namespace Prod;
 
 /**
- * Printing machines and their ink rate history (Rs per litre, effective from a date).
- * Every machine always has at least one rate; a date before the first rate uses the first rate.
- * Each entry stores the rate of its machine and date in ink_rate; recompute() keeps it in step
- * whenever a machine's rates change.
+ * Printing machines with two dated histories (see Pricing):
+ *   machine_rates  the machine rate in Rs per printed metre
+ *   machine_inks   which ink company's ink the machine uses
  */
 final class Machines
 {
-    public const FIRST_RATE_DATE = '2000-01-01';
+    /** Date of opening rows: "from the start". */
+    public const FIRST_DATE = '2000-01-01';
 
     /** @var array<string,int> key => id */
     private static array $cache = [];
-    /** @var array<int,array<int,array{0:string,1:float}>> machine id => [[effective_from, rate], ...] ascending */
-    private static array $rates = [];
 
     public static function find(int $id): array
     {
         return Database::one('SELECT * FROM machines WHERE id = ?', [$id]) ?? throw ApiException::notFound('Machine');
     }
 
-    /** Id for a machine name, creating it (with the default ink rate) when new. Empty -> null. */
+    /** Id for a machine name, creating it (with the default ink company) when new. Empty -> null. */
     public static function resolve(mixed $name): ?int
     {
         $name = mb_substr(Text::clean($name), 0, 60);
@@ -33,12 +31,16 @@ final class Machines
         $key = Text::key($name);
         if (!isset(self::$cache[$key])) {
             $id = Database::value('SELECT id FROM machines WHERE name = ?', [$name]);
-            self::$cache[$key] = $id ? (int)$id : self::create($name, (float)Settings::get('default_ink_rate', 0));
+            self::$cache[$key] = $id ? (int)$id : self::create($name);
         }
         return self::$cache[$key];
     }
 
-    public static function create(string $name, float $rate): int
+    /**
+     * @param int|null   $inkCompanyId ink company used from the start (null = the default from Settings)
+     * @param float|null $ratePerMtr   opening machine rate (null = not set yet)
+     */
+    public static function create(mixed $name, ?int $inkCompanyId = null, ?float $ratePerMtr = null): int
     {
         $name = mb_substr(Text::clean($name), 0, 60);
         if ($name === '') {
@@ -47,21 +49,39 @@ final class Machines
         if (Database::value('SELECT id FROM machines WHERE name = ?', [$name])) {
             throw ApiException::conflict("Machine \"$name\" already exists.");
         }
-        return Database::transaction(function () use ($name, $rate) {
+        $inkCompanyId ??= self::defaultInkCompany();
+        if ($inkCompanyId !== null && !Database::value('SELECT id FROM ink_companies WHERE id = ?', [$inkCompanyId])) {
+            throw ApiException::validation(['ink_company_id' => 'Choose an ink company.']);
+        }
+        return Database::transaction(function () use ($name, $inkCompanyId, $ratePerMtr) {
             $id = Database::insert('machines', ['name' => $name]);
-            Database::insert('machine_rates', [
-                'machine_id' => $id, 'effective_from' => self::FIRST_RATE_DATE, 'rate_per_litre' => $rate,
-                'note' => 'Opening rate', 'created_by' => Auth::id(),
-            ]);
-            Audit::log('create', 'machines', $id, null, ['name' => $name, 'rate_per_litre' => $rate]);
+            if ($inkCompanyId !== null) {
+                Database::insert('machine_inks', ['machine_id' => $id, 'effective_from' => self::FIRST_DATE, 'ink_company_id' => $inkCompanyId, 'created_by' => Auth::id()]);
+            }
+            if ($ratePerMtr !== null) {
+                Database::insert('machine_rates', ['machine_id' => $id, 'effective_from' => self::FIRST_DATE, 'rate_per_mtr' => $ratePerMtr,
+                    'note' => 'Opening rate', 'created_by' => Auth::id()]);
+            }
+            Audit::log('create', 'machines', $id, null, ['name' => $name, 'ink_company_id' => $inkCompanyId, 'rate_per_mtr' => $ratePerMtr]);
+            Pricing::forget();
             return $id;
         });
+    }
+
+    private static function defaultInkCompany(): ?int
+    {
+        $id = (int)Settings::get('default_ink_company_id', 0);
+        if ($id && Database::value('SELECT id FROM ink_companies WHERE id = ?', [$id])) {
+            return $id;
+        }
+        $first = Database::value('SELECT MIN(id) FROM ink_companies WHERE is_active = 1');
+        return $first ? (int)$first : null;
     }
 
     public static function forgetCache(): void
     {
         self::$cache = [];
-        self::$rates = [];
+        Pricing::forget();
     }
 
     public static function list(): array
@@ -72,38 +92,17 @@ final class Machines
         );
         $today = date('Y-m-d');
         foreach ($rows as &$r) {
-            $r['current_rate'] = self::rateFor((int)$r['id'], $today);
-            $r['rates'] = self::rates((int)$r['id']);
+            $id = (int)$r['id'];
+            $r['current_rate'] = Database::value('SELECT COUNT(*) FROM machine_rates WHERE machine_id = ?', [$id]) ? Pricing::machineRateFor($id, $today) : null;
+            $r['rates'] = Database::all('SELECT id, effective_from, rate_per_mtr, note FROM machine_rates WHERE machine_id = ? ORDER BY effective_from DESC', [$id]);
+            $r['inks'] = Database::all(
+                'SELECT mi.id, mi.effective_from, mi.ink_company_id, c.name AS ink_company FROM machine_inks mi JOIN ink_companies c ON c.id = mi.ink_company_id
+                  WHERE mi.machine_id = ? ORDER BY mi.effective_from DESC', [$id]
+            );
+            $cur = Pricing::inkCompanyFor($id, $today);
+            $r['current_ink_company'] = $cur ? Database::value('SELECT name FROM ink_companies WHERE id = ?', [$cur]) : null;
         }
         return $rows;
-    }
-
-    public static function rates(int $machineId): array
-    {
-        return Database::all('SELECT id, effective_from, rate_per_litre, note FROM machine_rates WHERE machine_id = ? ORDER BY effective_from DESC', [$machineId]);
-    }
-
-    /** Rs per litre for a machine on a date. */
-    public static function rateFor(int $machineId, string $date): float
-    {
-        if (!isset(self::$rates[$machineId])) {
-            self::$rates[$machineId] = array_map(
-                fn($r) => [$r['effective_from'], (float)$r['rate_per_litre']],
-                Database::all('SELECT effective_from, rate_per_litre FROM machine_rates WHERE machine_id = ? ORDER BY effective_from', [$machineId])
-            );
-        }
-        $list = self::$rates[$machineId];
-        if (!$list) {
-            return 0.0;
-        }
-        $rate = $list[0][1];
-        foreach ($list as [$from, $r]) {
-            if ($from > $date) {
-                break;
-            }
-            $rate = $r;
-        }
-        return $rate;
     }
 
     public static function rename(int $id, mixed $name): void
@@ -128,7 +127,7 @@ final class Machines
         Audit::log('update', 'machines', $id, $row, ['is_active' => (int)$active] + $row);
     }
 
-    /** Moves all entries to $targetId (they take the target machine's rates) and deletes the source. */
+    /** Moves all entries to $targetId (they take the target machine's rates and ink) and deletes the source. */
     public static function merge(int $sourceId, int $targetId): int
     {
         if ($sourceId === $targetId) {
@@ -139,7 +138,7 @@ final class Machines
         return Database::transaction(function () use ($src, $dst) {
             $moved = Database::run('UPDATE production_entries SET machine_id = ? WHERE machine_id = ?', [$dst['id'], $src['id']])->rowCount();
             Database::run('DELETE FROM machines WHERE id = ?', [$src['id']]);
-            self::recompute((int)$dst['id']);
+            Pricing::recompute('machine_id', (int)$dst['id']);
             Audit::log('merge', 'machines', (int)$src['id'], ['name' => $src['name']], ['merged_into' => $dst['name'], 'entries' => $moved]);
             self::forgetCache();
             return $moved;
@@ -157,59 +156,71 @@ final class Machines
         self::forgetCache();
     }
 
-    /** Adds or replaces the rate effective from a date, then re-prices that machine's entries. */
+    /** Adds or replaces the machine rate (Rs per metre) from a date, then re-prices the machine's entries. */
     public static function saveRate(int $machineId, mixed $from, mixed $rate, mixed $note = ''): void
     {
         self::find($machineId);
-        $errors = [];
-        $from = Text::date($from);
-        $rate = Text::number($rate);
-        if ($from === null) {
-            $errors['effective_from'] = 'Enter a valid date.';
-        }
-        if ($rate === null || $rate < 0 || $rate > 1e7) {
-            $errors['rate_per_litre'] = 'Enter the ink rate in Rs per litre.';
-        }
-        if ($errors) {
-            throw ApiException::validation($errors);
-        }
+        [$from, $rate] = Pricing::input($from, $rate, 'rate_per_mtr', 'machine rate in Rs per metre');
         Database::transaction(function () use ($machineId, $from, $rate, $note) {
             $old = Database::one('SELECT * FROM machine_rates WHERE machine_id = ? AND effective_from = ?', [$machineId, $from]);
             Database::run(
-                'INSERT INTO machine_rates (machine_id, effective_from, rate_per_litre, note, created_by) VALUES (?, ?, ?, ?, ?)
-                 ON DUPLICATE KEY UPDATE rate_per_litre = VALUES(rate_per_litre), note = VALUES(note)',
+                'INSERT INTO machine_rates (machine_id, effective_from, rate_per_mtr, note, created_by) VALUES (?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE rate_per_mtr = VALUES(rate_per_mtr), note = VALUES(note)',
                 [$machineId, $from, $rate, mb_substr(Text::clean($note), 0, 150), Auth::id()]
             );
-            Audit::log($old ? 'update' : 'create', 'machine_rates', $machineId, $old, ['effective_from' => $from, 'rate_per_litre' => $rate]);
-            self::recompute($machineId);
+            Audit::log($old ? 'update' : 'create', 'machine_rates', $machineId, $old, ['effective_from' => $from, 'rate_per_mtr' => $rate]);
+            Pricing::recompute('machine_id', $machineId);
         });
     }
 
     public static function deleteRate(int $machineId, int $rateId): void
     {
         $row = Database::one('SELECT * FROM machine_rates WHERE id = ? AND machine_id = ?', [$rateId, $machineId]) ?? throw ApiException::notFound('Rate');
-        if ((int)Database::value('SELECT COUNT(*) FROM machine_rates WHERE machine_id = ?', [$machineId]) <= 1) {
-            throw ApiException::conflict('A machine needs at least one ink rate. Change this rate instead of deleting it.');
-        }
         Database::transaction(function () use ($machineId, $rateId, $row) {
             Database::run('DELETE FROM machine_rates WHERE id = ?', [$rateId]);
             Audit::log('delete', 'machine_rates', $machineId, $row);
-            self::recompute($machineId);
+            Pricing::recompute('machine_id', $machineId);
         });
     }
 
-    /** Re-applies the rate history to every entry of the machine. */
-    public static function recompute(int $machineId): int
+    /** The machine uses this ink company's ink from a date; its entries from then on are re-priced. */
+    public static function saveInk(int $machineId, mixed $from, mixed $companyId): void
     {
-        self::$rates = [];
-        return Database::run(
-            'UPDATE production_entries e SET e.ink_rate = COALESCE(
-                 (SELECT r.rate_per_litre FROM machine_rates r WHERE r.machine_id = e.machine_id AND r.effective_from <= e.entry_date
-                   ORDER BY r.effective_from DESC LIMIT 1),
-                 (SELECT r.rate_per_litre FROM machine_rates r WHERE r.machine_id = e.machine_id ORDER BY r.effective_from LIMIT 1),
-                 0)
-             WHERE e.machine_id = ?',
-            [$machineId]
-        )->rowCount();
+        self::find($machineId);
+        $errors = [];
+        $from = Text::date($from);
+        $companyId = (int)$companyId;
+        if ($from === null) {
+            $errors['effective_from'] = 'Enter a valid date.';
+        }
+        if (!$companyId || !Database::value('SELECT id FROM ink_companies WHERE id = ?', [$companyId])) {
+            $errors['ink_company_id'] = 'Choose an ink company.';
+        }
+        if ($errors) {
+            throw ApiException::validation($errors);
+        }
+        Database::transaction(function () use ($machineId, $from, $companyId) {
+            $old = Database::one('SELECT * FROM machine_inks WHERE machine_id = ? AND effective_from = ?', [$machineId, $from]);
+            Database::run(
+                'INSERT INTO machine_inks (machine_id, effective_from, ink_company_id, created_by) VALUES (?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE ink_company_id = VALUES(ink_company_id)',
+                [$machineId, $from, $companyId, Auth::id()]
+            );
+            Audit::log($old ? 'update' : 'create', 'machine_inks', $machineId, $old, ['effective_from' => $from, 'ink_company_id' => $companyId]);
+            Pricing::recompute('machine_id', $machineId);
+        });
+    }
+
+    public static function deleteInk(int $machineId, int $rowId): void
+    {
+        $row = Database::one('SELECT * FROM machine_inks WHERE id = ? AND machine_id = ?', [$rowId, $machineId]) ?? throw ApiException::notFound('Ink change');
+        if ((int)Database::value('SELECT COUNT(*) FROM machine_inks WHERE machine_id = ?', [$machineId]) <= 1) {
+            throw ApiException::conflict('A machine needs an ink company. Add the new company instead of deleting this one.');
+        }
+        Database::transaction(function () use ($machineId, $rowId, $row) {
+            Database::run('DELETE FROM machine_inks WHERE id = ?', [$rowId]);
+            Audit::log('delete', 'machine_inks', $machineId, $row);
+            Pricing::recompute('machine_id', $machineId);
+        });
     }
 }

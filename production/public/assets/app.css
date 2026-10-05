@@ -129,6 +129,9 @@ tr.clickable { cursor: pointer; }
 .hbar .val { font-variant-numeric: tabular-nums; color: var(--text-2); font-size: 12px; white-space: nowrap; }
 .hbar .fill { height: 8px; background: var(--series-1); border-radius: 0 4px 4px 0; min-width: 2px; }
 
+.history h4 { margin: 0 0 6px; font-size: 13px; }
+.history table.grid th { position: static; }
+
 /* ---------- login ---------- */
 .login { max-width: 360px; margin: 10vh auto; }
 .login h2 { margin: 0 0 4px; }

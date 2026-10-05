@@ -25,11 +25,12 @@ final class Reports
         'calibration' => ["COALESCE(ca.name, '(none)')", 'Calibration'],
         'lot'         => ['e.lot_no', 'Lot #'],
         'design'      => ['e.design', 'Design'],
+        'ink_company' => ["COALESCE(ic.name, '(none)')", 'Ink company'],
     ];
 
     private const METRICS = 'COUNT(*) AS entries, COALESCE(SUM(e.printed_mtr), 0) AS meters,
         COALESCE(SUM(CASE WHEN e.ink_ml_per_mtr IS NOT NULL THEN e.printed_mtr END), 0) AS ink_meters,
-        COALESCE(SUM(e.ink_ml), 0) AS ink_ml, COALESCE(SUM(e.ink_cost), 0) AS ink_cost,
+        COALESCE(SUM(e.ink_ml), 0) AS ink_ml, COALESCE(SUM(e.ink_cost), 0) AS ink_cost, COALESCE(SUM(e.machine_cost), 0) AS machine_cost,
         COUNT(DISTINCT NULLIF(e.lot_no, \'\')) AS lots, MIN(e.entry_date) AS first_date, MAX(e.entry_date) AS last_date';
 
     /** Adds litres, average ml/m and cost per metre; casts numbers. */
@@ -38,9 +39,12 @@ final class Reports
         foreach (['entries', 'lots'] as $k) {
             $r[$k] = (int)($r[$k] ?? 0);
         }
-        foreach (['meters', 'ink_meters', 'ink_ml', 'ink_cost'] as $k) {
+        foreach (['meters', 'ink_meters', 'ink_ml', 'ink_cost', 'machine_cost'] as $k) {
             $r[$k] = (float)($r[$k] ?? 0);
         }
+        $r['total_cost'] = round($r['ink_cost'] + $r['machine_cost'], 2);
+        $r['total_per_mtr'] = $r['meters'] > 0 ? round($r['total_cost'] / $r['meters'], 3) : null;
+        $r['machine_cost'] = round($r['machine_cost'], 2);
         $r['ink_litres'] = round($r['ink_ml'] / 1000, 3);
         $r['avg_ml'] = $r['ink_meters'] > 0 ? round($r['ink_ml'] / $r['ink_meters'], 3) : null;
         $r['cost_per_mtr'] = $r['ink_meters'] > 0 ? round($r['ink_cost'] / $r['ink_meters'], 3) : null;
@@ -68,7 +72,7 @@ final class Reports
         $group = $g2 ? 'k1, k2' : 'k1';
         $order = match ($sort) {
             'meters' => 'meters DESC',
-            'cost'   => 'ink_cost DESC',
+            'cost'   => 'ink_cost + machine_cost DESC',
             'avg'    => 'SUM(e.ink_ml) / NULLIF(SUM(CASE WHEN e.ink_ml_per_mtr IS NOT NULL THEN e.printed_mtr END), 0) DESC',
             default  => $group,
         };

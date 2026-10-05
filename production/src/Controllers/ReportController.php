@@ -34,8 +34,9 @@ final class ReportController
     {
         $s = Reports::summary($_GET, (string)$r->query('group', 'party'), (string)$r->query('group2', ''), (string)$r->query('sort', 'key'));
         $head = array_values(array_filter([$s['labels'][0], $s['labels'][1]]));
-        $head = array_merge($head, ['Entries', 'Lots', 'Printed Mtr', 'Ink (L)', 'Avg Ink (ml/m)', 'Ink Cost (Rs)', 'Cost per Mtr (Rs)']);
-        $line = fn(array $x, array $keys) => array_merge($keys, [$x['entries'], $x['lots'], $x['meters'], $x['ink_litres'], $x['avg_ml'], $x['ink_cost'], $x['cost_per_mtr']]);
+        $head = array_merge($head, ['Entries', 'Lots', 'Printed Mtr', 'Ink (L)', 'Avg Ink (ml/m)', 'Ink Cost (Rs)', 'Machine Cost (Rs)', 'Total Cost (Rs)', 'Total per Mtr (Rs)']);
+        $line = fn(array $x, array $keys) => array_merge($keys, [$x['entries'], $x['lots'], $x['meters'], $x['ink_litres'], $x['avg_ml'], $x['ink_cost'],
+            $x['machine_cost'], $x['total_cost'], $x['total_per_mtr']]);
         $rows = (function () use ($s, $line) {
             foreach ($s['rows'] as $x) {
                 yield $line($x, $s['group2'] ? [$x['k1'], $x['k2']] : [$x['k1']]);
