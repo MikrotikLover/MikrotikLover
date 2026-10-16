@@ -92,7 +92,7 @@ def q1(sql, args=None):
 def jsonable(rows):
     out = []
     for r in rows:
-        out.append({k: (v.isoformat(sep=" ") if hasattr(v, "isoformat") else
+        out.append({k: (str(v) if hasattr(v, "isoformat") else
                         int(v) if v.__class__.__name__ == "Decimal" else v) for k, v in r.items()})
     return out
 
@@ -315,7 +315,11 @@ def summary():
         (SELECT COUNT(*) FROM radpostauth WHERE authdate >= CURDATE() AND reply='Access-Accept') AS accepts,
         (SELECT COUNT(*) FROM radpostauth WHERE authdate >= CURDATE() AND reply='Access-Reject') AS rejects,
         (SELECT COALESCE(SUM(bytes_down),0) FROM traffic_site WHERE bucket >= CURDATE()) AS down_today,
-        (SELECT COALESCE(SUM(bytes_up),0) FROM traffic_site WHERE bucket >= CURDATE()) AS up_today""")
+        (SELECT COALESCE(SUM(bytes_up),0) FROM traffic_site WHERE bucket >= CURDATE()) AS up_today,
+        (SELECT COALESCE(SUM(amount),0) FROM ml_sale WHERE at >= CURDATE()) AS sales_today,
+        (SELECT COALESCE(SUM(amount),0) FROM ml_sale WHERE at >= DATE_FORMAT(NOW(), '%Y-%m-01')) AS sales_month,
+        (SELECT COUNT(*) FROM ml_account WHERE first_login IS NOT NULL AND (expires_at IS NULL OR expires_at > NOW())) AS active_plans,
+        (SELECT COUNT(*) FROM ml_account WHERE voucher_batch IS NOT NULL AND first_login IS NULL) AS unused_vouchers""")
     counts["groups"] = len(groups_map())
     hours = q("""SELECT bucket, SUM(bytes_down) AS down, SUM(bytes_up) AS up FROM traffic_site
                  WHERE bucket >= NOW() - INTERVAL 24 HOUR GROUP BY bucket ORDER BY bucket""")
@@ -332,6 +336,7 @@ def summary():
     except OSError:
         pass
     counts["blocked_today"] = blocked_today
+    counts["currency"] = settings_get()["currency"]
     return jsonify(counts=jsonable([counts])[0], hours=jsonable(hours), top_sites=jsonable(top),
                    logins=jsonable(logins))
 
@@ -348,7 +353,10 @@ def users():
                   (SELECT value FROM radreply r WHERE r.username=c.username AND r.attribute='Mikrotik-Address-List' LIMIT 1) AS own_list,
                   (SELECT COUNT(*) FROM radacct a WHERE a.username=c.username AND a.acctstoptime IS NULL) AS online,
                   (SELECT MAX(authdate) FROM radpostauth p WHERE p.username=c.username AND p.reply='Access-Accept') AS last_login,
-                  (SELECT description FROM macdevice d WHERE d.mac=c.username) AS description
+                  (SELECT description FROM macdevice d WHERE d.mac=c.username) AS description,
+                  (SELECT plan FROM ml_account m WHERE m.username=c.username) AS plan,
+                  (SELECT expires_at FROM ml_account m WHERE m.username=c.username) AS expires_at,
+                  (SELECT voucher_batch FROM ml_account m WHERE m.username=c.username) AS voucher_batch
                 FROM radcheck c LEFT JOIN radusergroup g ON g.username=c.username
                 GROUP BY c.username ORDER BY c.username""")
     gm = groups_map()
@@ -386,7 +394,8 @@ def user_detail(name):
     sites = q("""SELECT site, SUM(bytes_down) AS down, SUM(bytes_up) AS up FROM traffic_site
                  WHERE username=%s AND bucket >= NOW() - INTERVAL 7 DAY GROUP BY site
                  ORDER BY SUM(bytes_down+bytes_up) DESC LIMIT 15""", (name,))
-    return jsonify(name=name, group=grp["groupname"] if grp else "", check=jsonable(check), reply=jsonable(reply),
+    return jsonify(name=name, group=grp["groupname"] if grp else "", account=account_info(name),
+                   check=jsonable(check), reply=jsonable(reply),
                    sessions=jsonable(sessions), logins=jsonable(logins), usage=jsonable(usage), sites=jsonable(sites))
 
 
@@ -751,6 +760,232 @@ def traffic_now():
     snap["available"] = True
     snap["age"] = int(time.time() - snap.get("time", 0))
     return jsonify(snap)
+
+
+# ------------------------------------------------------------------ hotspot business
+SETTING_KEYS = {  # key -> (default, max length)
+    "brand": ("MikrotikLover WiFi", 60), "ssid": ("Office-WiFi", 32), "hotspot_ssid": ("Guest-WiFi", 32),
+    "hotspot_url": ("http://login.wifi", 120), "currency": ("Rs", 8), "contact": ("", 80),
+    "card_footer": ("Login page opens automatically after connecting to the Wi-Fi.", 120),
+}
+
+
+def settings_get():
+    out = {k: d for k, (d, _) in SETTING_KEYS.items()}
+    out["radius_domain"] = ""
+    for r in q("SELECT k, v FROM ml_setting"):
+        if r["k"] in out:
+            out[r["k"]] = r["v"]
+    return out
+
+
+@app.get("/api/settings")
+@login_required()
+def settings_read():
+    return jsonify(settings_get())
+
+
+@app.post("/api/settings")
+@login_required("admin")
+def settings_write():
+    data = body()
+    for k, (_, maxlen) in SETTING_KEYS.items():
+        if k in data:
+            v = str(data[k]).strip()
+            if len(v) > maxlen or not v.isprintable():
+                abort(400, f"invalid {k}")
+            q("INSERT INTO ml_setting (k, v) VALUES (%s,%s) ON DUPLICATE KEY UPDATE v=VALUES(v)", (k, v))
+    audit("update business settings", "ok")
+    return jsonify(ok=True, message="Settings saved")
+
+
+@app.get("/api/public/connect")
+def public_connect():
+    """Data for the public connect guide (no login). Only names users need anyway."""
+    st = settings_get()
+    return jsonify({k: st[k] for k in ("brand", "ssid", "hotspot_ssid", "hotspot_url", "radius_domain", "contact")})
+
+
+@app.get("/connect")
+def connect_page():
+    return send_from_directory(app.static_folder, "connect.html")
+
+
+PLAN_RE = NAME_RE
+DUR_RE = re.compile(r"^([0-9]{1,6}[dhms]?|-)$")
+SIZE_RE = re.compile(r"^([0-9]{1,6}[KMGTkmgt]?|-)$")
+
+
+@app.get("/api/plans")
+@login_required()
+def plans():
+    rows = q("""SELECT p.name, p.price, p.validity_seconds, p.quota_bytes, p.quota_period, p.daily_seconds, p.description,
+                  COALESCE((SELECT value FROM radgroupreply WHERE groupname=p.name AND attribute='Mikrotik-Rate-Limit' LIMIT 1),'') AS rate,
+                  COALESCE((SELECT value FROM radgroupcheck WHERE groupname=p.name AND attribute='Simultaneous-Use' LIMIT 1),'') AS devices,
+                  (SELECT COUNT(*) FROM ml_account a WHERE a.plan=p.name) AS accounts,
+                  (SELECT COUNT(*) FROM ml_account a WHERE a.plan=p.name AND a.first_login IS NOT NULL
+                      AND (a.expires_at IS NULL OR a.expires_at > NOW())) AS active
+                FROM ml_plan p ORDER BY p.price, p.name""")
+    return jsonify(plans=jsonable(rows), currency=settings_get()["currency"])
+
+
+@app.post("/api/plans")
+@login_required("admin")
+def plan_save():
+    data = body()
+    name = field(data, "name", PLAN_RE, required=True)
+    args = ["plan", "add", name]
+    spec = {"price": ("--price", re.compile(r"^[0-9]{1,8}(\.[0-9]{1,2})?$")), "validity": ("--validity", DUR_RE),
+            "quota": ("--quota", SIZE_RE), "period": ("--period", re.compile(r"^(total|monthly|daily)$")),
+            "daily_time": ("--daily-time", DUR_RE), "rate": ("--rate", re.compile(r"^[0-9A-Za-z/ ]{1,64}$|^-$")),
+            "devices": ("--devices", re.compile(r"^[0-9]{1,4}$|^-$")),
+            "description": ("--description", re.compile(r"^[\x20-\x7e]{0,128}$"))}
+    for key, (opt, rx) in spec.items():
+        if key in data:
+            v = field(data, key, rx)
+            if v or key == "description":
+                args += [opt, v]
+            elif data.get("edit"):
+                args += [opt, "-"]
+    return result(*radius_admin(args))
+
+
+@app.delete("/api/plans/<name>")
+@login_required("admin")
+def plan_delete(name):
+    if not PLAN_RE.match(name):
+        abort(400, "invalid plan")
+    return result(*radius_admin(["plan", "del", name] + (["--force"] if request.args.get("force") == "1" else [])))
+
+
+@app.get("/api/vouchers")
+@login_required()
+def voucher_batches():
+    rows = q("""SELECT b.id, b.plan, b.price, b.count, b.note, b.created_by, b.created_at,
+                  COUNT(a.username) AS remaining,
+                  COALESCE(SUM(a.first_login IS NULL),0) AS unused,
+                  COALESCE(SUM(a.first_login IS NOT NULL AND (a.expires_at IS NULL OR a.expires_at > NOW())),0) AS active,
+                  COALESCE(SUM(a.expires_at <= NOW()),0) AS expired
+                FROM ml_voucher_batch b LEFT JOIN ml_account a ON a.voucher_batch=b.id
+                GROUP BY b.id ORDER BY b.id DESC LIMIT 300""")
+    return jsonify(batches=jsonable(rows), currency=settings_get()["currency"])
+
+
+@app.post("/api/vouchers")
+@login_required("admin")
+def voucher_create():
+    data = body()
+    plan = field(data, "plan", PLAN_RE, required=True)
+    count = field(data, "count", re.compile(r"^[0-9]{1,4}$"), required=True)
+    if not 1 <= int(count) <= 1000:
+        abort(400, "count: 1–1000")
+    prefix = field(data, "prefix", re.compile(r"^[A-Za-z0-9]{0,6}$"))
+    note = field(data, "note", re.compile(r"^[\x20-\x7e]{0,128}$"))
+    args = ["voucher", "create", plan, count, "--by", session["user"]] + (["--prefix", prefix] if prefix else []) \
+        + (["--pin"] if data.get("pin") else []) + (["--note", note] if note else [])
+    ok, msg = radius_admin(args, action=f"voucher create {plan} x{count}")
+    m = re.search(r"Batch #(\d+)", msg)
+    return result(ok, msg.splitlines()[0] if ok else msg, batch=int(m.group(1)) if (ok and m) else None)
+
+
+@app.get("/api/vouchers/<int:batch>")
+@login_required()
+def voucher_batch(batch):
+    b = q1("SELECT id, plan, price, count, note, created_at FROM ml_voucher_batch WHERE id=%s", (batch,))
+    if not b:
+        abort(404, "no such batch")
+    plan = q1("""SELECT p.*, COALESCE((SELECT value FROM radgroupreply WHERE groupname=p.name
+                     AND attribute='Mikrotik-Rate-Limit' LIMIT 1),'') AS rate FROM ml_plan p WHERE p.name=%s""", (b["plan"],))
+    codes = q("""SELECT a.username,
+                   (SELECT value FROM radcheck c WHERE c.username=a.username AND c.attribute='Cleartext-Password' LIMIT 1) AS password,
+                   a.first_login, a.expires_at,
+                   CASE WHEN a.first_login IS NULL THEN 'unused' WHEN a.expires_at <= NOW() THEN 'expired' ELSE 'active' END AS status
+                 FROM ml_account a WHERE a.voucher_batch=%s ORDER BY a.username""", (batch,))
+    audit(f"view voucher batch #{batch}", "ok")
+    return jsonify(batch=jsonable([b])[0], plan=jsonable([plan])[0] if plan else None, codes=jsonable(codes),
+                   settings=settings_get())
+
+
+@app.delete("/api/vouchers/<int:batch>")
+@login_required("admin")
+def voucher_delete(batch):
+    return result(*radius_admin(["voucher", "del", str(batch)]))
+
+
+@app.get("/api/sales")
+@login_required()
+def sales():
+    days = min(max(int(request.args.get("days", 30) or 30), 1), 366)
+    per_day = q("""SELECT DATE(at) AS day, COUNT(*) AS n, SUM(amount) AS amount,
+                     SUM(kind='voucher') AS vouchers, SUM(kind='renew') AS renewals, SUM(kind='new') AS new_plans
+                   FROM ml_sale WHERE at >= CURDATE() - INTERVAL %s DAY GROUP BY DATE(at) ORDER BY day""", (days,))
+    per_plan = q("""SELECT plan, COUNT(*) AS n, SUM(amount) AS amount FROM ml_sale
+                    WHERE at >= CURDATE() - INTERVAL %s DAY GROUP BY plan ORDER BY SUM(amount) DESC""", (days,))
+    recent = q("SELECT at, username, plan, amount, kind FROM ml_sale ORDER BY id DESC LIMIT 50")
+    return jsonify(per_day=jsonable(per_day), per_plan=jsonable(per_plan), recent=jsonable(recent),
+                   currency=settings_get()["currency"])
+
+
+@app.get("/api/traffic/user-sites")
+@login_required()
+def traffic_user_sites():
+    """Top users by data, each with their top sites."""
+    a = report_args()
+    per_user = min(int(request.args.get("per_user", 5) or 5), 20)
+    hours = int(a.days * 24)
+    users_ = q("""SELECT IF(username='',client_ip,username) AS who, MAX(username) AS username,
+                    SUM(bytes_down) AS down, SUM(bytes_up) AS up, COUNT(DISTINCT site) AS site_count
+                  FROM traffic_site WHERE bucket >= NOW() - INTERVAL %s HOUR
+                  GROUP BY IF(username='',client_ip,username) ORDER BY SUM(bytes_down+bytes_up) DESC LIMIT %s""",
+               (hours, min(a.top, 100)))
+    out = []
+    for u in users_:
+        sites_ = q("""SELECT site, SUM(bytes_down) AS down, SUM(bytes_up) AS up FROM traffic_site
+                      WHERE bucket >= NOW() - INTERVAL %s HOUR AND IF(username='',client_ip,username)=%s
+                      GROUP BY site ORDER BY SUM(bytes_down+bytes_up) DESC LIMIT %s""", (hours, u["who"], per_user))
+        row = jsonable([u])[0]
+        row["sites"] = jsonable(sites_)
+        out.append(row)
+    return jsonify(users=out)
+
+
+SUB_ACTIONS = {"plan", "renew", "expiry", "quota"}
+
+
+@app.post("/api/users/<name>/sub/<action>")
+@login_required("admin")
+def user_subscription(name, action):
+    if not NAME_RE.match(name) or action not in SUB_ACTIONS:
+        abort(404)
+    data = body()
+    free = ["--free"] if data.get("free") else []
+    if action == "plan":
+        return result(*radius_admin(["user", "plan", name, field(data, "plan", PLAN_RE) or "-"] + free))
+    if action == "renew":
+        return result(*radius_admin(["user", "renew", name] + free))
+    if action == "expiry":
+        v = field(data, "expiry", re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}( [0-9]{2}:[0-9]{2}(:[0-9]{2})?)?$")) or "-"
+        return result(*radius_admin(["user", "expiry", name, v]))
+    v = field(data, "quota", SIZE_RE) or "-"
+    return result(*radius_admin(["user", "quota", name, v]))
+
+
+def account_info(name):
+    acc = q1("""SELECT a.plan, a.first_login, a.expires_at, a.quota_since, a.voucher_batch,
+                  COALESCE(a.quota_bytes, p.quota_bytes, 0) AS quota_bytes, COALESCE(p.quota_period,'total') AS quota_period,
+                  COALESCE(p.daily_seconds,0) AS daily_seconds, COALESCE(p.validity_seconds,0) AS validity_seconds,
+                  p.price, ml_check(a.username) AS radius_check
+                FROM ml_account a LEFT JOIN ml_plan p ON p.name=a.plan WHERE a.username=%s""", (name,))
+    if not acc:
+        return None
+    acc = jsonable([acc])[0]
+    if int(acc["quota_bytes"]):
+        start = {"daily": "CURDATE()", "monthly": "DATE_FORMAT(NOW(), '%%Y-%%m-01')"}.get(acc["quota_period"], "'1970-01-01'")
+        used = q1(f"""SELECT COALESCE(SUM(acctinputoctets+acctoutputoctets),0) AS b FROM radacct
+                      WHERE username=%s AND acctstarttime >= GREATEST(COALESCE(%s,'1970-01-01'), {start})""",
+                  (name, acc["quota_since"]))
+        acc["used_bytes"] = int(used["b"])
+    return acc
 
 
 # ------------------------------------------------------------------ system / admins / audit

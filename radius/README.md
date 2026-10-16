@@ -387,7 +387,7 @@ Web dashboard    : https://192.168.10.5:8443
 | **Online now** | Kaun connected hai — IP, MAC, kab se, data — Kick button (15 s refresh) |
 | **Live log** | Har site visit aur har block, live (3 s), user filter, pause |
 | **Reports** | Visited sites, history, blocked, login log — user / IP / din ke filter |
-| **Data usage** | Per website / per IP / per user / per day + live speed |
+| **Data usage** | Per website / per IP / per user / **user → top sites** (har user ki top sites aur un ka download/upload) / per day + live speed |
 | **Settings** | Services ka status, disk/DB size, apna password, dashboard accounts (admin / viewer), **audit log** (kis admin ne kab kya badla) |
 
 **Security:**
@@ -407,6 +407,67 @@ sudo radius-admin web del ahmed
 Dashboard band karna ho: `sudo WEB=0 ./install.sh` se naya install dashboard ke bina hota hai; chal rahe ko `sudo systemctl disable --now mikrotiklover-web`.
 
 **Test:** `tests/ui-dashboard.mjs` asal browser (Playwright/Chromium) mein login, group/user/MAC/router banana, policy lagana, saare pages, mobile + dark mode, aur sab delete karna check karta hai — console ya CSP error par fail.
+
+## 5d. Hotspot business — plans, vouchers, expiry, data quota
+
+Hotspot ko dukaan ki tarah chalane ke liye: packages bechein, cards print karein, sab khud lagu ho.
+
+**1. Plan (package) banayein** — dashboard → *Plans* → New plan, ya:
+```bash
+sudo radius-admin plan add day-1gb    --price 50  --validity 1d  --quota 1G  --rate 4M/4M --devices 1 --description "1 din, 1 GB"
+sudo radius-admin plan add month-10gb --price 500 --validity 30d --quota 10G --period monthly --rate 8M/8M --devices 2
+sudo radius-admin plan add kids       --price 200 --daily-time 2h --rate 2M/2M
+sudo radius-admin plan list
+```
+| Option | Matlab |
+|---|---|
+| `--validity 30d` | Pehli login se itne din/ghante (1d, 7d, 30d, 12h). Card bechne ke din se nahi — jab customer pehli dafa login kare. |
+| `--quota 10G` + `--period total/monthly/daily` | Data limit; `total` = poore package mein, `monthly`/`daily` = har mahine/din naya |
+| `--daily-time 2h` | Roz itna online time |
+| `--rate`, `--devices` | Speed aur ek waqt mein kitne devices |
+
+**2. Vouchers (cards)** — dashboard → *Vouchers* → Create (ya Plans mein plan ke saath "Vouchers") → **Print cards** (A4, 3 cards per row, aap ka business naam, price, package, user/pass, Wi-Fi naam):
+```bash
+sudo radius-admin voucher create day-1gb 100 --prefix WF --note "Counter, October"
+sudo radius-admin voucher create day-1gb 50 --pin          # PIN mode: username = password (customer ek hi code likhta hai)
+sudo radius-admin voucher list                              # unused / active / expired / bik gaye
+sudo radius-admin voucher csv 12 > batch12.csv              # Excel ke liye
+sudo radius-admin voucher del 12                            # sirf unused cards hatata hai
+```
+
+**3. Monthly customers (subscriptions):**
+```bash
+sudo radius-admin user add ahmed -p 'secret'
+sudo radius-admin user plan ahmed month-10gb               # plan lagaya (sale record hoti hai; --free = muft)
+sudo radius-admin user renew ahmed                          # agle mahine: expiry barhao, data counter zero
+sudo radius-admin user expiry ahmed '2026-12-31 23:59'      # khas tareekh tak
+sudo radius-admin user quota ahmed 20G                      # is user ka apna data limit
+sudo radius-admin user status ahmed                         # plan, expiry, quota, RADIUS ka jawab
+sudo radius-admin sales 30                                  # 30 din ki kamai
+```
+Dashboard mein user ke page par **Package** card: plan, expiry, data bar (kitna use hua), Set plan / Renew / Expiry / Quota.
+
+**Kaise lagu hota hai** (FreeRADIUS + MySQL function `ml_check`, har login par):
+- Package khatam / data khatam / aaj ka time khatam → **login reject**, aur wajah hotspot login page par dikhti hai ("Your package has expired", "Your data quota is used up", "Daily time limit reached").
+- Login ho to MikroTik ko **Session-Timeout** (baqi waqt) aur **Mikrotik-Total-Limit + Gigawords** (baqi data, 4 GB se zyada bhi) bheja jata hai — limit puri hote hi MikroTik khud disconnect karta hai.
+- Voucher ki **pehli login** par validity shuru hoti hai aur sale record hoti hai (ek hi dafa).
+- Data `radacct` se ginti hai — hotspot profile mein `radius-interim-update=5m` (hamari `hotspot.rsc` mein hai) zaroori hai.
+- Limits hotspot (aur MAC auth) logins par lagti hain; WPA-Enterprise (PEAP) users par expiry/quota abhi nahi.
+
+**Dashboard:** *Plans*, *Vouchers* (batches, print, delete unused), *Sales* (roz ki kamai, plan wise, recent), Dashboard par "Sales today / this month" aur "Active packages / unused vouchers". *Settings → Business & branding*: business naam, currency, hotspot Wi-Fi naam, login address, contact, card ke neeche ka text.
+
+**Hotspot login page:** `mikrotik/hotspot-login/login.html` — mobile-friendly, voucher/PIN ke liye (PIN checkbox), error (package expired wagera) dikhata hai, CHAP (password clear text mein nahi jata). Winbox → Files → `hotspot/login.html` replace karein (`md5.js` wahin rehne dein); `BRAND` text badal dein.
+
+## 5e. Users ke liye connect guide (link bhejein)
+
+`https://<server>:8443/connect` — **login ke bina** khulta hai (sirf ye page aur certificate; baqi dashboard band rehta hai).
+- Tabs: **Android, iPhone/iPad, Windows, Mac, Hotspot/Voucher** — phone khud pehchan kar sahi tab kholta hai.
+- Har step ke saath **phone screen jaisi tasveer**, jis mein aap ke Wi-Fi ka naam, domain aur bharne wale fields highlight hote hain.
+- Android 11–12 ke liye **certificate download** button (`ca.der`) aur install ke steps.
+- "Masla ho to" hissa aur aap ka contact number.
+- Naam Settings → Business & branding se aate hain. Link seedha tab par: `/connect#hotspot`, `/connect#iphone`.
+
+WhatsApp par link bhejein, ya Wi-Fi ke paas QR/poster laga dein. Users ka phone server tak pohanch sake (LAN, ya server public ho to internet se).
 
 ## 6. Monitoring aur testing
 

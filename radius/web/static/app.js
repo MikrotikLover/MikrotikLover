@@ -36,6 +36,10 @@ const ICONS = {
   data: "M12 3v12m0 0-4-4m4 4 4-4M5 21h14",
   settings: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6m7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14.5 3h-4l-.4 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7 7 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2l.4 2.6h4l.4-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2",
   menu: "M4 6h16M4 12h16M4 18h16",
+  plan: "M4 4h16v16H4zM8 9h8M8 13h8M8 17h5",
+  voucher: "M3 7h18v4a2 2 0 0 0 0 4v4H3v-4a2 2 0 0 0 0-4zM14 7v12",
+  money: "M3 6h18v12H3zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6M6 9v.01M18 15v.01",
+  print: "M6 9V3h12v6M6 18H4v-7h16v7h-2M7 14h10v7H7z",
   plus: "M12 5v14M5 12h14",
   refresh: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7",
 };
@@ -64,6 +68,15 @@ function ago(ts) {
   return String(ts).slice(0, 16);
 }
 const num = (n) => Number(n || 0).toLocaleString();
+const money = (n, cur = "Rs") => `${cur} ${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+function dur(sec) {          // plan durations: 86400 -> "1 day", 7200 -> "2 h"
+  sec = Number(sec) || 0;
+  if (!sec) return "—";
+  if (sec % 86400 === 0) return `${sec / 86400} day${sec === 86400 ? "" : "s"}`;
+  if (sec % 3600 === 0) return `${sec / 3600} h`;
+  return `${Math.round(sec / 60)} min`;
+}
+const gb = (b) => (Number(b) ? bytes(b) : "Unlimited");
 const isAdmin = () => me && me.role === "admin";
 
 // ------------------------------------------------------------------ API
@@ -184,6 +197,7 @@ const legend = () => h("div", { class: "legend" }, h("span", {}, h("i", { class:
 const NAV = [
   ["dashboard", "Dashboard", "home"], ["users", "Users", "users"], ["groups", "Groups & policies", "groups"],
   ["macs", "MAC devices", "mac"], ["routers", "Routers", "router"], "-",
+  ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["reports", "Reports", "reports"],
   ["data", "Data usage", "data"], "-", ["settings", "Settings", "settings"],
 ];
@@ -257,7 +271,9 @@ ROUTES.dashboard = async () => {
         tile("Routers", num(c.routers)),
         tile("Logins today", num(c.accepts), `${num(c.rejects)} rejected`),
         tile("Data today", bytes(Number(c.down_today) + Number(c.up_today)), `↓ ${bytes(c.down_today)}  ↑ ${bytes(c.up_today)}`),
-        tile("Blocked today", num(c.blocked_today), "web-filter hits")),
+        tile("Blocked today", num(c.blocked_today), "web-filter hits"),
+        tile("Sales today", money(c.sales_today, c.currency), `${money(c.sales_month, c.currency)} this month`),
+        tile("Active packages", num(c.active_plans), `${num(c.unused_vouchers)} unused vouchers`)),
       h("div", { class: "grid g-3" },
         card("Data usage", "last 24 hours", columnChart(points), legend()),
         card("Top sites today", "download + upload", hbars(d.top_sites, "site"))),
@@ -283,6 +299,7 @@ ROUTES.users = async (name) => {
   if (name) return userDetail(name);
   const [{ users }, { groups, policies }] = await Promise.all([api("GET", "/api/users"), api("GET", "/api/groups")]);
   const list = users.filter((u) => !u.is_mac);
+  const vouchers = users.filter((u) => u.voucher_batch).length;
   const search = h("input", { type: "search", placeholder: "Search users…", oninput: () => draw() });
   const holder = h("div");
   const draw = () => {
@@ -291,12 +308,13 @@ ROUTES.users = async (name) => {
       { label: "User", render: (u) => h("a", { href: `#/users/${encodeURIComponent(u.username)}` }, u.username) },
       { label: "Group", render: (u) => u.grp || "—" },
       { label: "Policy", render: (u) => u.policy ? h("span", {}, u.policy, " ", u.policy_source === "group" ? h("span", { class: "muted" }, "(group)") : null) : "—" },
+      { label: "Plan / expiry", render: (u) => u.plan ? h("span", {}, u.plan, " ", h("span", { class: "muted" }, u.expires_at ? (new Date(u.expires_at.replace(" ", "T")) < new Date() ? "expired" : `till ${u.expires_at.slice(0, 16)}`) : "not started")) : "—" },
       { label: "Status", render: (u) => u.disabled ? badge("disabled", "bad") : u.online ? badge("online", "ok") : badge("offline") },
       { label: "Last login", render: (u) => ago(u.last_login) },
       { label: "", render: (u) => isAdmin() ? h("div", { class: "row-actions" },
           u.online ? h("button", { class: "small", onclick: () => act(api("POST", `/api/users/${encodeURIComponent(u.username)}/kick`, {})).then(route) }, "Kick") : null,
           h("button", { class: "small", onclick: () => act(api("POST", `/api/users/${encodeURIComponent(u.username)}/${u.disabled ? "enable" : "disable"}`, {})).then(route) }, u.disabled ? "Enable" : "Disable")) : null },
-    ], list.filter((u) => !s || u.username.toLowerCase().includes(s) || (u.grp || "").toLowerCase().includes(s)), "No users yet — add the first one."));
+    ], list.filter((u) => s ? (u.username.toLowerCase().includes(s) || (u.grp || "").toLowerCase().includes(s)) : !u.voucher_batch), "No users yet — add the first one."));
   };
   draw();
   const add = () => {
@@ -309,7 +327,7 @@ ROUTES.users = async (name) => {
       route();
     } }]);
   };
-  shell("Users", card(null, null, h("div", { class: "toolbar" }, search, h("span", { class: "grow" }), h("span", { class: "muted" }, `${list.length} users`),
+  shell("Users", card(null, null, h("div", { class: "toolbar" }, search, h("span", { class: "grow" }), h("span", { class: "muted" }, `${list.length - vouchers} users`, vouchers ? ` · ${vouchers} vouchers (see Vouchers)` : ""),
     isAdmin() ? h("button", { class: "primary", onclick: add }, icon("plus"), "Add user") : null), holder));
 };
 
@@ -346,6 +364,7 @@ async function userDetail(name) {
           if (await act(api("DELETE", `/api/users/${enc}`))) location.hash = "#/users";
       } }, "Delete")))) : null;
 
+  const subCard = await subscriptionCard(name, d.account);
   shell(name, h("div", { class: "stack" },
     h("div", {}, h("a", { href: "#/users" }, "← Users")),
     h("div", { class: "grid g-tiles" },
@@ -353,6 +372,7 @@ async function userDetail(name) {
       tile("Group", d.group || "—"),
       tile("Policy", ownPolicy || "group"),
       tile("Data 30 days", bytes(days.reduce((a, x) => a + x.down + x.up, 0)))),
+    subCard,
     h("div", { class: "grid g-2" }, adminBox,
       card("Settings", null, table([{ label: "Type", key: "t" }, { label: "Attribute", key: "attribute" }, { label: "Value", key: "value", wrap: true }],
         [...d.check.map((c) => ({ ...c, t: "check" })), ...d.reply.map((r) => ({ ...r, t: "reply" }))]))),
@@ -567,7 +587,7 @@ ROUTES.reports = async (tab = "sites") => {
 
 // ------------------------------------------------------------------ data usage
 ROUTES.data = async (by = "site") => {
-  const tabs = [["site", "Per website"], ["ip", "Per IP"], ["user", "Per user"], ["day", "Per day"], ["now", "Live now"]];
+  const tabs = [["site", "Per website"], ["ip", "Per IP"], ["user", "Per user"], ["usersites", "User → top sites"], ["day", "Per day"], ["now", "Live now"]];
   const holder = h("div", { class: "stack" });
   const user = h("input", { type: "search", placeholder: "User" }), ip = h("input", { type: "search", placeholder: "IP" }), site = h("input", { type: "search", placeholder: "Site e.g. youtube.com" });
   const days = h("select", {}, [["1", "Today (24 h)"], ["7", "7 days"], ["30", "30 days"], ["90", "90 days"]].map(([v, l]) => h("option", { value: v, selected: by === "day" && v === "30" }, l)));
@@ -582,6 +602,7 @@ ROUTES.data = async (by = "site") => {
         { label: "Speed", num: true, render: (x) => `${((x.down + x.up) * 8 / secs / 1e6).toFixed(2)} Mbps` }], r.rows, "No traffic in the last minute."));
       return;
     }
+    if (by === "usersites") return userSites(holder, days.value);
     const qs = new URLSearchParams({ by, days: days.value, user: user.value.trim(), ip: ip.value.trim(), site: site.value.trim(), top: 100 });
     const { rows } = await api("GET", `/api/traffic?${qs}`);
     const label = { site: "Website", ip: "IP", user: "User", day: "Day" }[by];
@@ -600,7 +621,7 @@ ROUTES.data = async (by = "site") => {
   };
   shell("Data usage", h("div", { class: "stack" },
     h("div", { class: "tabs" }, tabs.map(([k, l]) => h("a", { href: `#/data/${k}`, class: k === by ? "active" : "" }, l))),
-    by !== "now" ? card(null, null, h("div", { class: "toolbar" }, days, user, ip, site, h("button", { class: "primary", onclick: () => load().catch((e) => toast(e.message, true)) }, "Show"))) : null,
+    by !== "now" ? card(null, null, h("div", { class: "toolbar" }, days, by === "usersites" ? null : [user, ip, site], h("button", { class: "primary", onclick: () => load().catch((e) => toast(e.message, true)) }, "Show"))) : null,
     holder));
   await load();
   if (by === "now") every(10000, () => load().catch(() => {}));
@@ -628,6 +649,15 @@ ROUTES.settings = async () => {
     h("label", { class: "field" }, "Repeat new password", h("input", { name: "repeat", type: "password", autocomplete: "new-password", minlength: 10, required: true })),
     h("div", {}, h("button", { class: "primary", type: "submit" }, "Change my password")));
   parts.push(card("My password", me.user, pw));
+  const bs = await api("GET", "/api/settings");
+  const bf = h("form", { class: "form cols", onsubmit: async (e) => { e.preventDefault(); await act(api("POST", "/api/settings", formValues(bf))); } },
+    [["brand", "Business name (cards, connect page)"], ["currency", "Currency"], ["hotspot_ssid", "Hotspot Wi-Fi name"], ["hotspot_url", "Hotspot login address"],
+     ["ssid", "Staff Wi-Fi name (WPA-Enterprise)"], ["contact", "Contact / WhatsApp number"]].map(([k, l]) =>
+      h("label", { class: "field" }, l, h("input", { name: k, value: bs[k] || "", disabled: !isAdmin() }))),
+    h("label", { class: "field full" }, "Text at the bottom of voucher cards", h("input", { name: "card_footer", value: bs.card_footer || "", disabled: !isAdmin() })),
+    h("div", { class: "full muted" }, "Users' connect guide: ", h("a", { href: "/connect", target: "_blank", rel: "noopener" }, `${location.origin}/connect`), ` · RADIUS domain: ${bs.radius_domain || "—"}`),
+    isAdmin() ? h("div", {}, h("button", { class: "primary", type: "submit" }, "Save")) : null);
+  parts.push(card("Business & branding", null, bf));
   if (isAdmin()) {
     const [{ admins }, { audit }] = await Promise.all([api("GET", "/api/admins"), api("GET", "/api/audit")]);
     const addAdmin = (a) => {
@@ -661,3 +691,199 @@ ROUTES.settings = async () => {
   try { me = await api("GET", "/api/me"); } catch { me = null; }
   if (!me) renderLogin(); else route();
 })();
+
+// ------------------------------------------------------------------ hotspot business
+async function subscriptionCard(name, acc) {
+  const enc = encodeURIComponent(name);
+  const { plans, currency } = await api("GET", "/api/plans");
+  const planSel = h("select", {}, h("option", { value: "" }, "— no plan —"), plans.map((p) => h("option", { value: p.name, selected: acc && p.name === acc.plan }, `${p.name} (${money(p.price, currency)})`)));
+  const free = h("input", { type: "checkbox" });
+  const items = [];
+  if (acc) {
+    const check = acc.radius_check || "";
+    const state = check.startsWith("reject:") ? badge(check.slice(7), "bad") : acc.first_login ? badge("active", "ok") : badge("not used yet", "info");
+    const quota = Number(acc.quota_bytes);
+    let bar = null;
+    if (quota) {
+      const used = Number(acc.used_bytes || 0), pct = Math.min(100, (used / quota) * 100);
+      const fill = h("div", { class: "hbar-down" }); fill.style.width = `${pct}%`;
+      bar = h("div", {}, h("div", { class: "hbar-track" }, fill), h("div", { class: "muted" }, `${bytes(used)} of ${bytes(quota)} used (${acc.quota_period})`));
+    }
+    items.push(h("dl", { class: "kv" },
+      h("dt", {}, "Plan"), h("dd", {}, acc.plan || "—", " ", state),
+      h("dt", {}, "First login"), h("dd", {}, acc.first_login ? String(acc.first_login).slice(0, 16) : "—"),
+      h("dt", {}, "Expires"), h("dd", {}, acc.expires_at ? String(acc.expires_at).slice(0, 16) : acc.validity_seconds ? `${dur(acc.validity_seconds)} after first login` : "never"),
+      h("dt", {}, "Data quota"), h("dd", {}, quota ? bar : "unlimited"),
+      h("dt", {}, "Time per day"), h("dd", {}, Number(acc.daily_seconds) ? dur(acc.daily_seconds) : "unlimited"),
+      acc.voucher_batch ? [h("dt", {}, "Voucher"), h("dd", {}, h("a", { href: `#/vouchers/${acc.voucher_batch}` }, `batch #${acc.voucher_batch}`))] : null));
+  } else items.push(h("p", { class: "muted" }, "No package: this user has no expiry, data quota or time limit."));
+  if (isAdmin()) {
+    const expiry = h("input", { type: "datetime-local", value: acc?.expires_at ? String(acc.expires_at).slice(0, 16).replace(" ", "T") : "" });
+    const quota = h("input", { placeholder: "e.g. 20G", size: 8 });
+    items.push(h("div", { class: "form" },
+      h("div", { class: "toolbar" }, planSel, h("label", { class: "check" }, free, "free (no sale)"),
+        h("button", { onclick: () => act(api("POST", `/api/users/${enc}/sub/plan`, { plan: planSel.value, free: free.checked })).then(route) }, "Set plan"),
+        acc?.plan ? h("button", { class: "primary", onclick: () => act(api("POST", `/api/users/${enc}/sub/renew`, { free: free.checked })).then(route) }, "Renew") : null),
+      h("div", { class: "toolbar" }, h("span", { class: "muted" }, "Expiry"), expiry,
+        h("button", { onclick: () => act(api("POST", `/api/users/${enc}/sub/expiry`, { expiry: expiry.value ? expiry.value.replace("T", " ") : "" })).then(route) }, "Save"),
+        h("span", { class: "muted" }, "Own quota"), quota,
+        h("button", { onclick: () => act(api("POST", `/api/users/${enc}/sub/quota`, { quota: quota.value.trim() })).then(route) }, "Save"))));
+  }
+  return card("Package", "plan, expiry, data quota", items);
+}
+
+ROUTES.plans = async () => {
+  const { plans, currency } = await api("GET", "/api/plans");
+  const edit = (p) => {
+    const toDur = (s) => { s = Number(s) || 0; return !s ? "" : s % 86400 === 0 ? `${s / 86400}d` : s % 3600 === 0 ? `${s / 3600}h` : `${Math.round(s / 60)}m`; };
+    const toSize = (b) => { b = Number(b) || 0; return !b ? "" : b % (1 << 30) === 0 ? `${b / (1 << 30)}G` : `${Math.round(b / (1 << 20))}M`; };
+    const f = h("form", { class: "form cols", onsubmit: (e) => e.preventDefault() },
+      h("label", { class: "field" }, "Name", h("input", { name: "name", required: true, pattern: "[A-Za-z0-9._@+\\-]{1,64}", value: p?.name || "", readonly: !!p, placeholder: "day-1gb" })),
+      h("label", { class: "field" }, `Price (${currency})`, h("input", { name: "price", type: "number", min: 0, step: "0.01", value: p ? Number(p.price) : "" })),
+      h("label", { class: "field" }, "Validity", h("span", { class: "help" }, "Counts from the first login: 1d, 7d, 30d, 12h — empty = never expires"), h("input", { name: "validity", value: toDur(p?.validity_seconds), placeholder: "30d" })),
+      h("label", { class: "field" }, "Data quota", h("span", { class: "help" }, "500M, 1G, 10G — empty = unlimited"), h("input", { name: "quota", value: toSize(p?.quota_bytes), placeholder: "10G" })),
+      h("label", { class: "field" }, "Quota resets", h("select", { name: "period" }, ["total", "monthly", "daily"].map((x) => h("option", { value: x, selected: (p?.quota_period || "total") === x }, { total: "never (whole package)", monthly: "every month", daily: "every day" }[x])))),
+      h("label", { class: "field" }, "Online time per day", h("span", { class: "help" }, "e.g. 2h — empty = unlimited"), h("input", { name: "daily_time", value: toDur(p?.daily_seconds), placeholder: "2h" })),
+      h("label", { class: "field" }, "Speed", h("span", { class: "help" }, "MikroTik rx/tx, e.g. 5M/5M"), h("input", { name: "rate", value: p?.rate || "", placeholder: "5M/5M" })),
+      h("label", { class: "field" }, "Devices at once", h("input", { name: "devices", type: "number", min: 1, value: p?.devices || "1" })),
+      h("label", { class: "field full" }, "Description (printed on vouchers)", h("input", { name: "description", maxlength: 128, value: p?.description || "", placeholder: "1 day, 1 GB, 4 Mbps" })));
+    dialog(p ? `Edit plan ${p.name}` : "New plan", f, [{ label: "Cancel" }, { label: "Save", class: "primary", action: async () => {
+      if (!f.reportValidity()) return false;
+      if (!(await act(api("POST", "/api/plans", { ...formValues(f), edit: !!p })))) return false;
+      route();
+    } }]);
+  };
+  shell("Plans", card(null, null,
+    h("div", { class: "toolbar" }, h("span", { class: "muted grow" }, "Packages you sell: price, validity, data, daily time, speed. Each plan is also a RADIUS group."),
+      isAdmin() ? h("button", { class: "primary", onclick: () => edit(null) }, icon("plus"), "New plan") : null),
+    table([
+      { label: "Plan", render: (p) => h("span", {}, h("b", {}, p.name), p.description ? h("div", { class: "muted" }, p.description) : null) },
+      { label: "Price", num: true, render: (p) => money(p.price, currency) },
+      { label: "Validity", render: (p) => dur(p.validity_seconds) },
+      { label: "Data", render: (p) => Number(p.quota_bytes) ? `${bytes(p.quota_bytes)} / ${p.quota_period}` : "Unlimited" },
+      { label: "Per day", render: (p) => dur(p.daily_seconds) },
+      { label: "Speed", render: (p) => p.rate || "—" }, { label: "Devices", render: (p) => p.devices || "—" },
+      { label: "Active / total", num: true, render: (p) => `${p.active} / ${p.accounts}` },
+      { label: "", render: (p) => isAdmin() ? h("div", { class: "row-actions" },
+          h("button", { class: "small", onclick: () => edit(p) }, "Edit"),
+          h("button", { class: "small primary", onclick: () => { location.hash = `#/vouchers/new/${encodeURIComponent(p.name)}`; } }, "Vouchers"),
+          h("button", { class: "small danger", onclick: async () => {
+            if (await confirmDlg("Delete plan", `Delete plan ${p.name}? ${p.accounts} account(s) use it — they keep working without limits.`, "Delete"))
+              if (await act(api("DELETE", `/api/plans/${encodeURIComponent(p.name)}?force=1`))) route();
+          } }, "Delete")) : null }], plans, "No plans yet — create your first package.")));
+};
+
+function voucherDialog(plans, preset) {
+  const f = h("form", { class: "form cols", onsubmit: (e) => e.preventDefault() },
+    h("label", { class: "field" }, "Plan", h("select", { name: "plan", required: true }, plans.map((p) => h("option", { value: p.name, selected: p.name === preset }, p.name)))),
+    h("label", { class: "field" }, "How many", h("input", { name: "count", type: "number", min: 1, max: 1000, value: 20, required: true })),
+    h("label", { class: "field" }, "Prefix", h("span", { class: "help" }, "Optional, up to 6 letters, e.g. WF"), h("input", { name: "prefix", maxlength: 6, pattern: "[A-Za-z0-9]{0,6}" })),
+    h("label", { class: "field" }, "Note", h("input", { name: "note", maxlength: 128, placeholder: "Shop counter, October" })),
+    h("label", { class: "check full" }, h("input", { type: "checkbox", name: "pin" }), "PIN mode: username and password are the same code (easier for customers)"));
+  dialog("Create vouchers", f, [{ label: "Cancel" }, { label: "Create", class: "primary", action: async () => {
+    if (!f.reportValidity()) return false;
+    const r = await act(api("POST", "/api/vouchers", formValues(f)));
+    if (!r) return false;
+    location.hash = `#/vouchers/${r.batch}`;
+  } }]);
+}
+
+ROUTES.vouchers = async (id, preset) => {
+  if (id && id !== "new") return voucherBatch(id);
+  const [{ batches, currency }, { plans }] = await Promise.all([api("GET", "/api/vouchers"), api("GET", "/api/plans")]);
+  shell("Vouchers", card(null, null,
+    h("div", { class: "toolbar" }, h("span", { class: "muted grow" }, "Pre-paid cards: the package starts at the first login."),
+      isAdmin() ? h("button", { class: "primary", disabled: !plans.length, onclick: () => voucherDialog(plans) }, icon("plus"), "Create vouchers") : null),
+    plans.length ? null : h("div", { class: "note" }, "Create a plan first (Plans page)."),
+    table([
+      { label: "Batch", render: (b) => h("a", { href: `#/vouchers/${b.id}` }, `#${b.id}`) },
+      { label: "Plan", key: "plan" }, { label: "Price", num: true, render: (b) => money(b.price, currency) },
+      { label: "Cards", key: "count", num: true },
+      { label: "Unused", num: true, render: (b) => badge(String(b.unused), "info") },
+      { label: "Active", num: true, render: (b) => badge(String(b.active), "ok") },
+      { label: "Expired", num: true, key: "expired" },
+      { label: "Sold", num: true, render: (b) => money((Number(b.remaining) - Number(b.unused)) * Number(b.price), currency) },
+      { label: "Created", render: (b) => `${String(b.created_at).slice(0, 16)} · ${b.created_by}` },
+      { label: "Note", key: "note", wrap: true }], batches, "No vouchers yet.")));
+  if (id === "new" && isAdmin() && plans.length) voucherDialog(plans, preset);
+};
+
+async function voucherBatch(id) {
+  const d = await api("GET", `/api/vouchers/${encodeURIComponent(id)}`);
+  const cur = d.settings.currency;
+  shell(`Voucher batch #${d.batch.id}`, h("div", { class: "stack" },
+    h("div", {}, h("a", { href: "#/vouchers" }, "← Vouchers")),
+    h("div", { class: "grid g-tiles" }, tile("Plan", d.batch.plan), tile("Price", money(d.batch.price, cur)),
+      tile("Unused", String(d.codes.filter((c) => c.status === "unused").length)), tile("Active", String(d.codes.filter((c) => c.status === "active").length))),
+    card(null, null, h("div", { class: "toolbar" },
+      h("a", { class: "btn primary", href: `#/print/${d.batch.id}` }, icon("print"), "Print cards"),
+      h("a", { class: "btn", href: `#/print/${d.batch.id}/unused` }, "Print unused only"),
+      h("span", { class: "grow" }),
+      isAdmin() ? h("button", { class: "danger", onclick: async () => {
+        if (await confirmDlg("Delete unused vouchers", "Delete all UNUSED vouchers of this batch? Used ones are kept.", "Delete"))
+          if (await act(api("DELETE", `/api/vouchers/${d.batch.id}`))) location.hash = "#/vouchers";
+      } }, "Delete unused") : null),
+    table([{ label: "Username", render: (c) => h("code", {}, c.username) }, { label: "Password", render: (c) => h("code", {}, c.password) },
+      { label: "Status", render: (c) => c.status === "unused" ? badge("unused", "info") : c.status === "active" ? badge("active", "ok") : badge("expired") },
+      { label: "First login", render: (c) => c.first_login ? String(c.first_login).slice(0, 16) : "—" },
+      { label: "Expires", render: (c) => c.expires_at ? String(c.expires_at).slice(0, 16) : "—" },
+      { label: "", render: (c) => h("a", { href: `#/users/${encodeURIComponent(c.username)}` }, "details") }], d.codes))));
+}
+
+// printable cards: no app shell, A4 grid, print button hidden when printing
+ROUTES.print = async (id, which) => {
+  const d = await api("GET", `/api/vouchers/${encodeURIComponent(id)}`);
+  const st = d.settings, p = d.plan || {};
+  const codes = which === "unused" ? d.codes.filter((c) => c.status === "unused") : d.codes;
+  const facts = [p.validity_seconds && Number(p.validity_seconds) ? dur(p.validity_seconds) : null,
+    Number(p.quota_bytes) ? bytes(p.quota_bytes) : "Unlimited data",
+    Number(p.daily_seconds) ? `${dur(p.daily_seconds)}/day` : null, p.rate ? p.rate.split(" ")[0].split("/")[0] + "bps" : null].filter(Boolean);
+  $app.className = "print-page";
+  $app.replaceChildren(
+    h("div", { class: "print-bar" }, h("a", { href: `#/vouchers/${id}` }, "← Back"), h("span", { class: "muted" }, `${codes.length} cards · batch #${id}`),
+      h("button", { class: "primary", onclick: () => window.print() }, icon("print"), "Print")),
+    h("div", { class: "cards" }, codes.map((c) => h("div", { class: "vcard" },
+      h("div", { class: "vcard-head" }, h("b", {}, st.brand), h("span", { class: "vprice" }, money(d.batch.price, st.currency))),
+      h("div", { class: "vplan" }, p.description || d.batch.plan),
+      h("div", { class: "vfacts" }, facts.join(" · ")),
+      d.batch && c.username === c.password
+        ? h("div", { class: "vcode" }, h("span", {}, "PIN"), h("b", {}, c.username))
+        : h("div", { class: "vcode two" }, h("span", {}, "User"), h("b", {}, c.username), h("span", {}, "Pass"), h("b", {}, c.password)),
+      h("div", { class: "vfoot" }, `Wi-Fi: ${st.hotspot_ssid} · ${st.hotspot_url}`),
+      st.card_footer ? h("div", { class: "vfoot muted" }, st.card_footer) : null))));
+};
+
+ROUTES.sales = async () => {
+  const d = await api("GET", "/api/sales?days=30");
+  const cur = d.currency;
+  const total = d.per_day.reduce((a, r) => a + Number(r.amount), 0);
+  const points = d.per_day.map((r) => ({ label: String(r.day).slice(5), down: Number(r.amount), up: 0 }));
+  shell("Sales", h("div", { class: "stack" },
+    h("div", { class: "grid g-tiles" }, tile("Last 30 days", money(total, cur)), tile("Sales", num(d.per_day.reduce((a, r) => a + Number(r.n), 0))),
+      tile("Vouchers used", num(d.per_day.reduce((a, r) => a + Number(r.vouchers), 0))), tile("Renewals", num(d.per_day.reduce((a, r) => a + Number(r.renewals), 0)))),
+    h("div", { class: "grid g-3" },
+      card("Per day", cur, points.length ? moneyChart(points, cur) : h("div", { class: "empty" }, "No sales yet.")),
+      card("Per plan", "30 days", table([{ label: "Plan", key: "plan" }, { label: "Sales", key: "n", num: true }, { label: "Amount", num: true, render: (r) => money(r.amount, cur) }], d.per_plan, "No sales yet."))),
+    card("Recent", null, table([{ label: "When", render: (r) => String(r.at).slice(0, 16) },
+      { label: "User", render: (r) => h("a", { href: `#/users/${encodeURIComponent(r.username)}` }, r.username) },
+      { label: "Plan", key: "plan" }, { label: "Type", render: (r) => badge(r.kind, r.kind === "voucher" ? "info" : r.kind === "renew" ? "ok" : "") },
+      { label: "Amount", num: true, render: (r) => money(r.amount, cur) }], d.recent, "No sales yet."))));
+};
+
+function moneyChart(points, cur) {   // reuse the column chart with currency labels
+  const el = columnChart(points);
+  el.querySelectorAll("text.axis").forEach((t) => { if (/B$/.test(t.textContent)) t.textContent = ""; });
+  el.querySelectorAll("rect.bar-down title").forEach((t, i) => { t.textContent = `${points[i].label}: ${money(points[i].down, cur)}`; });
+  return el;
+}
+
+// per-user top sites (Data usage tab)
+async function userSites(holder, days) {
+  const { users } = await api("GET", `/api/traffic/user-sites?days=${days}&top=50&per_user=6`);
+  if (!users.length) return holder.replaceChildren(h("div", { class: "card" }, h("div", { class: "empty" }, "No data yet (traffic collector + router traffic-flow).")));
+  holder.replaceChildren(h("div", { class: "grid g-2" }, users.map((u) => card(
+    u.username ? h("a", { href: `#/users/${encodeURIComponent(u.username)}` }, u.who) : `${u.who} (no login)`,
+    `${bytes(Number(u.down) + Number(u.up))} · ${u.site_count} sites`,
+    hbars(u.sites.map((x) => ({ ...x })), "site"),
+    table([{ label: "Site", key: "site" }, { label: "Download", num: true, render: (x) => bytes(x.down) }, { label: "Upload", num: true, render: (x) => bytes(x.up) }], u.sites)))));
+}

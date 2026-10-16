@@ -41,6 +41,15 @@ async function toastText(page) {
   await t.waitFor({ timeout: 30000 });
   return t.textContent();
 }
+// click, then wait for a NEW toast (not one left over from an earlier action) and return it
+async function clickToast(page, locator) {
+  await page.evaluate(() => document.querySelectorAll(".toast").forEach((t) => t.setAttribute("data-seen", "1")));
+  await locator.click();
+  const t = page.locator(".toast:not([data-seen])").last();
+  await t.waitFor({ timeout: 60000 });
+  if (await t.evaluate((el) => el.classList.contains("error"))) throw new Error(`error toast: ${await t.textContent()}`);
+  return t.textContent();
+}
 
 try {
   const page = await newPage();
@@ -111,6 +120,98 @@ try {
   ok("router added, MikroTik command shown");
   await shot(page, "07-router-added");
   await dlgButton(page, "Close").click();
+
+  // hotspot business: plan -> vouchers -> print -> subscription -> sales
+  await go(page, "#/plans", "Plans");
+  await page.click("text=New plan");
+  await page.fill("dialog[open] input[name=name]", "ui-day");
+  await page.fill("dialog[open] input[name=price]", "50");
+  await page.fill("dialog[open] input[name=validity]", "1d");
+  await page.fill("dialog[open] input[name=quota]", "1G");
+  await page.fill("dialog[open] input[name=rate]", "4M/4M");
+  await page.fill("dialog[open] input[name=description]", "1 day, 1 GB, 4 Mbps");
+  await dlgButton(page, "Save").click();
+  await page.locator("td", { hasText: "ui-day" }).first().waitFor({ timeout: 30000 });
+  ok("plan created");
+  await shot(page, "17-plans");
+  await page.locator("tr", { hasText: "ui-day" }).locator("button", { hasText: "Vouchers" }).click();
+  await page.locator("dialog[open] input[name=count]").waitFor();
+  await page.fill("dialog[open] input[name=count]", "12");
+  await page.fill("dialog[open] input[name=prefix]", "UI");
+  await dlgButton(page, "Create").click();
+  await page.locator("header h1", { hasText: "Voucher batch" }).waitFor({ timeout: 60000 });
+  const codes = await page.locator("tbody code").count();
+  if (codes !== 24) throw new Error(`expected 12 vouchers (24 code cells), got ${codes}`);
+  ok("12 vouchers created");
+  await shot(page, "18-voucher-batch");
+  const batchUrl = page.url();
+  await page.click("text=Print cards");
+  await page.locator(".vcard").first().waitFor();
+  if ((await page.locator(".vcard").count()) !== 12) throw new Error("print page card count");
+  await page.waitForTimeout(300);
+  await shot(page, "19-voucher-print");
+  ok("print page: 12 cards");
+
+  await go(page, "#/users/ali", "ali");
+  const pkg = page.locator(".card", { hasText: "Package" });
+  await pkg.locator("select").selectOption("ui-day");
+  console.log("     toast:", (await clickToast(page, pkg.locator("button", { hasText: "Set plan" }))).trim());
+  await page.locator(".card", { hasText: "Package" }).locator("button", { hasText: "Renew" }).waitFor();
+  console.log("     toast:", (await clickToast(page, page.locator(".card", { hasText: "Package" }).locator("button", { hasText: "Renew" }))).trim());
+  await page.waitForTimeout(800);
+  await shot(page, "20-user-package");
+  ok("user plan + renew");
+
+  await go(page, "#/sales", "Sales");
+  await shot(page, "21-sales");
+  ok("sales page");
+  await go(page, "#/data/usersites", "Data usage");
+  await page.locator(".hbars, .empty").first().waitFor();
+  if (await page.locator("text=[object Object]").count()) throw new Error("user-sites shows [object Object]");
+  await shot(page, "22-user-top-sites");
+  ok("per-user top sites");
+
+  // business settings
+  await go(page, "#/settings", "Settings");
+  await page.fill("input[name=brand]", "Lover Net WiFi");
+  await page.fill("input[name=hotspot_ssid]", "LoverNet-Guest");
+  await page.fill("input[name=contact]", "0300-1234567");
+  console.log("     toast:", (await clickToast(page, page.locator(".card", { hasText: "Business & branding" }).locator("button", { hasText: "Save" }))).trim());
+  ok("business settings saved");
+
+  // public connect guide (no login, phone)
+  const guest = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 390, height: 844 }, isMobile: true,
+    userAgent: "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36" });
+  const gp = await guest.newPage();
+  gp.on("pageerror", (e) => errors.push(`[connect] pageerror: ${e.message}`));
+  gp.on("console", (m) => { if (m.type() === "error") errors.push(`[connect] console: ${m.text()}`); });
+  step = "connect";
+  await gp.goto(`${URL}/connect`);
+  await gp.locator("#brand", { hasText: "Lover Net WiFi" }).waitFor();
+  await gp.locator(".step").first().waitFor();
+  if (!(await gp.locator("button[aria-pressed=true]", { hasText: "Android" }).count())) throw new Error("Android tab not auto-selected");
+  await shot(gp, "23-connect-android");
+  await gp.click("button:has-text('Hotspot')");
+  await gp.locator("code", { hasText: "LoverNet-Guest" }).first().waitFor();
+  await shot(gp, "24-connect-hotspot");
+  await gp.click("button:has-text('iPhone')");
+  await shot(gp, "25-connect-iphone");
+  ok("public connect guide (Android auto-detected, hotspot, iPhone)");
+
+  // cleanup business objects
+  await page.goto(batchUrl);
+  await page.locator("header h1", { hasText: "Voucher batch" }).waitFor();
+  await page.click("button:has-text('Delete unused')");
+  await dlgButton(page, "Delete").click();
+  await page.locator("header h1", { hasText: "Vouchers" }).waitFor({ timeout: 30000 });
+  await go(page, "#/users/ali", "ali");
+  await page.locator(".card", { hasText: "Package" }).locator("select").selectOption("");
+  await clickToast(page, page.locator(".card", { hasText: "Package" }).locator("button", { hasText: "Set plan" }));
+  await go(page, "#/plans", "Plans");
+  await page.locator("tr", { hasText: "ui-day" }).locator("button", { hasText: "Delete" }).click();
+  await dlgButton(page, "Delete").click();
+  await page.locator("td", { hasText: "ui-day" }).waitFor({ state: "detached", timeout: 30000 });
+  ok("business cleanup via UI");
 
   for (const [hash, title, name] of [["#/online", "Online", "08-online"], ["#/live", "Live log", "09-live"],
     ["#/reports/sites", "Reports", "10-reports-sites"], ["#/reports/blocked", "Reports", "11-reports-blocked"],

@@ -44,3 +44,56 @@ CREATE TABLE IF NOT EXISTS web_audit (
   result VARCHAR(16) NOT NULL,
   KEY idx_at (at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------- hotspot business
+-- A plan is also a RADIUS group with the same name (speed limit, devices per user).
+CREATE TABLE IF NOT EXISTS ml_plan (
+  name VARCHAR(64) NOT NULL PRIMARY KEY,
+  price DECIMAL(10,2) NOT NULL DEFAULT 0,
+  validity_seconds INT UNSIGNED NOT NULL DEFAULT 0,     -- counted from the first login; 0 = no expiry
+  quota_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,       -- 0 = unlimited
+  quota_period ENUM('total','monthly','daily') NOT NULL DEFAULT 'total',
+  daily_seconds INT UNSIGNED NOT NULL DEFAULT 0,        -- online time per day; 0 = unlimited
+  description VARCHAR(128) NOT NULL DEFAULT '',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Per-user subscription state (users without a row have no business limits)
+CREATE TABLE IF NOT EXISTS ml_account (
+  username VARCHAR(64) NOT NULL PRIMARY KEY,
+  plan VARCHAR(64) NULL,
+  first_login DATETIME NULL,
+  expires_at DATETIME NULL,
+  quota_bytes BIGINT UNSIGNED NULL,                     -- per-user override of the plan quota
+  quota_since DATETIME NULL,                            -- usage is counted from here (renewal resets it)
+  voucher_batch INT UNSIGNED NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_plan (plan), KEY idx_batch (voucher_batch), KEY idx_exp (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS ml_voucher_batch (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  plan VARCHAR(64) NOT NULL,
+  count INT UNSIGNED NOT NULL,
+  price DECIMAL(10,2) NOT NULL DEFAULT 0,
+  note VARCHAR(128) NOT NULL DEFAULT '',
+  created_by VARCHAR(64) NOT NULL DEFAULT '',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Money in: voucher activations are added by FreeRADIUS on first login, renewals by radius-admin
+CREATE TABLE IF NOT EXISTS ml_sale (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  username VARCHAR(64) NOT NULL,
+  plan VARCHAR(64) NOT NULL,
+  amount DECIMAL(10,2) NOT NULL DEFAULT 0,
+  kind ENUM('voucher','renew','new') NOT NULL,
+  KEY idx_at (at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Business / branding settings edited in the dashboard (voucher cards, connect page)
+CREATE TABLE IF NOT EXISTS ml_setting (
+  k VARCHAR(64) NOT NULL PRIMARY KEY,
+  v VARCHAR(512) NOT NULL DEFAULT ''
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

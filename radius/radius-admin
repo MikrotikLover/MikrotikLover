@@ -133,7 +133,7 @@ cmd_user() {
     del|delete|rm)
         local u=${1:-}; valid_name "$u" username
         user_exists "$u" || die "No such user '$u'"
-        echo "DELETE FROM radcheck WHERE username=$(q "$u"); DELETE FROM radreply WHERE username=$(q "$u"); DELETE FROM radusergroup WHERE username=$(q "$u");" | db
+        echo "DELETE FROM radcheck WHERE username=$(q "$u"); DELETE FROM radreply WHERE username=$(q "$u"); DELETE FROM radusergroup WHERE username=$(q "$u"); DELETE FROM ml_account WHERE username=$(q "$u");" | db
         ok "User '$u' deleted"
         ;;
     disable)
@@ -201,7 +201,8 @@ cmd_user() {
         echo "Last logins:"
         echo "SELECT authdate, reply FROM radpostauth WHERE username=$(q "$u") ORDER BY id DESC LIMIT 5;" | dbt
         ;;
-    *) die "Unknown: user $sub (add|passwd|del|disable|enable|group|policy|list|show)" ;;
+    plan|renew|expiry|quota|status) cmd_subscription "$sub" "$@" ;;
+    *) die "Unknown: user $sub (add|passwd|del|disable|enable|group|policy|plan|renew|expiry|quota|status|list|show)" ;;
     esac
 }
 
@@ -374,7 +375,8 @@ cmd_mac() {
         local m; m=$(norm_mac "${1:-}")
         user_exists "$m" || die "No such MAC $m"
         echo "DELETE FROM radcheck WHERE username=$(q "$m"); DELETE FROM radreply WHERE username=$(q "$m");
-              DELETE FROM radusergroup WHERE username=$(q "$m"); DELETE FROM macdevice WHERE mac=$(q "$m");" | db
+              DELETE FROM radusergroup WHERE username=$(q "$m"); DELETE FROM macdevice WHERE mac=$(q "$m");
+              DELETE FROM ml_account WHERE username=$(q "$m");" | db
         ok "MAC $m removed"
         ;;
     disable|enable)
@@ -648,6 +650,248 @@ cmd_log() {
     echo "SELECT authdate AS time, username AS user, reply AS result FROM radpostauth ORDER BY id DESC LIMIT $n;" | dbt
 }
 
+# ======================================================================= hotspot business: plans, vouchers, subscriptions
+parse_duration() { # 30d 12h 90m 45s or plain seconds -> seconds ("0" allowed)
+    [[ $1 =~ ^([0-9]{1,6})([dhms]?)$ ]] || die "Invalid duration '$1' (e.g. 30d, 12h, 90m)"
+    local n=${BASH_REMATCH[1]}
+    case ${BASH_REMATCH[2]} in d) echo $((n*86400)) ;; h) echo $((n*3600)) ;; m) echo $((n*60)) ;; *) echo "$n" ;; esac
+}
+parse_size() { # 10G 500M 1T 0 -> bytes
+    [[ ${1^^} =~ ^([0-9]{1,6})([KMGT]?)B?$ ]] || die "Invalid size '$1' (e.g. 500M, 10G)"
+    local n=${BASH_REMATCH[1]}
+    case ${BASH_REMATCH[2]} in K) echo $((n<<10)) ;; M) echo $((n<<20)) ;; G) echo $((n<<30)) ;; T) echo $((n<<40)) ;; *) echo "$n" ;; esac
+}
+valid_money() { [[ $1 =~ ^[0-9]{1,8}(\.[0-9]{1,2})?$ ]] || die "Invalid price '$1'"; }
+plan_exists() { [ -n "$(echo "SELECT 1 FROM ml_plan WHERE name=$(q "$1")" | db)" ]; }
+
+cmd_plan() {
+    local sub=${1:-list}; shift || true
+    case $sub in
+    add|set)
+        local p=${1:-}; [ -n "$p" ] || die "usage: radius-admin plan add NAME [--price N] [--validity 30d] [--quota 10G] [--period total|monthly|daily] [--daily-time 2h] [--rate 5M/5M] [--devices 1] [--description TEXT]"
+        shift; valid_name "$p" plan
+        local cols="" group_args=()
+        while [ $# -gt 0 ]; do
+            local v=${2:-}
+            [ $# -ge 2 ] || die "Missing value for $1"
+            case $1 in
+                --price) valid_money "$v"; cols+=",price=$v" ;;
+                --validity) cols+=",validity_seconds=$( [ "$v" = - ] && echo 0 || parse_duration "$v")" ;;
+                --quota) cols+=",quota_bytes=$( [ "$v" = - ] && echo 0 || parse_size "$v")" ;;
+                --period) [[ $v =~ ^(total|monthly|daily)$ ]] || die "--period total|monthly|daily"; cols+=",quota_period='$v'" ;;
+                --daily-time) cols+=",daily_seconds=$( [ "$v" = - ] && echo 0 || parse_duration "$v")" ;;
+                --description) [[ ${#v} -le 128 && $v =~ ^[[:print:]]*$ ]] || die "Description: max 128 printable characters"
+                               cols+=",description=$(q "$v")"; group_args+=(--description "$v") ;;
+                --rate) group_args+=(--rate "$v") ;;
+                --devices) group_args+=(--max-sessions "$v") ;;
+                --policy) group_args+=(--policy "$v") ;;
+                *) die "Unknown option $1" ;;
+            esac
+            shift 2
+        done
+        echo "INSERT INTO ml_plan (name) VALUES ($(q "$p")) ON DUPLICATE KEY UPDATE name=name;
+              ${cols:+UPDATE ml_plan SET ${cols#,} WHERE name=$(q "$p");}" | db
+        cmd_group add "$p" "${group_args[@]}" >/dev/null   # the plan's RADIUS group (speed, devices, policy)
+        ok "Plan '$p' saved"
+        cmd_plan show "$p"
+        ;;
+    show)
+        local p=${1:-}; valid_name "$p" plan
+        plan_exists "$p" || die "No such plan '$p'"
+        echo "SELECT name AS plan, price, IF(validity_seconds=0,'-',CONCAT(ROUND(validity_seconds/86400,2),' days')) AS validity,
+                     IF(quota_bytes=0,'unlimited',CONCAT(ROUND(quota_bytes/1073741824,2),' GB / ',quota_period)) AS quota,
+                     IF(daily_seconds=0,'-',CONCAT(ROUND(daily_seconds/3600,2),' h/day')) AS daily_time,
+                     COALESCE((SELECT value FROM radgroupreply WHERE groupname=name AND attribute='Mikrotik-Rate-Limit' LIMIT 1),'-') AS speed,
+                     COALESCE((SELECT value FROM radgroupcheck WHERE groupname=name AND attribute='Simultaneous-Use' LIMIT 1),'-') AS devices
+              FROM ml_plan WHERE name=$(q "$p");" | dbt
+        ;;
+    list|ls)
+        echo "SELECT p.name AS plan, p.price,
+                     IF(p.validity_seconds=0,'-',CONCAT(ROUND(p.validity_seconds/86400,2),'d')) AS validity,
+                     IF(p.quota_bytes=0,'unlimited',CONCAT(ROUND(p.quota_bytes/1073741824,2),'G/',p.quota_period)) AS quota,
+                     IF(p.daily_seconds=0,'-',CONCAT(ROUND(p.daily_seconds/3600,2),'h')) AS per_day,
+                     COALESCE((SELECT value FROM radgroupreply WHERE groupname=p.name AND attribute='Mikrotik-Rate-Limit' LIMIT 1),'-') AS speed,
+                     (SELECT COUNT(*) FROM ml_account a WHERE a.plan=p.name) AS accounts,
+                     (SELECT COUNT(*) FROM ml_account a WHERE a.plan=p.name AND a.first_login IS NOT NULL AND (a.expires_at IS NULL OR a.expires_at > NOW())) AS active
+              FROM ml_plan p ORDER BY p.price, p.name;" | dbt
+        ;;
+    del|delete|rm)
+        local p=${1:-} force=${2:-}; valid_name "$p" plan
+        local n; n=$(echo "SELECT COUNT(*) FROM ml_account WHERE plan=$(q "$p")" | db)
+        [ "$n" = 0 ] || [ "$force" = --force ] || die "$n account(s) use plan '$p' (add --force to delete anyway; they keep working without limits)"
+        echo "DELETE FROM ml_plan WHERE name=$(q "$p"); UPDATE ml_account SET plan=NULL WHERE plan=$(q "$p");" | db
+        cmd_group del "$p" >/dev/null
+        ok "Plan '$p' deleted"
+        ;;
+    *) die "Unknown: plan $sub (add|show|list|del)" ;;
+    esac
+}
+
+voucher_code() { # voucher_code LENGTH [digits]
+    local alphabet='ABCDEFGHJKMNPQRSTUVWXYZ23456789' n=$1 out="" b
+    [ "${2:-}" = digits ] && alphabet='0123456789'
+    while [ ${#out} -lt "$n" ]; do
+        for b in $(od -An -N32 -tu1 /dev/urandom); do   # rejection sampling: no modulo bias
+            (( b < 256 - 256 % ${#alphabet} )) && out+=${alphabet:$(( b % ${#alphabet} )):1}
+            [ ${#out} -ge "$n" ] && break
+        done
+    done
+    printf '%s' "$out"
+}
+
+cmd_voucher() {
+    local sub=${1:-list}; shift || true
+    case $sub in
+    create|add)
+        local p=${1:-} count=${2:-}; [ -n "$p" ] && [ -n "$count" ] || die "usage: radius-admin voucher create PLAN COUNT [--prefix P] [--pin] [--note TEXT] [--by NAME]"
+        shift 2; valid_name "$p" plan; valid_int "$count" count; (( count >= 1 && count <= 1000 )) || die "COUNT: 1–1000"
+        plan_exists "$p" || die "No such plan '$p' (radius-admin plan add $p ...)"
+        local prefix="" pin=0 note="" by="cli"
+        while [ $# -gt 0 ]; do
+            case $1 in
+                --prefix) prefix=${2:-}; [[ $prefix =~ ^[A-Za-z0-9]{0,6}$ ]] || die "--prefix: up to 6 letters/digits"; shift 2 ;;
+                --pin) pin=1; shift ;;
+                --note) note=${2:-}; [[ ${#note} -le 128 && $note =~ ^[[:print:]]*$ ]] || die "--note: max 128 printable characters"; shift 2 ;;
+                --by) by=${2:-}; valid_name "$by" name; shift 2 ;;
+                *) die "Unknown option $1" ;;
+            esac
+        done
+        local batch; batch=$(echo "INSERT INTO ml_voucher_batch (plan, count, price, note, created_by)
+                                   SELECT name, $count, price, $(q "$note"), $(q "$by") FROM ml_plan WHERE name=$(q "$p");
+                                   SELECT LAST_INSERT_ID();" | db)
+        local sql="" codes=() i=0 user pass
+        declare -A seen=()
+        while [ $i -lt "$count" ]; do
+            user="$prefix$(voucher_code 6)"
+            [ -z "${seen[$user]:-}" ] || continue
+            [ -z "$(echo "SELECT 1 FROM radcheck WHERE username=$(q "$user") LIMIT 1" | db)" ] || continue
+            seen[$user]=1
+            if [ "$pin" = 1 ]; then pass=$user; else pass=$(voucher_code 6 digits); fi
+            sql+="($(q "$user"),'Cleartext-Password',':=',$(q "$pass")),"
+            codes+=("$user $pass")
+            i=$((i+1))
+        done
+        local ug="" ac=""
+        for c in "${codes[@]}"; do
+            ug+="($(q "${c%% *}"),$(q "$p"),1),"
+            ac+="($(q "${c%% *}"),$(q "$p"),$batch),"
+        done
+        echo "START TRANSACTION;
+              INSERT INTO radcheck (username,attribute,op,value) VALUES ${sql%,};
+              INSERT INTO radusergroup (username,groupname,priority) VALUES ${ug%,};
+              INSERT INTO ml_account (username,plan,voucher_batch) VALUES ${ac%,};
+              COMMIT;" | db
+        ok "Batch #$batch: $count voucher(s) for plan '$p'"
+        printf '%s\n' "${codes[@]}" | awk 'BEGIN{print "   username  password"} {printf "   %-9s %s\n", $1, $2}'
+        echo "   Print cards: dashboard → Vouchers → batch #$batch   (or: radius-admin voucher csv $batch)"
+        ;;
+    list|ls)
+        echo "SELECT b.id AS batch, b.plan, b.price, b.count,
+                     SUM(a.first_login IS NULL) AS unused,
+                     SUM(a.first_login IS NOT NULL AND (a.expires_at IS NULL OR a.expires_at > NOW())) AS active,
+                     COALESCE(SUM(a.expires_at <= NOW()),0) AS expired,
+                     ROUND(SUM(a.first_login IS NOT NULL) * b.price, 2) AS sold,
+                     b.created_at, b.note
+              FROM ml_voucher_batch b LEFT JOIN ml_account a ON a.voucher_batch=b.id
+              GROUP BY b.id ORDER BY b.id DESC LIMIT 100;" | dbt
+        ;;
+    show|csv)
+        local b=${1:-}; valid_int "$b" batch
+        local sep=$([ "$sub" = csv ] && echo "," || echo "")
+        local query="SELECT a.username, (SELECT value FROM radcheck c WHERE c.username=a.username AND c.attribute='Cleartext-Password' LIMIT 1) AS password,
+                     CASE WHEN a.first_login IS NULL THEN 'unused' WHEN a.expires_at <= NOW() THEN 'expired' ELSE 'active' END AS status,
+                     a.first_login, a.expires_at
+              FROM ml_account a WHERE a.voucher_batch=$b ORDER BY a.username;"
+        if [ "$sub" = csv ]; then echo "username,password,status,first_login,expires_at"; echo "$query" | db | tr '\t' "$sep" | sed 's/NULL//g'
+        else echo "$query" | dbt; fi
+        ;;
+    del|delete|rm)
+        local b=${1:-}; valid_int "$b" batch
+        local users; users=$(echo "SELECT username FROM ml_account WHERE voucher_batch=$b AND first_login IS NULL" | db)
+        local n=0 u list=""
+        for u in $users; do list+="$(q "$u"),"; n=$((n+1)); done
+        [ "$n" -gt 0 ] && echo "START TRANSACTION;
+              DELETE FROM radcheck WHERE username IN (${list%,}); DELETE FROM radusergroup WHERE username IN (${list%,});
+              DELETE FROM radreply WHERE username IN (${list%,}); DELETE FROM ml_account WHERE username IN (${list%,});
+              COMMIT;" | db
+        [ "$(echo "SELECT COUNT(*) FROM ml_account WHERE voucher_batch=$b" | db)" = 0 ] && echo "DELETE FROM ml_voucher_batch WHERE id=$b;" | db
+        ok "Deleted $n unused voucher(s) of batch #$b (used vouchers are kept)"
+        ;;
+    *) die "Unknown: voucher $sub (create|list|show|csv|del)" ;;
+    esac
+}
+
+cmd_subscription() { # user plan|renew|expiry|quota|status NAME ...
+    local sub=$1 u=${2:-}; shift 2 || true
+    valid_name "$u" username; user_exists "$u" || die "No such user '$u'"
+    case $sub in
+    plan)
+        local p=${1:-} free=${2:-}; [ -n "$p" ] || die "usage: radius-admin user plan NAME PLAN|- [--free]"
+        if [ "$p" = - ]; then
+            echo "DELETE FROM ml_account WHERE username=$(q "$u");" | db
+            ok "User '$u' has no plan any more (no expiry/quota)"; return
+        fi
+        valid_name "$p" plan; plan_exists "$p" || die "No such plan '$p'"
+        echo "START TRANSACTION;
+              INSERT INTO ml_account (username, plan) VALUES ($(q "$u"), $(q "$p"))
+                ON DUPLICATE KEY UPDATE plan=VALUES(plan), first_login=NULL, expires_at=NULL, quota_since=NULL, quota_bytes=NULL, voucher_batch=NULL;
+              DELETE FROM radusergroup WHERE username=$(q "$u");
+              INSERT INTO radusergroup (username,groupname,priority) VALUES ($(q "$u"),$(q "$p"),1);
+              $([ "$free" = --free ] || echo "INSERT INTO ml_sale (username, plan, amount, kind) SELECT $(q "$u"), name, price, 'new' FROM ml_plan WHERE name=$(q "$p");")
+              COMMIT;" | db
+        ok "User '$u' → plan '$p' (validity starts at the next login)"
+        kick_user "$u" quiet
+        ;;
+    renew)
+        local free=${1:-}
+        local p; p=$(echo "SELECT plan FROM ml_account WHERE username=$(q "$u")" | db)
+        [ -n "$p" ] && [ "$p" != NULL ] || die "User '$u' has no plan (radius-admin user plan $u PLAN)"
+        echo "START TRANSACTION;
+              UPDATE ml_account a JOIN ml_plan p ON p.name=a.plan
+                 SET a.first_login=COALESCE(a.first_login, NOW()),
+                     a.expires_at=IF(p.validity_seconds>0, GREATEST(COALESCE(a.expires_at, NOW()), NOW()) + INTERVAL p.validity_seconds SECOND, a.expires_at),
+                     a.quota_since=NOW()
+               WHERE a.username=$(q "$u");
+              $([ "$free" = --free ] || echo "INSERT INTO ml_sale (username, plan, amount, kind) SELECT $(q "$u"), name, price, 'renew' FROM ml_plan WHERE name=$(q "$p");")
+              COMMIT;" | db
+        ok "User '$u' renewed (plan '$p'); data counter reset"
+        cmd_subscription status "$u"
+        ;;
+    expiry)
+        local d=${1:-}; [ -n "$d" ] || die "usage: radius-admin user expiry NAME 'YYYY-MM-DD [HH:MM]'|-"
+        if [ "$d" = - ]; then v=NULL; else
+            [[ $d =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}( [0-9]{2}:[0-9]{2}(:[0-9]{2})?)?$ ]] || die "Date format: YYYY-MM-DD or 'YYYY-MM-DD HH:MM'"
+            v=$(q "$d")
+        fi
+        echo "INSERT INTO ml_account (username, expires_at, first_login) VALUES ($(q "$u"), $v, NOW())
+                ON DUPLICATE KEY UPDATE expires_at=$v, first_login=COALESCE(first_login, NOW());" | db
+        ok "Expiry of '$u' set to $([ "$d" = - ] && echo none || echo "$d")"
+        ;;
+    quota)
+        local sz=${1:-}; [ -n "$sz" ] || die "usage: radius-admin user quota NAME SIZE|-   (e.g. 20G; - = plan default)"
+        local v; if [ "$sz" = - ]; then v=NULL; else v=$(parse_size "$sz"); fi
+        echo "INSERT INTO ml_account (username, quota_bytes) VALUES ($(q "$u"), $v) ON DUPLICATE KEY UPDATE quota_bytes=$v;" | db
+        ok "Data quota of '$u' set to $([ "$sz" = - ] && echo "plan default" || echo "$sz")"
+        ;;
+    status)
+        echo "SELECT a.username AS user, COALESCE(a.plan,'-') AS plan,
+                     CASE WHEN a.first_login IS NULL THEN 'not used yet' WHEN a.expires_at <= NOW() THEN 'EXPIRED' ELSE 'active' END AS state,
+                     COALESCE(a.expires_at,'-') AS expires,
+                     IF(COALESCE(a.quota_bytes,p.quota_bytes,0)=0,'unlimited',CONCAT(ROUND(COALESCE(a.quota_bytes,p.quota_bytes)/1073741824,2),' GB')) AS quota,
+                     ml_check(a.username) AS radius_check
+              FROM ml_account a LEFT JOIN ml_plan p ON p.name=a.plan WHERE a.username=$(q "$u");" | dbt
+        ;;
+    esac
+}
+
+cmd_sales() {
+    local days=${1:-30}; valid_int "$days" days
+    echo "SELECT DATE(at) AS day, COUNT(*) AS sales, SUM(kind='voucher') AS vouchers, SUM(kind='renew') AS renewals,
+                 SUM(kind='new') AS new_plans, SUM(amount) AS amount
+          FROM ml_sale WHERE at >= CURDATE() - INTERVAL $days DAY GROUP BY DATE(at) ORDER BY day DESC;" | dbt
+    echo "Total: $(echo "SELECT COALESCE(SUM(amount),0) FROM ml_sale WHERE at >= CURDATE() - INTERVAL $days DAY" | db) (last $days days)"
+}
+
 cmd_usage() {
     local u=${1:-}; valid_name "$u" username
     echo "SELECT DATE(acctstarttime) AS day, COUNT(*) AS sessions,
@@ -703,6 +947,18 @@ Users
   user disable|enable NAME                         block / unblock
   user del NAME                                    delete
   user list | user show NAME
+
+Hotspot business (plans, vouchers, expiry, data quota, daily time)
+  plan add NAME --price 500 --validity 30d --quota 10G --period monthly --rate 5M/5M --devices 1 [--daily-time 2h]
+  plan list | plan show NAME | plan del NAME [--force]
+  voucher create PLAN COUNT [--prefix WF] [--pin] [--note TEXT]    printable cards in the dashboard
+  voucher list | voucher show BATCH | voucher csv BATCH | voucher del BATCH   (del removes unused only)
+  user plan NAME PLAN|- [--free]       put a user on a plan (sale booked unless --free)
+  user renew NAME [--free]             extend by the plan validity, reset the data counter
+  user expiry NAME 'YYYY-MM-DD HH:MM'|-   fixed expiry date
+  user quota NAME 20G|-                per-user data quota
+  user status NAME                     plan, expiry, quota and what RADIUS will answer
+  sales [DAYS]                         money in per day
 
 Groups (speed limit, VLAN, timeouts, devices per user)
   group add NAME [--rate 10M/10M] [--vlan 20] [--session-timeout 86400]
@@ -768,6 +1024,9 @@ case ${1:-help} in
     dnslog)  shift; cmd_dnslog "$@" ;;
     traffic) shift; cmd_traffic "$@" ;;
     web)     shift; cmd_web "$@" ;;
+    plan)    shift; cmd_plan "$@" ;;
+    voucher) shift; cmd_voucher "$@" ;;
+    sales)   shift; cmd_sales "$@" ;;
     syslog-sync) syslog_sync ;;
     online)  cmd_online ;;
     log)     shift; cmd_log "$@" ;;

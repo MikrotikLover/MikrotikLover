@@ -92,6 +92,8 @@ EOF
 # Official FreeRADIUS schema (CREATE TABLE IF NOT EXISTS → safe to re-run)
 mysql "$DB_NAME" < "$RADDB/mods-config/sql/main/mysql/schema.sql"
 mysql "$DB_NAME" < "$SCRIPT_DIR/templates/schema-extra.sql"
+mysql "$DB_NAME" < "$SCRIPT_DIR/templates/functions.sql"
+mysql -e "GRANT EXECUTE ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost'"
 
 # ---------------------------------------------------------------- certificates
 make_ca() {
@@ -161,6 +163,8 @@ sed -i '/^session {/,/^}/ s/^#[[:space:]]*sql$/\tsql/' "$RADDB/sites-available/d
 # MAC authentication: normalise MAC user names before the SQL lookup and in accounting.
 install -m 644 "$SCRIPT_DIR/templates/policy" "$RADDB/policy.d/mikrotiklover"
 sed -i -e '/^authorize {/,/^}/ s/^\tpreprocess$/\tpreprocess\n\tmikrotiklover_mac_normalize/' \
+       -e '/^authorize {/,/^}/ s/^\t-sql$/\t-sql\n\tmikrotiklover_limits/' \
+       -e '/^post-auth {/,/^}/ s/^\t-sql$/\tmikrotiklover_activate\n\t-sql/' \
        -e '/^preacct {/,/^}/ s/^\tpreprocess$/\tpreprocess\n\tmikrotiklover_mac_normalize/' \
        "$RADDB/sites-available/default"
 
@@ -259,8 +263,11 @@ ALTER USER 'radius_web'@'localhost' IDENTIFIED BY '$WEB_DB_PASS';
 GRANT SELECT ON \`$DB_NAME\`.* TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.web_admin TO 'radius_web'@'localhost';
 GRANT INSERT ON \`$DB_NAME\`.web_audit TO 'radius_web'@'localhost';
+GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_setting TO 'radius_web'@'localhost';
+GRANT EXECUTE ON \`$DB_NAME\`.* TO 'radius_web'@'localhost';
 FLUSH PRIVILEGES;
 EOF
+    mysql "$DB_NAME" -e "INSERT INTO ml_setting (k, v) VALUES ('radius_domain', '$RADIUS_DOMAIN') ON DUPLICATE KEY UPDATE v=VALUES(v)"
     umask 027
     cat > "$WEB_DIR/web.conf" <<EOF
 # MikrotikLover web dashboard (written by install.sh)
@@ -283,6 +290,8 @@ EOF
     install -d -m 755 /usr/local/lib/mikrotiklover/web/static /usr/local/lib/mikrotiklover/policies
     install -m 644 "$SCRIPT_DIR/web/app.py" /usr/local/lib/mikrotiklover/web/app.py
     install -m 644 "$SCRIPT_DIR"/web/static/* /usr/local/lib/mikrotiklover/web/static/
+    install -m 644 "$CERT_DIR/ca.der" /usr/local/lib/mikrotiklover/web/static/ca.der    # public CA for the connect guide
+    install -m 644 "$CERT_DIR/ca.pem" /usr/local/lib/mikrotiklover/web/static/ca.pem
     rm -f /usr/local/lib/mikrotiklover/policies/*.txt
     install -m 644 "$SCRIPT_DIR"/webfilter/policies/*.txt /usr/local/lib/mikrotiklover/policies/
 
@@ -309,6 +318,14 @@ EOF
             for a in $WEB_ALLOW; do echo "    allow $a;"; done
             echo "    deny all;"
         fi
+        echo "    # public: the users' connect guide (names, CA certificate) — no login, any network"
+        echo "    location ~ ^/(connect|api/public/|static/) {"
+        echo "        allow all;"
+        echo "        proxy_pass http://127.0.0.1:8099;"
+        echo '        proxy_set_header Host $host;'
+        echo '        proxy_set_header X-Forwarded-For $remote_addr;'
+        echo "        proxy_set_header X-Forwarded-Proto https;"
+        echo "    }"
         echo "    location / {"
         echo "        proxy_pass http://127.0.0.1:8099;"
         echo '        proxy_set_header Host $host;'
