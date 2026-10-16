@@ -189,9 +189,21 @@ grep -q "$LOCAL_SECRET" "$RADDB/clients.conf" || warn "Could not set the localho
 
 # ---------------------------------------------------------------- admin tool
 install -m 750 "$SCRIPT_DIR/radius-admin" /usr/local/sbin/radius-admin
+# Enforcer: cut expired / slow FUP sessions (PPPoE has no Total-Limit) every 5 minutes
+cat > /etc/cron.d/mikrotiklover <<'EOF'
+# MikrotikLover RADIUS (install.sh)
+*/5 * * * * root /usr/local/sbin/radius-admin enforce >/dev/null 2>&1
+17 4 * * 1 root /usr/local/sbin/radius-admin cdn update >/dev/null 2>&1
+EOF
+chmod 644 /etc/cron.d/mikrotiklover
+command -v cron >/dev/null || apt-get install -y -qq cron >/dev/null 2>&1 || warn "cron missing: run 'radius-admin enforce' every 5 minutes yourself"
 install -d -m 755 /usr/local/lib/mikrotiklover
 install -m 644 "$SCRIPT_DIR/tools/mlreport.py" /usr/local/lib/mikrotiklover/mlreport.py
 install -m 644 "$SCRIPT_DIR/tools/flowcollector.py" /usr/local/lib/mikrotiklover/flowcollector.py
+install -m 644 "$SCRIPT_DIR/tools/cdnmap.py" "$SCRIPT_DIR/tools/cdn-apps.json" /usr/local/lib/mikrotiklover/
+install -d -m 755 /var/lib/mikrotiklover
+[ -s /var/lib/mikrotiklover/asn.json ] || python3 -I /usr/local/lib/mikrotiklover/cdnmap.py update >/dev/null 2>&1 \
+    || warn "Could not download the CDN detective IP lists (no internet?) — run later: radius-admin cdn update"
 rm -f /usr/local/lib/mikrotiklover/wf-report.py
 
 # ---------------------------------------------------------------- router logs (blocked-site report)

@@ -40,6 +40,7 @@ const ICONS = {
   voucher: "M3 7h18v4a2 2 0 0 0 0 4v4H3v-4a2 2 0 0 0 0-4zM14 7v12",
   money: "M3 6h18v12H3zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6M6 9v.01M18 15v.01",
   print: "M6 9V3h12v6M6 18H4v-7h16v7h-2M7 14h10v7H7z",
+  search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14m10 3-5.2-5.2",
   plus: "M12 5v14M5 12h14",
   refresh: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7",
 };
@@ -198,7 +199,7 @@ const NAV = [
   ["dashboard", "Dashboard", "home"], ["users", "Users", "users"], ["groups", "Groups & policies", "groups"],
   ["macs", "MAC devices", "mac"], ["routers", "Routers", "router"], "-",
   ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], "-",
-  ["online", "Online now", "online"], ["live", "Live log", "live"], ["reports", "Reports", "reports"],
+  ["online", "Online now", "online"], ["live", "Live log", "live"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
   ["data", "Data usage", "data"], "-", ["settings", "Settings", "settings"],
 ];
 
@@ -347,6 +348,12 @@ async function userDetail(name) {
     h("label", { class: "field" }, "Own web-filter policy", h("span", { class: "help" }, "Overrides the group's policy. Hotspot users; the user is disconnected so it applies at the next login."),
       h("div", { class: "toolbar" }, policySel,
         h("button", { onclick: () => act(api("POST", `/api/users/${enc}/policy`, { policy: policySel.value })).then(route) }, "Save"))),
+    (() => {
+      const cur = d.reply.find((r) => r.attribute === "Framed-IP-Address")?.value || "";
+      const ipIn = h("input", { value: cur, placeholder: "e.g. 10.20.0.50", size: 14 });
+      return h("label", { class: "field" }, "Static IP (PPPoE)", h("span", { class: "help" }, "Empty = an address from the pool."),
+        h("div", { class: "toolbar" }, ipIn, h("button", { onclick: () => act(api("POST", `/api/users/${enc}/ip`, { ip: ipIn.value.trim() })).then(route) }, "Save")));
+    })(),
     h("div", { class: "toolbar" },
       h("button", { onclick: () => {
         const f = h("form", { class: "form" }, h("label", { class: "field" }, "New password", h("input", { name: "password", autocomplete: "off", placeholder: "empty = generate" })),
@@ -400,6 +407,7 @@ function groupForm(g, policies) {
     h("label", { class: "field" }, "Session timeout (s)", h("input", { name: "session_timeout", type: "number", min: 0, value: g?.session_timeout || "" })),
     h("label", { class: "field" }, "Idle timeout (s)", h("input", { name: "idle_timeout", type: "number", min: 0, value: g?.idle_timeout || "" })),
     h("label", { class: "field" }, "Devices per user", h("input", { name: "max_sessions", type: "number", min: 0, value: g?.max_sessions || "" })),
+    h("label", { class: "field" }, "IP pool (PPPoE)", h("span", { class: "help" }, "MikroTik /ip pool name"), h("input", { name: "pool", value: g?.pool || "", placeholder: "pppoe-pool" })),
     h("label", { class: "field" }, "Web-filter policy", h("span", { class: "help" }, "Applies to hotspot logins"),
       h("select", { name: "policy" }, opt("", "— none —", g?.policy || ""), policies.map((p) => opt(p.name, `${p.name} — ${p.description}`, g?.policy || "")))));
 }
@@ -480,7 +488,7 @@ ROUTES.routers = async () => {
       const r = await act(api("POST", "/api/nas", formValues(form)));
       if (!r) return false;
       showSecret("Router added", "Run this on the MikroTik (Terminal):",
-        `/radius add address=<this-server-ip> secret=${r.secret} service=wireless,hotspot,login timeout=3s\n/radius incoming set accept=yes`,
+        `/radius add address=<this-server-ip> secret=${r.secret} service=wireless,hotspot,ppp,login timeout=3s\n/radius incoming set accept=yes`,
         "FreeRADIUS was restarted to load the new router.");
       route();
     } }]);
@@ -613,7 +621,9 @@ ROUTES.data = async (by = "site") => {
           : card(null, null, hbars(rows.slice(0, 12).map((r) => ({ ...r, k: String(r.k) })), "k")),
         h("div", { class: "grid" }, tile("Total", bytes(total)), tile("Download", bytes(rows.reduce((a, r) => a + Number(r.down), 0))), tile("Upload", bytes(rows.reduce((a, r) => a + Number(r.up), 0))))),
       h("div", { class: "card" }, table([
-        { label, render: (r) => by === "user" && r.k !== "(no login)" ? h("a", { href: `#/users/${encodeURIComponent(r.k)}` }, r.k) : String(r.k).slice(0, by === "day" ? 10 : 80) },
+        { label, render: (r) => by === "user" && r.k !== "(no login)" ? h("a", { href: `#/users/${encodeURIComponent(r.k)}` }, r.k)
+            : by === "site" && /^\d+\.\d+\.\d+\.\d+$/.test(r.k) ? h("a", { href: `#/cdn/${r.k}`, title: "Who is this? (CDN detective)" }, r.k, " 🔍")
+            : String(r.k).slice(0, by === "day" ? 10 : 80) },
         { label: "Download", num: true, render: (r) => bytes(r.down) }, { label: "Upload", num: true, render: (r) => bytes(r.up) },
         { label: "Total", num: true, render: (r) => bytes(Number(r.down) + Number(r.up)) },
         by === "site" || by === "day" ? { label: "Devices", key: "devices", num: true } : { label: "Sites", key: "sites", num: true },
@@ -743,6 +753,8 @@ ROUTES.plans = async () => {
       h("label", { class: "field" }, "Validity", h("span", { class: "help" }, "Counts from the first login: 1d, 7d, 30d, 12h — empty = never expires"), h("input", { name: "validity", value: toDur(p?.validity_seconds), placeholder: "30d" })),
       h("label", { class: "field" }, "Data quota", h("span", { class: "help" }, "500M, 1G, 10G — empty = unlimited"), h("input", { name: "quota", value: toSize(p?.quota_bytes), placeholder: "10G" })),
       h("label", { class: "field" }, "Quota resets", h("select", { name: "period" }, ["total", "monthly", "daily"].map((x) => h("option", { value: x, selected: (p?.quota_period || "total") === x }, { total: "never (whole package)", monthly: "every month", daily: "every day" }[x])))),
+      h("label", { class: "field" }, "Speed after quota (FUP)", h("span", { class: "help" }, "e.g. 1M/1M — empty = cut off when the quota is used"), h("input", { name: "fup", value: p?.fup_rate || "", placeholder: "1M/1M" })),
+      h("label", { class: "field" }, "IP pool (PPPoE)", h("span", { class: "help" }, "Optional MikroTik pool name"), h("input", { name: "pool", value: p?.pool || "", placeholder: "pppoe-pool" })),
       h("label", { class: "field" }, "Online time per day", h("span", { class: "help" }, "e.g. 2h — empty = unlimited"), h("input", { name: "daily_time", value: toDur(p?.daily_seconds), placeholder: "2h" })),
       h("label", { class: "field" }, "Speed", h("span", { class: "help" }, "MikroTik rx/tx, e.g. 5M/5M"), h("input", { name: "rate", value: p?.rate || "", placeholder: "5M/5M" })),
       h("label", { class: "field" }, "Devices at once", h("input", { name: "devices", type: "number", min: 1, value: p?.devices || "1" })),
@@ -760,7 +772,7 @@ ROUTES.plans = async () => {
       { label: "Plan", render: (p) => h("span", {}, h("b", {}, p.name), p.description ? h("div", { class: "muted" }, p.description) : null) },
       { label: "Price", num: true, render: (p) => money(p.price, currency) },
       { label: "Validity", render: (p) => dur(p.validity_seconds) },
-      { label: "Data", render: (p) => Number(p.quota_bytes) ? `${bytes(p.quota_bytes)} / ${p.quota_period}` : "Unlimited" },
+      { label: "Data", render: (p) => Number(p.quota_bytes) ? h("span", {}, `${bytes(p.quota_bytes)} / ${p.quota_period}`, h("div", { class: "muted" }, p.fup_rate ? `then ${p.fup_rate}` : "then cut off")) : "Unlimited" },
       { label: "Per day", render: (p) => dur(p.daily_seconds) },
       { label: "Speed", render: (p) => p.rate || "—" }, { label: "Devices", render: (p) => p.devices || "—" },
       { label: "Active / total", num: true, render: (p) => `${p.active} / ${p.accounts}` },
@@ -887,3 +899,53 @@ async function userSites(holder, days) {
     hbars(u.sites.map((x) => ({ ...x })), "site"),
     table([{ label: "Site", key: "site" }, { label: "Download", num: true, render: (x) => bytes(x.down) }, { label: "Upload", num: true, render: (x) => bytes(x.up) }], u.sites)))));
 }
+
+// ------------------------------------------------------------------ CDN detective
+ROUTES.cdn = async (initial) => {
+  const input = h("input", { type: "search", placeholder: "scontent.xx.fbcdn.net  or  157.240.1.35", size: 40, value: initial || "" });
+  const out = h("div", { class: "stack" });
+  const conf = { high: "ok", medium: "info", low: "warn", none: "" };
+  const check = async (q) => {
+    q = (q || input.value).trim();
+    if (!q) return;
+    input.value = q;
+    history.replaceState(null, "", `#/cdn/${encodeURIComponent(q)}`);
+    out.replaceChildren(h("div", { class: "empty" }, "Investigating…"));
+    let r;
+    try { r = await api("GET", `/api/cdn?q=${encodeURIComponent(q)}`); }
+    catch (e) { out.replaceChildren(h("div", { class: "note" }, e.message)); return; }
+    const v = r.verdict, ev = r.evidence;
+    out.replaceChildren(
+      h("div", { class: "card" },
+        h("div", { class: "muted" }, r.type === "ip" ? "IP address" : "Hostname", " ", h("code", {}, r.query)),
+        h("div", { class: "tile" }, h("div", { class: "value" }, v.app || "unknown", v.site && v.site !== v.app ? h("span", { class: "muted" }, `  ${v.site}`) : null)),
+        h("div", { class: "toolbar" }, badge(`confidence: ${v.confidence}`, conf[v.confidence]), v.category ? badge(v.category, "info") : null),
+        h("p", {}, v.reason),
+        h("dl", { class: "kv" },
+          r.name_match ? [h("dt", {}, "Name"), h("dd", {}, `${r.name_match.matched} → ${r.name_match.app}${r.name_match.generic ? " (shared CDN)" : ""}`)] : null,
+          r.ip_owner ? [h("dt", {}, "IP owner"), h("dd", {}, `${r.ip_owner.owner} ${r.ip_owner.network || ""}`)] : null,
+          ev.answers.length ? [h("dt", {}, "Resolved to"), h("dd", {}, ev.answers.slice(0, 10).map((ip) => [h("a", { href: `#/cdn/${ip}` }, ip), " "]))] : null,
+          ev.context.length ? [h("dt", {}, "Opened just before"), h("dd", {}, ev.context.map((c) => `${c.site} (${c.count}×)`).join(", "))] : null)),
+      card("DNS evidence", "what devices asked for before getting this answer",
+        table([{ label: "Asked for", key: "name" }, { label: "Site", key: "site" }, { label: "Times", key: "count", num: true },
+          { label: "Last", key: "last" }, { label: "Devices", render: (o) => o.clients.join(", "), wrap: true }], ev.origins,
+          "No DNS evidence in the log (needs the DNS logger; try again after users browse).")));
+  };
+  const unknown = h("div");
+  const loadUnknown = async () => {
+    const { rows } = await api("GET", "/api/cdn/unknown?days=1");
+    unknown.replaceChildren(table([
+      { label: "Destination", render: (r) => h("code", {}, r.site) }, { label: "Kind", render: (r) => badge(r.kind) },
+      { label: "Owner", render: (r) => r.owner || "—" }, { label: "Data", num: true, render: (r) => bytes(Number(r.down) + Number(r.up)) },
+      { label: "Devices", key: "devices", num: true },
+      { label: "", render: (r) => h("button", { class: "small", onclick: () => check(r.site) }, "Investigate") }], rows,
+      "Nothing unknown — all of today's traffic has a site name."));
+  };
+  shell("CDN detective", h("div", { class: "stack" },
+    card(null, null, h("form", { class: "toolbar", onsubmit: (e) => { e.preventDefault(); check(); } }, input, h("button", { class: "primary", type: "submit" }, icon("search"), "Investigate")),
+      h("div", { class: "muted" }, "Which app is behind a CDN name or IP? Uses the name catalog (YouTube, Facebook, TikTok, Netflix…), the DNS logger's CNAME evidence, IP owner lists and what the device opened just before.")),
+    out,
+    card("Heavy traffic without a site name", "today — click Investigate", unknown)));
+  loadUnknown().catch(() => unknown.replaceChildren(h("div", { class: "empty" }, "No traffic data.")));
+  if (initial) await check(initial);
+};

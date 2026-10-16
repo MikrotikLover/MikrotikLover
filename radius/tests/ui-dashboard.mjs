@@ -130,9 +130,11 @@ try {
   await page.fill("dialog[open] input[name=quota]", "1G");
   await page.fill("dialog[open] input[name=rate]", "4M/4M");
   await page.fill("dialog[open] input[name=description]", "1 day, 1 GB, 4 Mbps");
+  await page.fill("dialog[open] input[name=fup]", "1M/1M");
   await dlgButton(page, "Save").click();
   await page.locator("td", { hasText: "ui-day" }).first().waitFor({ timeout: 30000 });
-  ok("plan created");
+  await page.locator("td", { hasText: "then 1M/1M" }).waitFor();
+  ok("plan created (with FUP speed)");
   await shot(page, "17-plans");
   await page.locator("tr", { hasText: "ui-day" }).locator("button", { hasText: "Vouchers" }).click();
   await page.locator("dialog[open] input[name=count]").waitFor();
@@ -171,6 +173,29 @@ try {
   await shot(page, "22-user-top-sites");
   ok("per-user top sites");
 
+  // PPPoE static IP on the user page
+  await go(page, "#/users/ali", "ali");
+  const ipLabel = page.locator("label", { hasText: "Static IP (PPPoE)" });
+  await ipLabel.locator("input").fill("10.20.0.77");
+  console.log("     toast:", (await clickToast(page, ipLabel.locator("button", { hasText: "Save" }))).trim());
+  await page.locator("td", { hasText: "10.20.0.77" }).waitFor();
+  await page.locator("label", { hasText: "Static IP (PPPoE)" }).locator("input").fill("");
+  await clickToast(page, page.locator("label", { hasText: "Static IP (PPPoE)" }).locator("button", { hasText: "Save" }));
+  ok("PPPoE static IP set and cleared");
+
+  // CDN detective
+  await go(page, "#/cdn", "CDN detective");
+  await page.fill("input[type=search]", "rr3---sn-4g5e6nsz.googlevideo.com");
+  await page.click("button:has-text('Investigate')");
+  await page.locator(".tile .value", { hasText: "YouTube" }).waitFor({ timeout: 30000 });
+  ok("detective: googlevideo -> YouTube");
+  await page.fill("input[type=search]", "157.240.1.35");
+  await page.locator("form button:has-text('Investigate')").click();
+  await page.locator(".tile .value", { hasText: "Facebook" }).waitFor({ timeout: 30000 });
+  await page.waitForTimeout(300);
+  await shot(page, "26-cdn-detective");
+  ok("detective: Meta IP -> Facebook (DNS evidence)");
+
   // business settings
   await go(page, "#/settings", "Settings");
   await page.fill("input[name=brand]", "Lover Net WiFi");
@@ -196,6 +221,9 @@ try {
   await shot(gp, "24-connect-hotspot");
   await gp.click("button:has-text('iPhone')");
   await shot(gp, "25-connect-iphone");
+  await gp.click("button:has-text('PPPoE router')");
+  await gp.locator(".step").first().waitFor();
+  await shot(gp, "27-connect-pppoe");
   ok("public connect guide (Android auto-detected, hotspot, iPhone)");
 
   // cleanup business objects

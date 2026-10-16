@@ -84,6 +84,20 @@ const GUIDES = {
         phone("laptop", h("div", { class: "dialog" }, h("b", {}, "Verify Certificate"), S.radius_domain || "radius"), buttons(["Cancel"], ["Continue", true, true]))),
     ],
   },
+  pppoe: {
+    label: "PPPoE router",
+    intro: () => ["Ghar / dukaan ke router (TP-Link, Tenda, D-Link...) mein internet ", h("b", {}, "PPPoE"), " se chalayein. Username aur password aap ko connection ke waqt mila hoga."],
+    steps: () => [
+      step(1, ["Router ko cable se laptop/phone se jorein aur browser mein router ka page kholein (aksar ", h("code", {}, "192.168.0.1"), " ya ", h("code", {}, "192.168.1.1"), ")."], "Router ke neeche sticker par address aur login likha hota hai.",
+        phone("laptop", title("Router login"), row("Address", "192.168.0.1", true), row("Username", "admin"), row("Password", pass), buttons(["Login", true]))),
+      step(2, ["Internet / WAN settings mein Connection type: ", h("b", {}, "PPPoE"), "."], null,
+        phone("laptop", title("WAN / Internet"), row("Connection type", "PPPoE", true), row("Username", ""), row("Password", ""))),
+      step(3, ["Apna ", h("b", {}, "username"), " aur ", h("b", {}, "password"), " likhein, Save / Connect."], "MTU khud na badlein (1480 theek hai).",
+        phone("laptop", title("WAN / Internet"), row("Connection type", "PPPoE"), row("Username", you, true), row("Password", pass, true), buttons(["Save", true, true]))),
+      step(4, "Status mein \"Connected\" aur ek IP aa jaye to internet chal raha hai.", "Package khatam ho to router connect nahi hoga — renew karwa lein.",
+        phone("laptop", okScreen("PPPoE connected"), row("IP address", "10.20.x.x"))),
+    ],
+  },
   hotspot: {
     label: "Hotspot / Voucher",
     intro: () => ["Card (voucher) ya hotspot account wale ", h("b", {}, S.hotspot_ssid), " se judein."],

@@ -105,6 +105,7 @@ sudo radius-admin mac del     AA-BB-CC-DD-EE-FF
 | `webfilter-logging.rsc` | Blocked attempts server par (`radius-admin blocked`) |
 | `dns-logging.rsc` | Visited sites + live log (`radius-admin sites / history / live`) |
 | `traffic-flow.rsc` | Data download/upload per site / IP / user (`radius-admin traffic`) |
+| `pppoe-server.rsc` | PPPoE server (ISP style) with RADIUS, pool, accounting |
 | `allow-only-whatsapp.rsc` | Sirf WhatsApp |
 
 Wi-Fi aur hotspot dono ek router par hain to ek hi entry kafi hai: `/radius add address=... secret=... service=wireless,hotspot`.
@@ -361,6 +362,7 @@ python3 tests/simulate-allowonly.py   # WhatsApp-only rules ka simulation
 python3 tests/simulate-policies.py    # policies: user/group/range, office time, raat
 python3 tests/test-mlreport.py        # sites / history / blocked reports (sample logs)
 python3 tests/test-flowcollector.py   # data usage collector (synthetic IPFIX / NetFlow v9)
+python3 tests/test-cdnmap.py          # CDN detective: names, CNAME evidence, context, IP owners
 URL=https://127.0.0.1:8443 USER=admin PASS=... node tests/ui-dashboard.mjs   # web dashboard (Playwright)
 ```
 
@@ -468,6 +470,58 @@ Dashboard mein user ke page par **Package** card: plan, expiry, data bar (kitna 
 - Naam Settings → Business & branding se aate hain. Link seedha tab par: `/connect#hotspot`, `/connect#iphone`.
 
 WhatsApp par link bhejein, ya Wi-Fi ke paas QR/poster laga dein. Users ka phone server tak pohanch sake (LAN, ya server public ho to internet se).
+
+## 5f. PPPoE users (ISP style)
+
+Ghar/dukaan ke router PPPoE se username/password par chalte hain — wohi RADIUS, wohi plans, wohi dashboard.
+
+**Router:** `mikrotik/pppoe-server.rsc` (pool, PPP profile, PPPoE server on `ether2`, `/ppp aaa use-radius=yes accounting=yes interim-update=5m`, `/radius ... service=ppp`, `/radius incoming accept=yes`). Placeholders badal kar import karein.
+
+**Server:**
+```bash
+sudo radius-admin nas add <router-ip>
+sudo radius-admin plan add home-10m --price 1500 --validity 30d --quota 200G --period monthly \
+     --fup 2M/2M --rate 10M/10M --pool pppoe-pool --devices 1
+sudo radius-admin user add ahmed -p 'Secret#1'
+sudo radius-admin user plan ahmed home-10m
+sudo radius-admin user ip ahmed 10.20.0.50          # static IP (optional; '-' = pool se)
+sudo radius-admin user renew ahmed                   # agla mahina
+```
+- **Login:** PAP, CHAP, MSCHAPv2 — sab chalte hain (password RADIUS mein cleartext ya NT-hash, MSCHAPv2 ke liye dono theek).
+- **Speed:** plan/group ka `--rate` → `Mikrotik-Rate-Limit`. **IP:** user ka static IP (`Framed-IP-Address`) ya plan/group ka pool (`Framed-Pool`; MikroTik par isi naam ka `/ip pool` ho).
+- **Expiry:** login par `Session-Timeout` = baqi waqt; expire hone ke baad login reject.
+- **FUP (Fair Usage):** `--fup 2M/2M` wale plan mein quota khatam hone par internet **band nahi**, speed kam ho jati hai. Bina FUP ke quota khatam = cut off.
+- **Enforcer (cron, har 5 minute — `radius-admin enforce`):** chalte hue sessions bhi check hote hain — package khatam → RADIUS **Disconnect**; quota khatam + FUP → RADIUS **CoA** se speed live kam (har session par ek dafa). PPPoE mein Total-Limit nahi hota, is liye ye zaroori hai. Haath se: `sudo radius-admin enforce -v`.
+- Dashboard: plan form mein "Speed after quota (FUP)" aur "IP pool"; user page par "Static IP (PPPoE)"; group form mein IP pool; Online page par PPPoE sessions IP ke saath.
+- Connect guide mein **"PPPoE router"** tab (TP-Link/Tenda wagera mein WAN = PPPoE, username/password).
+
+## 5g. CDN detective — ye kis app ka CDN hai?
+
+Reports mein aksar ajeeb naam/IP aate hain (`rr3---sn-4g5e6nsz.googlevideo.com`, `scontent.fkhi1-1.fna.fbcdn.net`, `e9876.a.akamaiedge.net`, `23.40.1.2`). Detective batata hai ke asal mein kaunsi app/site hai — aur kyun:
+
+| Sabooth | Misal |
+|---|---|
+| 1. **Naam** — 60+ apps ki list (`tools/cdn-apps.json`) | `googlevideo.com` → YouTube (`sn-` = ISP ke andar Google cache), `fbcdn.net` → Facebook (`fna` = ISP ke andar Meta cache), `cdninstagram.com` → Instagram, `tiktokcdn/ibyteimg/byteoversea` → TikTok, `nflxvideo.net` → Netflix, `igamecj/gcloudsdk` → PUBG ... |
+| 2. **DNS logger ka sabooth** | Device ne `www.daraz.pk` poocha → jawab `…edgekey.net` → `e9876.akamaiedge.net` → `23.40.1.2`. To ye Akamai IP *is device ke liye* **Daraz** hai |
+| 3. **IP ka malik** (ASN lists: Meta, Google, ByteDance, Netflix, Akamai, Cloudflare, Amazon, Microsoft, Apple, Telegram ...) | `157.240.x.x` → Meta, `91.108.x.x` → Telegram, `104.16.x.x` → Cloudflare (shared — app unknown) |
+| 4. **Context** | Bare `d1abcd.cloudfront.net` — device ne 15 second pehle `olx.com.pk` khola tha → shayad OLX (low confidence) |
+
+Har jawab ke saath **confidence** (high / medium / low) aur **wajah**.
+
+```bash
+sudo radius-admin cdn scontent.fkhi1-1.fna.fbcdn.net
+sudo radius-admin cdn 23.40.1.2
+sudo radius-admin cdn unknown          # aaj ka sab se bhari traffic jiska naam nahi mila (sirf IP / shared CDN)
+sudo radius-admin cdn update           # IP owner lists naye (cron har hafte khud karta hai)
+```
+Dashboard → **CDN detective**: naam/IP likhein → app, confidence, wajah, IP owner, DNS sabooth (kis device ne kya poocha); neeche "Heavy traffic without a site name" + Investigate. Data usage mein jo site sirf IP ho us par 🔍 link.
+
+**Reports par asar:** Visited sites, history aur Data usage ab CDN ki jagah **app ke naam** se gintay hain (googlevideo + ytimg → youtube.com; fbcdn → facebook.com ...). Bare shared-CDN naam visits mein shamil nahi hote; un ka data (traffic collector mein) usi site ke khate mein jata hai jo device ne abhi khola tha.
+
+**Apni apps add karein:** `/var/lib/mikrotiklover/cdn-apps.local.json` (same format, pehle check hoti hai):
+```json
+{"apps": [{"app": "My Bank", "site": "mybank.pk", "category": "finance", "domains": ["mybank-cdn.net"]}]}
+```
 
 ## 6. Monitoring aur testing
 

@@ -277,7 +277,7 @@ def groups_map():
 
     def grp(name):
         return groups.setdefault(name, {"name": name, "description": "", "rate": "", "vlan": "", "session_timeout": "",
-                                        "idle_timeout": "", "max_sessions": "", "policy": "", "address_list": "",
+                                        "idle_timeout": "", "max_sessions": "", "policy": "", "address_list": "", "pool": "",
                                         "members": 0})
     for r in q("SELECT groupname, description FROM radgroup_meta"):
         grp(r["groupname"])["description"] = r["description"]
@@ -292,6 +292,8 @@ def groups_map():
             g_["session_timeout"] = v
         elif a == "Idle-Timeout":
             g_["idle_timeout"] = v
+        elif a == "Framed-Pool":
+            g_["pool"] = v
         elif a == "Mikrotik-Address-List":
             g_["address_list"] = v
             g_["policy"] = v[7:] if v.startswith("policy-") else ""
@@ -439,6 +441,9 @@ def user_action(name, action):
         return result(*radius_admin(["user", action, name]))
     if action == "kick":
         return result(*radius_admin(["kick", name]))
+    if action == "ip":
+        ip = field(data, "ip", re.compile(r"^[0-9]{1,3}(\.[0-9]{1,3}){3}$")) or "-"
+        return result(*radius_admin(["user", "ip", name, ip]))
     abort(404)
 
 
@@ -464,6 +469,7 @@ GROUP_FIELDS = {  # json key -> (radius-admin option, validator)
     "idle_timeout": ("--idle-timeout", re.compile(r"^[0-9]{1,9}$")),
     "max_sessions": ("--max-sessions", re.compile(r"^[0-9]{1,4}$")),
     "policy": ("--policy", POLICY_RE),
+    "pool": ("--pool", NAME_RE),
     "description": ("--description", re.compile(r"^[\x20-\x7e]{0,128}$")),
 }
 
@@ -819,7 +825,8 @@ SIZE_RE = re.compile(r"^([0-9]{1,6}[KMGTkmgt]?|-)$")
 @app.get("/api/plans")
 @login_required()
 def plans():
-    rows = q("""SELECT p.name, p.price, p.validity_seconds, p.quota_bytes, p.quota_period, p.daily_seconds, p.description,
+    rows = q("""SELECT p.name, p.price, p.validity_seconds, p.quota_bytes, p.quota_period, p.daily_seconds, p.description, p.fup_rate,
+                  COALESCE((SELECT value FROM radgroupreply WHERE groupname=p.name AND attribute='Framed-Pool' LIMIT 1),'') AS pool,
                   COALESCE((SELECT value FROM radgroupreply WHERE groupname=p.name AND attribute='Mikrotik-Rate-Limit' LIMIT 1),'') AS rate,
                   COALESCE((SELECT value FROM radgroupcheck WHERE groupname=p.name AND attribute='Simultaneous-Use' LIMIT 1),'') AS devices,
                   (SELECT COUNT(*) FROM ml_account a WHERE a.plan=p.name) AS accounts,
@@ -838,6 +845,7 @@ def plan_save():
     spec = {"price": ("--price", re.compile(r"^[0-9]{1,8}(\.[0-9]{1,2})?$")), "validity": ("--validity", DUR_RE),
             "quota": ("--quota", SIZE_RE), "period": ("--period", re.compile(r"^(total|monthly|daily)$")),
             "daily_time": ("--daily-time", DUR_RE), "rate": ("--rate", re.compile(r"^[0-9A-Za-z/ ]{1,64}$|^-$")),
+            "fup": ("--fup", re.compile(r"^[0-9A-Za-z/ ]{1,64}$|^-$")), "pool": ("--pool", re.compile(r"^[A-Za-z0-9._@+-]{1,64}$|^-$")),
             "devices": ("--devices", re.compile(r"^[0-9]{1,4}$|^-$")),
             "description": ("--description", re.compile(r"^[\x20-\x7e]{0,128}$"))}
     for key, (opt, rx) in spec.items():
@@ -986,6 +994,39 @@ def account_info(name):
                   (name, acc["quota_since"]))
         acc["used_bytes"] = int(used["b"])
     return acc
+
+
+# ------------------------------------------------------------------ CDN detective
+@app.get("/api/cdn")
+@login_required()
+def cdn_lookup():
+    import cdnmap
+    try:
+        r = cdnmap.lookup(request.args.get("q", ""))
+    except ValueError as e:
+        abort(400, str(e))
+    return app.response_class(json.dumps(r, default=list), mimetype="application/json")
+
+
+@app.get("/api/cdn/unknown")
+@login_required()
+def cdn_unknown():
+    """Heaviest traffic whose site is still an IP or a shared-CDN name — candidates for the detective."""
+    import cdnmap
+    days = min(max(int(request.args.get("days", 1) or 1), 1), 90)
+    rows = q("""SELECT site, SUM(bytes_down) AS down, SUM(bytes_up) AS up, COUNT(DISTINCT client_ip) AS devices
+                FROM traffic_site WHERE bucket >= NOW() - INTERVAL %s DAY
+                GROUP BY site ORDER BY SUM(bytes_down+bytes_up) DESC LIMIT 400""", (days,))
+    cat = cdnmap.catalog()
+    out = []
+    for r in jsonable(rows):
+        is_ip = bool(re.match(r"^\d+\.\d+\.\d+\.\d+$", r["site"]))
+        e = None if is_ip else cat.name(r["site"])
+        if is_ip or (e and e["generic"]):
+            r["kind"] = "ip" if is_ip else "shared CDN"
+            r["owner"] = (cat.ip_owner(r["site"]) or {}).get("owner", "") if is_ip else e["app"]
+            out.append(r)
+    return jsonify(rows=out[:60])
 
 
 # ------------------------------------------------------------------ system / admins / audit

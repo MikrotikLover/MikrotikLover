@@ -44,13 +44,32 @@ ALIAS = {
 }
 
 
+try:                                    # CDN detective catalog (cdn-apps.json), same directory
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import cdnmap
+except ImportError:                     # pragma: no cover - reports still work with the small alias list
+    cdnmap = None
+
+
 def base_domain(name):
+    """Site name for reports: the app's main site for known CDN/API hosts, else the registrable domain."""
+    if cdnmap:
+        e = cdnmap.catalog().name(name)
+        if e and not e["generic"]:
+            return e["site"]
     parts = name.rstrip(".").lower().split(".")
     if len(parts) >= 3 and len(parts[-1]) == 2 and parts[-2] in SLD:
         d = ".".join(parts[-3:])
     else:
         d = ".".join(parts[-2:])
     return ALIAS.get(d, d)
+
+
+def is_generic_cdn(name):
+    if not cdnmap:
+        return False
+    e = cdnmap.catalog().name(name)
+    return bool(e and e["generic"])
 
 
 class Sessions:
@@ -123,7 +142,7 @@ def dns_events(lines, since):
         t, qtype, name, ip = m.groups()
         name = name.rstrip(".").lower()
         ts = ts_of(t)
-        if ts is None or ts < since or NOISE.search(name):
+        if ts is None or ts < since or NOISE.search(name) or is_generic_cdn(name):
             continue
         key = (ip, name)
         if ts - last.get(key, 0) < 60:

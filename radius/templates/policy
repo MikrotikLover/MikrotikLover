@@ -29,6 +29,22 @@ mikrotiklover_limits {
 		}
 		reject
 	}
+	# quota used up on a plan with a fair-usage speed: stay online, slower
+	if (&control:Tmp-String-1 =~ /^fup:([0-9]+):([0-9A-Za-z\/ ]+)$/) {
+		update control {
+			&Tmp-Integer-1 := "%{1}"
+		}
+		update reply {
+			&Mikrotik-Rate-Limit := "%{2}"
+		}
+		if (&control:Tmp-Integer-1 > 0) {
+			if (!&reply:Session-Timeout || (&reply:Session-Timeout > &control:Tmp-Integer-1)) {
+				update reply {
+					&Session-Timeout := &control:Tmp-Integer-1
+				}
+			}
+		}
+	}
 	if (&control:Tmp-String-1 =~ /^ok:([0-9]+):([0-9]+):([0-9]+):([01])$/) {
 		update control {
 			&Tmp-Integer-1 := "%{1}"
@@ -54,7 +70,7 @@ mikrotiklover_limits {
 
 # First successful login of a plan user (post-auth): book the voucher sale, start validity.
 mikrotiklover_activate {
-	if (&control:Tmp-String-1 && (&control:Tmp-String-1 =~ /^ok:/)) {
+	if (&control:Tmp-String-1 && (&control:Tmp-String-1 =~ /^(ok|fup):/)) {
 		update control {
 			&Tmp-String-2 := "%{sql:INSERT INTO ml_sale (username, plan, amount, kind) SELECT a.username, COALESCE(a.plan,''), b.price, 'voucher' FROM ml_account a JOIN ml_voucher_batch b ON b.id = a.voucher_batch WHERE a.username = '%{User-Name}' AND a.first_login IS NULL}"
 			&Tmp-String-3 := "%{sql:UPDATE ml_account a LEFT JOIN ml_plan p ON p.name = a.plan SET a.first_login = NOW(), a.quota_since = COALESCE(a.quota_since, NOW()), a.expires_at = IF(a.expires_at IS NULL AND p.validity_seconds > 0, NOW() + INTERVAL p.validity_seconds SECOND, a.expires_at) WHERE a.username = '%{User-Name}' AND a.first_login IS NULL}"

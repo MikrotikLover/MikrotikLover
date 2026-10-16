@@ -15,7 +15,7 @@ import ipaddress, json, os, re, socket, struct, sys, time
 from collections import OrderedDict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mlreport import base_domain  # noqa: E402  (same directory)
+from mlreport import base_domain, is_generic_cdn  # noqa: E402  (same directory)
 
 CONF = "/etc/mikrotiklover-radius/radius.conf"
 DNS_LOG = os.environ.get("MLREPORT_LOGDIR", "/var/log/mikrotik") + "/dns.log"
@@ -204,6 +204,7 @@ class DnsNames:
 
     def __init__(self, ttl=7200):
         self.serial, self.by_client, self.by_ip, self.ttl = {}, {}, {}, ttl
+        self.last_site = {}     # client -> (time, name) of the last non-CDN name it asked for
 
     def feed(self, line, now):
         m = EXTRA_RE.search(line)
@@ -211,7 +212,16 @@ class DnsNames:
             return
         serial, client, action, name, answer = m.groups()
         if action.startswith("query"):
-            self.serial[serial] = (client, name.rstrip(".").lower(), now)
+            name = name.rstrip(".").lower()
+            if is_generic_cdn(name):
+                # a bare shared-CDN name (d123.cloudfront.net): count its data for the site the
+                # device opened just before (CDN detective "context"), if that was < 15 s ago
+                prev = self.last_site.get(client)
+                if prev and now - prev[0] <= 15:
+                    name = prev[1]
+            else:
+                self.last_site[client] = (now, name)
+            self.serial[serial] = (client, name, now)
             if len(self.serial) > 50000:
                 for k in list(self.serial)[:10000]:
                     del self.serial[k]

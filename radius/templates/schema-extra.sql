@@ -97,3 +97,13 @@ CREATE TABLE IF NOT EXISTS ml_setting (
   k VARCHAR(64) NOT NULL PRIMARY KEY,
   v VARCHAR(512) NOT NULL DEFAULT ''
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- PPPoE / FUP (added later: safe on existing installs)
+ALTER TABLE ml_plan ADD COLUMN IF NOT EXISTS fup_rate VARCHAR(64) NOT NULL DEFAULT '' AFTER daily_seconds;
+
+-- Sessions already slowed down to the FUP speed by the enforcer (CoA), so it is sent once
+CREATE TABLE IF NOT EXISTS ml_fup (
+  acctuniqueid VARCHAR(32) NOT NULL PRIMARY KEY,
+  username VARCHAR(64) NOT NULL,
+  applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

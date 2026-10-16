@@ -202,7 +202,23 @@ cmd_user() {
         echo "SELECT authdate, reply FROM radpostauth WHERE username=$(q "$u") ORDER BY id DESC LIMIT 5;" | dbt
         ;;
     plan|renew|expiry|quota|status) cmd_subscription "$sub" "$@" ;;
-    *) die "Unknown: user $sub (add|passwd|del|disable|enable|group|policy|plan|renew|expiry|quota|status|list|show)" ;;
+    ip)
+        local u=${1:-} ip=${2:-}; valid_name "$u" username; [ -n "$ip" ] || die "usage: radius-admin user ip NAME IPv4|-   (static IP for PPPoE)"
+        user_exists "$u" || die "No such user '$u'"
+        if [ "$ip" = - ]; then
+            echo "DELETE FROM radreply WHERE username=$(q "$u") AND attribute='Framed-IP-Address';" | db
+            ok "User '$u' gets an IP from the pool again"
+        else
+            valid_ip "$ip"; [[ $ip != */* ]] || die "A single IPv4 address, not a subnet"
+            local other; other=$(echo "SELECT username FROM radreply WHERE attribute='Framed-IP-Address' AND value=$(q "$ip") AND username<>$(q "$u") LIMIT 1" | db)
+            [ -z "$other" ] || die "$ip is already the static IP of '$other'"
+            echo "START TRANSACTION; DELETE FROM radreply WHERE username=$(q "$u") AND attribute='Framed-IP-Address';
+                  INSERT INTO radreply (username,attribute,op,value) VALUES ($(q "$u"),'Framed-IP-Address',':=',$(q "$ip")); COMMIT;" | db
+            ok "User '$u' → static IP $ip (applies at the next login)"
+        fi
+        kick_user "$u" quiet
+        ;;
+    *) die "Unknown: user $sub (add|passwd|del|disable|enable|group|policy|ip|plan|renew|expiry|quota|status|list|show)" ;;
     esac
 }
 
@@ -224,6 +240,7 @@ cmd_group() {
                     --session-timeout) attrs="'Session-Timeout'" ;;
                     --idle-timeout) attrs="'Idle-Timeout'" ;;
                     --address-list|--policy) attrs="'Mikrotik-Address-List'" ;;
+                    --pool) attrs="'Framed-Pool'" ;;
                     --max-sessions) attrs="'Simultaneous-Use'"; table=radgroupcheck ;;
                     --description) attrs="" ;;
                     *) die "Unknown option $1" ;;
@@ -236,6 +253,10 @@ cmd_group() {
             --description)
                 [[ ${#v} -le 128 && $v =~ ^[[:print:]]*$ ]] || die "Description: max 128 printable characters"
                 sql+="UPDATE radgroup_meta SET description=$(q "$v") WHERE groupname=$(q "$g");" ;;
+            --pool)
+                valid_name "$v" "IP pool"
+                sql+="DELETE FROM radgroupreply WHERE groupname=$(q "$g") AND attribute='Framed-Pool';
+                      INSERT INTO radgroupreply (groupname,attribute,op,value) VALUES ($(q "$g"),'Framed-Pool',':=',$(q "$v"));" ;;
             --rate)
                 [[ $v =~ ^[0-9A-Za-z/\ ]{1,64}$ ]] || die "Rate must look like 10M/10M (MikroTik rx/tx[ burst...] syntax)"
                 sql+="DELETE FROM radgroupreply WHERE groupname=$(q "$g") AND attribute='Mikrotik-Rate-Limit';
@@ -319,7 +340,7 @@ cmd_nas() {
         syslog_sync
         ok "Router $ip ($name) added — FreeRADIUS restarted"
         [ "$generated" = 0 ] || echo "   Secret: $secret"
-        echo "   On the MikroTik:  /radius add address=<this-server-ip> secret=$secret service=wireless,hotspot,login timeout=3s"
+        echo "   On the MikroTik:  /radius add address=<this-server-ip> secret=$secret service=wireless,hotspot,ppp,login timeout=3s"
         ;;
     del|delete|rm)
         local ip=${1:-}; valid_ip "$ip"
@@ -400,15 +421,18 @@ cmd_mac() {
 
 valid_policy() { [[ $1 =~ ^[a-z0-9-]{1,40}$ ]] || die "Invalid policy '$1' (a-z 0-9 -; see webfilter/policies/)"; }
 
-# Disconnect a user's active sessions on the MikroTik (RADIUS Disconnect-Request, port 3799;
+# Send RADIUS Disconnect / CoA to the router(s) of a user's active sessions (UDP 3799;
 # the router needs "/radius incoming set accept=yes").
-kick_user() { # kick_user USER [quiet]
-    local u=$1 quiet=${2:-} rows n=0
-    rows=$(echo "SELECT nasipaddress, acctsessionid, IFNULL(framedipaddress,''), IFNULL(callingstationid,'')
-                 FROM radacct WHERE username=$(q "$u") AND acctstoptime IS NULL" | db)
+#   nas_request USER disconnect|coa "Extra-Attr = value" [quiet] [session-uniqueid]
+nas_request() {
+    local u=$1 kind=$2 extra=$3 quiet=${4:-} only=${5:-} rows n=0 nas sid ip mac uid
+    rows=$(echo "SELECT nasipaddress, acctsessionid, IFNULL(framedipaddress,''), IFNULL(callingstationid,''), acctuniqueid
+                 FROM radacct WHERE username=$(q "$u") AND acctstoptime IS NULL
+                 $( [ -n "$only" ] && echo "AND acctuniqueid=$(q "$only")")" | db)
     if [ -z "$rows" ]; then [ -n "$quiet" ] || echo "No active session for '$u'"; return 0; fi
     local nascount; nascount=$(echo "SELECT COUNT(*) FROM nas" | db)
-    while IFS=$'\t' read -r nas sid ip mac; do
+    local ack=Disconnect-ACK; [ "$kind" = coa ] && ack=CoA-ACK
+    while IFS=$'\t' read -r nas sid ip mac uid; do
         local target=$nas secret
         secret=$(echo "SELECT secret FROM nas WHERE nasname=$(q "$nas") LIMIT 1" | db)
         if [ -z "$secret" ] && [ "$nascount" = 1 ]; then   # router behind NAT: NAS-IP differs from its public IP
@@ -422,14 +446,20 @@ kick_user() { # kick_user USER [quiet]
 Acct-Session-Id = \"$sid\""
         [ -z "$ip" ] || req+=$'\n'"Framed-IP-Address = $ip"
         [ -z "$mac" ] || req+=$'\n'"Calling-Station-Id = \"$mac\""
-        if printf '%s\n' "$req" | radclient -x -r 1 -t 3 "$target:3799" disconnect "$secret" 2>&1 | grep -q 'Disconnect-ACK'; then
+        [ -z "$extra" ] || req+=$'\n'"$extra"
+        if printf '%s\n' "$req" | radclient -x -r 1 -t 3 "$target:3799" "$kind" "$secret" 2>&1 | grep -q "$ack"; then
             n=$((n+1))
         else
-            echo "  ! router $target did not confirm the disconnect (session $sid) — enable /radius incoming accept=yes" >&2
+            echo "  ! router $target did not confirm the $kind (session $sid) — enable /radius incoming accept=yes" >&2
         fi
     done <<<"$rows"
-    [ "$n" = 0 ] || ok "Disconnected $n session(s) of '$u'"
+    LAST_NAS_OK=$n
+    if [ "$n" != 0 ] && [ "$quiet" != silent ]; then     # quiet: no "no session" note; silent: nothing
+        if [ "$kind" = coa ]; then ok "Changed $n session(s) of '$u'"; else ok "Disconnected $n session(s) of '$u'"; fi
+    fi
 }
+
+kick_user() { nas_request "$1" disconnect "" "${2:-}"; }
 
 cmd_kick() {
     local u=${1:-}; [ -n "$u" ] || die "usage: radius-admin kick USER|MAC"
@@ -668,7 +698,7 @@ cmd_plan() {
     local sub=${1:-list}; shift || true
     case $sub in
     add|set)
-        local p=${1:-}; [ -n "$p" ] || die "usage: radius-admin plan add NAME [--price N] [--validity 30d] [--quota 10G] [--period total|monthly|daily] [--daily-time 2h] [--rate 5M/5M] [--devices 1] [--description TEXT]"
+        local p=${1:-}; [ -n "$p" ] || die "usage: radius-admin plan add NAME [--price N] [--validity 30d] [--quota 10G] [--period total|monthly|daily] [--fup 1M/1M] [--daily-time 2h] [--rate 5M/5M] [--devices 1] [--pool NAME] [--description TEXT]"
         shift; valid_name "$p" plan
         local cols="" group_args=()
         while [ $# -gt 0 ]; do
@@ -683,6 +713,9 @@ cmd_plan() {
                 --description) [[ ${#v} -le 128 && $v =~ ^[[:print:]]*$ ]] || die "Description: max 128 printable characters"
                                cols+=",description=$(q "$v")"; group_args+=(--description "$v") ;;
                 --rate) group_args+=(--rate "$v") ;;
+                --fup) if [ "$v" = - ]; then cols+=",fup_rate=''"; else
+                           [[ $v =~ ^[0-9A-Za-z/\ ]{1,64}$ ]] || die "--fup like 1M/1M"; cols+=",fup_rate=$(q "$v")"; fi ;;
+                --pool) group_args+=(--pool "$v") ;;
                 --devices) group_args+=(--max-sessions "$v") ;;
                 --policy) group_args+=(--policy "$v") ;;
                 *) die "Unknown option $1" ;;
@@ -701,6 +734,7 @@ cmd_plan() {
         echo "SELECT name AS plan, price, IF(validity_seconds=0,'-',CONCAT(ROUND(validity_seconds/86400,2),' days')) AS validity,
                      IF(quota_bytes=0,'unlimited',CONCAT(ROUND(quota_bytes/1073741824,2),' GB / ',quota_period)) AS quota,
                      IF(daily_seconds=0,'-',CONCAT(ROUND(daily_seconds/3600,2),' h/day')) AS daily_time,
+                     IF(fup_rate='','-',fup_rate) AS after_quota,
                      COALESCE((SELECT value FROM radgroupreply WHERE groupname=name AND attribute='Mikrotik-Rate-Limit' LIMIT 1),'-') AS speed,
                      COALESCE((SELECT value FROM radgroupcheck WHERE groupname=name AND attribute='Simultaneous-Use' LIMIT 1),'-') AS devices
               FROM ml_plan WHERE name=$(q "$p");" | dbt
@@ -710,6 +744,7 @@ cmd_plan() {
                      IF(p.validity_seconds=0,'-',CONCAT(ROUND(p.validity_seconds/86400,2),'d')) AS validity,
                      IF(p.quota_bytes=0,'unlimited',CONCAT(ROUND(p.quota_bytes/1073741824,2),'G/',p.quota_period)) AS quota,
                      IF(p.daily_seconds=0,'-',CONCAT(ROUND(p.daily_seconds/3600,2),'h')) AS per_day,
+                     IF(p.fup_rate='','cut',p.fup_rate) AS after_quota,
                      COALESCE((SELECT value FROM radgroupreply WHERE groupname=p.name AND attribute='Mikrotik-Rate-Limit' LIMIT 1),'-') AS speed,
                      (SELECT COUNT(*) FROM ml_account a WHERE a.plan=p.name) AS accounts,
                      (SELECT COUNT(*) FROM ml_account a WHERE a.plan=p.name AND a.first_login IS NOT NULL AND (a.expires_at IS NULL OR a.expires_at > NOW())) AS active
@@ -884,6 +919,54 @@ cmd_subscription() { # user plan|renew|expiry|quota|status NAME ...
     esac
 }
 
+# Every 5 minutes (cron): cut off sessions whose package ran out, slow down sessions that used
+# their quota on a FUP plan. Needed for PPPoE (no Total-Limit there) and running sessions.
+cmd_enforce() {
+    local verbose=${1:-} rows u uid c rate n_cut=0 n_fup=0
+    rows=$(echo "SELECT DISTINCT r.username, r.acctuniqueid, ml_check(r.username)
+                 FROM radacct r JOIN ml_account a ON a.username=r.username
+                 WHERE r.acctstoptime IS NULL" | db)
+    while IFS=$'\t' read -r u uid c; do
+        [ -n "$u" ] || continue
+        case $c in
+            reject:*)
+                [ -z "$verbose" ] || echo "cut  $u ($uid): ${c#reject:}"
+                nas_request "$u" disconnect "" silent "$uid"; n_cut=$((n_cut + LAST_NAS_OK)) ;;
+            fup:*)
+                [ -n "$(echo "SELECT 1 FROM ml_fup WHERE acctuniqueid=$(q "$uid")" | db)" ] && continue
+                rate=${c#fup:*:}
+                [[ $rate =~ ^[0-9A-Za-z/\ ]{1,64}$ ]] || continue
+                [ -z "$verbose" ] || echo "fup  $u ($uid) -> $rate"
+                nas_request "$u" coa "Mikrotik-Rate-Limit = \"$rate\"" silent "$uid"
+                if [ "$LAST_NAS_OK" != 0 ]; then
+                    echo "INSERT IGNORE INTO ml_fup (acctuniqueid, username) VALUES ($(q "$uid"), $(q "$u"));" | db
+                    n_fup=$((n_fup+1))
+                fi ;;
+        esac
+    done <<<"$rows"
+    echo "DELETE FROM ml_fup WHERE applied_at < NOW() - INTERVAL 40 DAY;" | db
+    [ -z "$verbose" ] || ok "Enforcer: $n_cut session(s) disconnected, $n_fup slowed to FUP speed"
+}
+
+# CDN detective (tools/cdnmap.py): which app is behind a CDN hostname or IP
+cmd_cdn() {
+    local tool=/usr/local/lib/mikrotiklover/cdnmap.py
+    case ${1:-} in
+        update) python3 -I "$tool" update ;;
+        unknown)
+            local days=${2:-1}; valid_int "$days" days
+            echo "SELECT site, ROUND(SUM(bytes_down+bytes_up)/1048576,1) AS MB, COUNT(DISTINCT client_ip) AS devices
+                  FROM traffic_site WHERE bucket >= NOW() - INTERVAL $days DAY AND site REGEXP '^[0-9.]+$'
+                  GROUP BY site ORDER BY SUM(bytes_down+bytes_up) DESC LIMIT 30;" | dbt
+            echo "(IPs without a site name — check one with: radius-admin cdn IP)"
+            ;;
+        ""|-h|--help) die "usage: radius-admin cdn HOSTNAME|IP | cdn unknown [DAYS] | cdn update" ;;
+        *)
+            [[ $1 =~ ^[A-Za-z0-9_.-]{1,253}$ ]] || die "Enter a hostname or an IPv4 address"
+            python3 -I "$tool" lookup "$1" ${2:+"$2"} ;;
+    esac
+}
+
 cmd_sales() {
     local days=${1:-30}; valid_int "$days" days
     echo "SELECT DATE(at) AS day, COUNT(*) AS sales, SUM(kind='voucher') AS vouchers, SUM(kind='renew') AS renewals,
@@ -958,6 +1041,14 @@ Hotspot business (plans, vouchers, expiry, data quota, daily time)
   user expiry NAME 'YYYY-MM-DD HH:MM'|-   fixed expiry date
   user quota NAME 20G|-                per-user data quota
   user status NAME                     plan, expiry, quota and what RADIUS will answer
+  user ip NAME 10.20.0.5|-             static IP (PPPoE)          group add NAME --pool POOL   (PPPoE IP pool)
+  plan add NAME ... --fup 1M/1M        after the quota: slower instead of cut off (FUP)
+  enforce [-v]                         cut expired / slow FUP sessions now (cron runs it every 5 min)
+
+CDN detective
+  cdn HOSTNAME|IP [--json]             which app/site is behind it (name, DNS evidence, IP owner, context)
+  cdn unknown [DAYS]                   heaviest traffic that has no site name yet
+  cdn update                           refresh the IP owner lists (weekly by cron)
   sales [DAYS]                         money in per day
 
 Groups (speed limit, VLAN, timeouts, devices per user)
@@ -1027,6 +1118,8 @@ case ${1:-help} in
     plan)    shift; cmd_plan "$@" ;;
     voucher) shift; cmd_voucher "$@" ;;
     sales)   shift; cmd_sales "$@" ;;
+    enforce) shift; cmd_enforce "$@" ;;
+    cdn)     shift; cmd_cdn "$@" ;;
     syslog-sync) syslog_sync ;;
     online)  cmd_online ;;
     log)     shift; cmd_log "$@" ;;

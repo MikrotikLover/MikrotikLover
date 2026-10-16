@@ -1,14 +1,22 @@
--- MikrotikLover business rules, used by FreeRADIUS (policy mikrotiklover_limits) and the dashboard.
--- ml_check(user) -> 'reject:<reason>'  or  'ok:<seconds_left>:<bytes_left_low32>:<bytes_left_gigawords>:<quota_applies>'
---   seconds_left 0 = no time limit. Bytes are split for Mikrotik-Total-Limit / -Gigawords.
+-- MikrotikLover business rules, used by FreeRADIUS (policy mikrotiklover_limits), the enforcer
+-- ("radius-admin enforce", every 5 minutes) and the dashboard.
+--
+-- ml_check(user) returns one of
+--   'reject:<reason>'
+--   'ok:<seconds_left>:<bytes_left_low32>:<bytes_left_gigawords>:<quota_applies>'
+--   'fup:<seconds_left>:<rate>'      data quota used up, plan has a fair-usage speed: stay online, slower
+-- seconds_left 0 = no time limit. Bytes are split for Mikrotik-Total-Limit / -Gigawords (hotspot).
+-- Plans with a FUP speed never send Total-Limit (the user must not be cut off); the enforcer
+-- lowers the speed of running sessions with RADIUS CoA instead.
 DELIMITER //
-CREATE OR REPLACE FUNCTION ml_check(u VARCHAR(64)) RETURNS VARCHAR(100)
+CREATE OR REPLACE FUNCTION ml_check(u VARCHAR(64)) RETURNS VARCHAR(120)
     READS SQL DATA
 BEGIN
     DECLARE found INT DEFAULT 1;
     DECLARE v_exp, v_since DATETIME;
     DECLARE v_quota, v_used, v_left BIGINT DEFAULT 0;
     DECLARE v_period VARCHAR(10);
+    DECLARE v_fup VARCHAR(64) DEFAULT '';
     DECLARE v_daily, v_valid, v_today BIGINT DEFAULT 0;
     DECLARE v_secs BIGINT DEFAULT 0;
     DECLARE v_start DATETIME;
@@ -16,8 +24,8 @@ BEGIN
 
     SELECT a.expires_at, COALESCE(a.quota_since, '1970-01-01'), COALESCE(a.quota_bytes, p.quota_bytes, 0),
            COALESCE(p.quota_period, 'total'), COALESCE(p.daily_seconds, 0),
-           IF(a.first_login IS NULL, COALESCE(p.validity_seconds, 0), 0)
-      INTO v_exp, v_since, v_quota, v_period, v_daily, v_valid
+           IF(a.first_login IS NULL, COALESCE(p.validity_seconds, 0), 0), COALESCE(p.fup_rate, '')
+      INTO v_exp, v_since, v_quota, v_period, v_daily, v_valid, v_fup
       FROM ml_account a LEFT JOIN ml_plan p ON p.name = a.plan
      WHERE a.username = u;
     IF found = 0 THEN
@@ -32,17 +40,6 @@ BEGIN
         SET v_secs = v_valid;
     END IF;
 
-    -- data quota
-    IF v_quota > 0 THEN
-        SET v_start = GREATEST(v_since, CASE v_period WHEN 'daily' THEN CURDATE()
-                                                      WHEN 'monthly' THEN DATE_FORMAT(NOW(), '%Y-%m-01')
-                                                      ELSE '1970-01-01' END);
-        SELECT COALESCE(SUM(acctinputoctets + acctoutputoctets), 0) INTO v_used
-          FROM radacct WHERE username = u AND acctstarttime >= v_start;
-        IF v_used >= v_quota THEN RETURN 'reject:Your data quota is used up'; END IF;
-        SET v_left = v_quota - v_used;
-    END IF;
-
     -- online time per day
     IF v_daily > 0 THEN
         SELECT COALESCE(SUM(TIMESTAMPDIFF(SECOND, GREATEST(acctstarttime, CURDATE()), COALESCE(acctstoptime, NOW()))), 0)
@@ -52,7 +49,23 @@ BEGIN
         SET v_secs = IF(v_secs = 0, v_daily - v_today, LEAST(v_secs, v_daily - v_today));
     END IF;
 
+    -- data quota
+    IF v_quota > 0 THEN
+        SET v_start = GREATEST(v_since, CASE v_period WHEN 'daily' THEN CURDATE()
+                                                      WHEN 'monthly' THEN DATE_FORMAT(NOW(), '%Y-%m-01')
+                                                      ELSE '1970-01-01' END);
+        SELECT COALESCE(SUM(acctinputoctets + acctoutputoctets), 0) INTO v_used
+          FROM radacct WHERE username = u AND acctstarttime >= v_start;
+        IF v_used >= v_quota THEN
+            IF v_fup <> '' THEN RETURN CONCAT('fup:', v_secs, ':', v_fup); END IF;
+            RETURN 'reject:Your data quota is used up';
+        END IF;
+        SET v_left = v_quota - v_used;
+        IF v_fup <> '' THEN    -- no Total-Limit: the enforcer slows the session down when the quota runs out
+            RETURN CONCAT('ok:', v_secs, ':0:0:0');
+        END IF;
+    END IF;
+
     RETURN CONCAT('ok:', v_secs, ':', v_left MOD 4294967296, ':', v_left DIV 4294967296, ':', IF(v_quota > 0, 1, 0));
 END //
-
 DELIMITER ;

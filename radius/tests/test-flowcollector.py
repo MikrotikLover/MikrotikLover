@@ -55,6 +55,14 @@ check("NetFlow v9 + cached DNS answer -> daraz.pk", got == {("192.168.88.40", "d
 got = run(ipfix([rec("8.8.4.4", CLIENT, 53, 5353, 4000), rec(CLIENT, "192.168.88.50", 1, 2, 9999),
                  rec(PUB, "1.1.1.1", 1, 2, 9999)], with_template=False))
 check("no DNS name -> IP; LAN-LAN and router traffic ignored", got == {(CLIENT, "8.8.4.4", "down"): 4000}, got)
+# 7) bare shared-CDN name right after a site (CDN detective context) -> counted for that site
+for line in ["x dnsmasq[1]: 20 192.168.88.50/6000 query[A] www.olx.com.pk from 192.168.88.50",
+             "x dnsmasq[1]: 20 192.168.88.50/6000 reply www.olx.com.pk is 99.84.10.10",
+             "x dnsmasq[1]: 21 192.168.88.50/6001 query[A] d1abcd.cloudfront.net from 192.168.88.50",
+             "x dnsmasq[1]: 21 192.168.88.50/6001 reply d1abcd.cloudfront.net is 99.84.20.20"]:
+    names.feed(line, 105)
+got = run(ipfix([rec("99.84.20.20", "192.168.88.50", 443, 42000, 3_000_000)], with_template=False))
+check("CloudFront data after olx -> olx.com.pk", got == {("192.168.88.50", "olx.com.pk", "down"): 3_000_000}, got)
 # 7) garbage does not crash
 check("garbage packet ignored", dec.decode(b"\x00\x0a\xff\xff" + b"\x00" * 30, "x") == [], "")
 sys.exit(1 if fail else 0)
