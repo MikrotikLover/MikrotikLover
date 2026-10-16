@@ -953,7 +953,17 @@ cmd_cdn() {
     local tool=/usr/local/lib/mikrotiklover/cdnmap.py
     case ${1:-} in
         update) python3 -I "$tool" update ;;
-        learn)  python3 -I /usr/local/lib/mikrotiklover/cdnlearn.py run ;;
+        learn)  python3 -I /usr/local/lib/mikrotiklover/cdnlearn.py run $([ "${CDN_FETCH_TITLES:-1}" = 0 ] && echo --no-titles) ;;
+        discovered) python3 -I /usr/local/lib/mikrotiklover/cdnlearn.py apps ;;
+        app-rename)
+            [[ ${2:-} =~ ^[a-z0-9.-]{1,253}$ ]] && [ -n "${3:-}" ] || die "usage: radius-admin cdn app-rename ID 'New Name' [category]"
+            python3 -I /usr/local/lib/mikrotiklover/cdnlearn.py rename "$2" "$3" ${4:+"$4"} ;;
+        app-merge)
+            [[ ${2:-} =~ ^[a-z0-9.-]{1,253}$ ]] && [ -n "${3:-}" ] || die "usage: radius-admin cdn app-merge ID 'Known App'"
+            python3 -I /usr/local/lib/mikrotiklover/cdnlearn.py merge "$2" "$3" ;;
+        app-drop)
+            [[ ${2:-} =~ ^[a-z0-9.-]{1,253}$ ]] || die "usage: radius-admin cdn app-drop ID"
+            python3 -I /usr/local/lib/mikrotiklover/cdnlearn.py drop "$2" ;;
         learned) shift; python3 -I /usr/local/lib/mikrotiklover/cdnlearn.py list "$@" ;;
         reject|unreject)
             [[ ${2:-} =~ ^[A-Za-z0-9.-]{1,253}$ ]] || die "usage: radius-admin cdn $1 DOMAIN"
@@ -1070,6 +1080,8 @@ CDN detective
   cdn learn                            learn now from the DNS log
   cdn reject DOMAIN | unreject DOMAIN  wrongly learned -> remove and never learn again
   cdn rsc 'APP'                        RouterOS script blocking all domains of an app
+  cdn discovered                       NEW apps found automatically (name + category guessed)
+  cdn app-rename ID 'Name' [category] | app-merge ID 'Known App' | app-drop ID
   sales [DAYS]                         money in per day
 
 Groups (speed limit, VLAN, timeouts, devices per user)

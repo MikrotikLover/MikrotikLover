@@ -1055,6 +1055,25 @@ def cdn_reject():
     return result(*radius_admin(["cdn", "reject", dom]))
 
 
+@app.post("/api/cdn/app")
+@login_required("admin")
+def cdn_app_action():
+    """Discovered app: rename / merge into a known app / drop."""
+    data = body()
+    aid = field(data, "id", re.compile(r"^[a-z0-9.-]{1,253}$"), required=True)
+    action = data.get("action")
+    if action == "rename":
+        name = field(data, "name", re.compile(r"^[\w .&+()'/-]{2,40}$"), required=True)
+        cat = field(data, "category", re.compile(r"^[a-z]{2,20}$"))
+        return result(*radius_admin(["cdn", "app-rename", aid, name] + ([cat] if cat else [])))
+    if action == "merge":
+        target = field(data, "target", re.compile(r"^[\w .&+()'/-]{2,60}$"), required=True)
+        return result(*radius_admin(["cdn", "app-merge", aid, target]))
+    if action == "drop":
+        return result(*radius_admin(["cdn", "app-drop", aid]))
+    abort(400, "action: rename | merge | drop")
+
+
 @app.get("/api/cdn/rsc")
 @login_required()
 def cdn_rsc():

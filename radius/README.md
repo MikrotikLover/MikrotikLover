@@ -364,6 +364,7 @@ python3 tests/test-mlreport.py        # sites / history / blocked reports (sampl
 python3 tests/test-flowcollector.py   # data usage collector (synthetic IPFIX / NetFlow v9)
 python3 tests/test-cdnmap.py          # CDN detective: names, CNAME evidence, context, IP owners
 python3 tests/test-cdnlearn.py        # auto-learner: cname / ip / co-occurrence, SDK not learned, reject
+python3 tests/test-cdndiscover.py     # new apps: grouping, name from website/domain, category, rename/merge/drop
 URL=https://127.0.0.1:8443 USER=admin PASS=... node tests/ui-dashboard.mjs   # web dashboard (Playwright)
 ```
 
@@ -545,6 +546,28 @@ sudo radius-admin cdn learn                 # abhi seekho
 sudo radius-admin cdn rsc TikTok > block-tiktok.rsc     # router par poori TikTok list block
 ```
 Dashboard → CDN detective → **App domain lists**: har app khol kar domains (built-in / learned / local), sabooth (cname/ip/cooc, kitne devices, kab se), **Reject**, **Learn now**, aur **⬇ RouterOS block script**.
+
+### Nayi apps khud dhoondna — naam bhi khud
+
+Jo app list mein hai hi nahi (koi nayi video app, game, shopping app), learner use bhi khud pakarta hai:
+
+1. **Groups:** jo domains kisi maloom app ke nahi aur kayi devices par aate hain, unhein ek app mein jora jata hai jab:
+   - CNAME se jure hon (`api.zingclips.in` → `edge.zc-feed.net`),
+   - saath saath maange jayein (3 second ke andar, baar baar, kayi devices),
+   - **ek jaisa brand** ho (`zingclips.in`, `zingclips-cdn.com`),
+   - ya same (shared CDN ke ilawa) IP par hon.
+2. **Shart:** kam az kam 3 devices (ya 2 devices aur 20+ lookups). Analytics/ads SDK (Firebase, AppsFlyer, Adjust, OneSignal, Unity Ads, AppLovin ...) aur certificate/time servers kabhi app nahi bante.
+3. **Naam:** server us app ki website ka title/`og:site_name` parhta hai ("Zing Clips - Short Videos" → **Zing Clips**). Sirf public IP wali sites; LAN/localhost kabhi nahi. Internet na ho ya title bekaar ho to domain ke brand se naam (`zingclips` → **Zingclips**). Title fetch band karna: `/etc/mikrotiklover-radius/radius.conf` mein `CDN_FETCH_TITLES=0`.
+4. **Category** naam/domain ke alfaaz se: video, gaming, messaging, shopping, finance, music, vpn, news, education, social, adult, other.
+5. Nayi app foran **har jagah** istemal hoti hai (reports, data usage, detective, block script), aur agle runs mein us ke naye CDN bhi khud us ki list mein jurte hain.
+
+Dashboard → CDN detective → App domain lists: nayi apps sab se upar **"new"** badge ke saath — kab mili, kitne devices, naam kahan se aaya. Buttons: **Rename** (naam/category theek karein), **Merge into…** (asal mein kisi maloom app ka hissa hai), **Drop** (app nahi — dobara kabhi nahi dhoondi jayegi).
+```bash
+sudo radius-admin cdn discovered
+sudo radius-admin cdn app-rename zingclips.in 'Zing Clips' video
+sudo radius-admin cdn app-merge zingclips.in 'Kwai / Snack Video'
+sudo radius-admin cdn app-drop zingclips.in
+```
 
 **Apni apps add karein:** `/var/lib/mikrotiklover/cdn-apps.local.json` (same format, pehle check hoti hai):
 ```json

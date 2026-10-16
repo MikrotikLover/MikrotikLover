@@ -210,6 +210,21 @@ try {
   await shot(page, "28-app-domain-lists");
   ok("app domain lists: learned TikTok domain, RouterOS export, Learn now");
 
+  // newly discovered apps (only when the server has found one)
+  const disc = page.locator("details", { has: page.locator("summary .badge", { hasText: /^(new|discovered)$/ }) }).first();
+  if (await disc.count()) {
+    await disc.locator("summary").click();
+    await disc.locator("button", { hasText: "Rename" }).click();
+    await page.fill("dialog[open] input[name=name]", "Zing Clips");
+    await page.fill("dialog[open] input[name=category]", "video");
+    await dlgButton(page, "Save").click();
+    await page.locator("details summary b", { hasText: /^Zing Clips$/ }).waitFor({ timeout: 30000 });
+    await page.waitForTimeout(400);
+    await page.locator("details summary b", { hasText: /^Zing Clips$/ }).scrollIntoViewIfNeeded();
+    await shot(page, "29-discovered-app");
+    ok("discovered app renamed in the dashboard");
+  } else console.log("     (no discovered app on this server — skipped)");
+
   // business settings
   await go(page, "#/settings", "Settings");
   await page.fill("input[name=brand]", "Lover Net WiFi");

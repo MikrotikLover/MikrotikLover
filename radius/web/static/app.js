@@ -949,13 +949,42 @@ ROUTES.cdn = async (initial) => {
       h("div", { class: "toolbar" }, h("span", { class: "muted grow" },
         `${d.apps.length} apps · ${d.learned} domains learned automatically` + (d.updated ? ` · last run ${d.updated}` : "") + " · learns every hour from the DNS log"),
         isAdmin() ? h("button", { onclick: async () => { await act(api("POST", "/api/cdn/learn", {})); loadApps(); } }, "Learn now") : null),
-      h("div", { class: "applist" }, d.apps.map((a) => {
+      (() => {
+        const found = d.apps.filter((a) => a.discovered);
+        return found.length ? h("div", { class: "note" }, `${found.length} new app(s) discovered automatically — check the names (shown first, marked "new").`) : null;
+      })(),
+      h("div", { class: "applist" }, [...d.apps].sort((x, y) => (!!y.discovered - !!x.discovered)).map((a) => {
         const nLearned = a.domains.filter((x) => x.source === "learned").length;
+        const known = d.apps.filter((x) => !x.discovered).map((x) => x.app);
+        const actions = a.discovered && isAdmin() ? [
+          h("button", { class: "small", onclick: () => {
+            const f = h("form", { class: "form", onsubmit: (e) => e.preventDefault() },
+              h("label", { class: "field" }, "App name", h("input", { name: "name", value: a.app, required: true, maxlength: 40 })),
+              h("label", { class: "field" }, "Category", h("input", { name: "category", value: a.category || "", placeholder: "video, gaming, shopping…" })));
+            dialog(`Rename ${a.site}`, f, [{ label: "Cancel" }, { label: "Save", class: "primary", action: async () => {
+              if (!f.reportValidity()) return false;
+              if (!(await act(api("POST", "/api/cdn/app", { id: a.discovered, action: "rename", ...formValues(f) })))) return false;
+              loadApps();
+            } }]);
+          } }, "Rename"),
+          h("button", { class: "small", onclick: () => {
+            const sel = h("select", { name: "target" }, known.map((k) => h("option", { value: k }, k)));
+            dialog(`Merge ${a.app} into…`, h("label", { class: "field" }, "Known app", sel), [{ label: "Cancel" }, { label: "Merge", class: "primary", action: async () => {
+              if (!(await act(api("POST", "/api/cdn/app", { id: a.discovered, action: "merge", target: sel.value })))) return false;
+              loadApps();
+            } }]);
+          } }, "Merge into…"),
+          h("button", { class: "small danger", onclick: async () => {
+            if (await confirmDlg("Not an app", `Drop "${a.app}"? Its domains will not be discovered again.`, "Drop"))
+              if (await act(api("POST", "/api/cdn/app", { id: a.discovered, action: "drop" }))) loadApps();
+          } }, "Drop")] : null;
         const det = h("details", { dataset: { app: a.app }, open: open.has(a.app) || undefined },
-          h("summary", {}, h("b", {}, a.app), " ", h("span", { class: "muted" }, `${a.domains.length} domains`), nLearned ? [" ", badge(`+${nLearned} learned`, "ok")] : null, " ", a.category ? badge(a.category) : null),
-          h("div", { class: "toolbar" }, h("a", { class: "btn small", href: `/api/cdn/rsc?app=${encodeURIComponent(a.app)}` }, "⬇ RouterOS block script")),
+          h("summary", {}, h("b", {}, a.app), " ", a.discovered ? badge(a.renamed ? "discovered" : "new", "warn") : null, " ",
+            h("span", { class: "muted" }, `${a.domains.length} domains`), nLearned ? [" ", badge(`+${nLearned} learned`, "ok")] : null, " ", a.category ? badge(a.category) : null),
+          a.discovered ? h("div", { class: "muted" }, `Found ${a.first_seen} · ${a.devices} devices · name from ${a.name_from === "website" ? `the website title "${a.title}"` : "the domain"}`) : null,
+          h("div", { class: "toolbar" }, h("a", { class: "btn small", href: `/api/cdn/rsc?app=${encodeURIComponent(a.app)}` }, "⬇ RouterOS block script"), actions),
           table([{ label: "Domain", render: (x) => h("code", {}, x.domain) },
-            { label: "Source", render: (x) => x.source === "learned" ? badge("learned", "ok") : x.source === "local" ? badge("local", "info") : badge("built-in") },
+            { label: "Source", render: (x) => x.source === "learned" ? badge("learned", "ok") : x.source === "local" ? badge("local", "info") : x.source === "discovered" ? badge("discovered", "warn") : badge("built-in") },
             { label: "Evidence", render: (x) => x.source === "learned" ? `${x.why} · ${x.devices} devices · since ${x.first_seen}` : "—", wrap: true },
             { label: "", render: (x) => x.source === "learned" && isAdmin() ? h("button", { class: "small danger", onclick: async () => {
                 if (await confirmDlg("Reject learned domain", `${x.domain} is not ${a.app}? It will be removed and never learned again.`, "Reject"))

@@ -64,11 +64,21 @@ class Catalog:
             self.asn_sites.update({k: v for k, v in data.get("asn_sites", {}).items() if not k.startswith("_")})
         # domains the learner found by itself (cdnlearn.py) — lowest priority
         self.learned = {}
+        self.discovered = {}
         if with_learned:
             try:
                 learned = json.load(open(LEARNED, encoding="utf-8"))
             except (OSError, ValueError):
                 learned = {}
+            # whole new apps discovered automatically (name + category guessed, admin can rename)
+            for aid, a in learned.get("apps", {}).items():
+                entry = {"app": a["app"], "site": a.get("site") or aid, "category": a.get("category", "other"),
+                         "note": "new app discovered automatically", "generic": False, "discovered": aid}
+                self.discovered[aid] = a
+                for d in a.get("domains", []):
+                    if d not in self.suffix:
+                        self.suffix[d] = entry
+                        self.sources[d] = "discovered"
             by_site = {e["site"]: e for e in self.suffix.values() if not e["generic"]}
             for d, info in learned.get("domains", {}).items():
                 base = by_site.get(info.get("site"))
@@ -103,7 +113,11 @@ class Catalog:
         for d, e in self.suffix.items():
             if e["generic"]:
                 continue
-            a = out.setdefault(e["app"], {"app": e["app"], "site": e["site"], "category": e["category"], "domains": []})
+            a = out.setdefault(e["app"], {"app": e["app"], "site": e["site"], "category": e["category"], "domains": [],
+                                          "discovered": e.get("discovered")})
+            if e.get("discovered"):
+                info = self.discovered.get(e["discovered"], {})
+                a.update({k: info.get(k) for k in ("first_seen", "last_seen", "devices", "queries", "name_from", "renamed", "title")})
             row = {"domain": d, "source": self.sources.get(d, "builtin")}
             if d in self.learned:
                 row.update({k: self.learned[d].get(k) for k in ("score", "devices", "why", "first_seen", "last_seen")})
