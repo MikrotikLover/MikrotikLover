@@ -1,0 +1,2 @@
+# No video during the day (8:00-20:00 every day); videos allowed at night
+block social-video time=8h-20h,mon,tue,wed,thu,fri,sat,sun

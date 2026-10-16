@@ -200,6 +200,8 @@ Upar wali DNS blocking **sab** par lagti hai. Policies se har user, group ya IP 
 | `guests` | Torrent, VPN, adult words + Cloudflare family DNS |
 | `no-internet` | Internet bilkul band |
 | `night-off` | Raat 12 se 6 tak internet band, din mein guests jaisa |
+| `no-video` | Facebook/Instagram **videos & Reels**, YouTube **videos**, TikTok band — Facebook feed, photos, Messenger, WhatsApp, Google chalte hain |
+| `no-video-day` | Wohi, lekin sirf din mein (8:00–20:00); raat ko videos chalti hain |
 
 Policy file ka format:
 ```
@@ -222,9 +224,35 @@ strict-ech            # Encrypted Client Hello bhi band (site ka naam chhupne na
 | **Group** (hotspot) | `sudo radius-admin group add class-9 --policy students` — group ke sab users |
 | **Group** (WPA-Enterprise) | Group ko VLAN dein (`--vlan 20`) aur us subnet ko policy list mein daalein |
 
+#### Facebook / YouTube / TikTok video block — 3 users ka test
+
+```
+sudo radius-admin user policy ali  no-video        # ali: videos hamesha band
+sudo radius-admin user policy sara no-video-day    # sara: videos sirf din mein band
+#                                                    bilal: koi policy nahi — sab chalta hai
+```
+(Ya dashboard → Users → user → *Own web-filter policy*. Poore group par: `radius-admin group add class-9 --policy no-video`.)
+Router par `webfilter-base.rsc` aur `webfilter-policies.rsc` import hon. User agar pehle se connected ho to woh kick ho jata hai, aur dobara login par policy lagti hai.
+
+| | ali 11:00 | ali 22:00 | sara 11:00 | sara 22:00 | bilal |
+|---|---|---|---|---|---|
+| Facebook feed / photos / Messenger | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Facebook video / Reel (`video*.fbcdn.net`) | ⛔ | ⛔ | ⛔ | ✅ | ✅ |
+| YouTube page (search, comments) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| YouTube video (`*.googlevideo.com`) | ⛔ | ⛔ | ⛔ | ✅ | ✅ |
+| TikTok (poori app) | ⛔ | ⛔ | ⛔ | ✅ | ✅ |
+| WhatsApp, Google | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+**Kaise:** Facebook, Instagram aur Messenger ki videos alag server names `video….fbcdn.net` se aati hain, jabke photos `scontent….fbcdn.net` se aati hain. Is liye sirf video band hoti hai aur baqi app chalti hai. YouTube ki videos `googlevideo.com` se aati hain. TikTok poori ki poori video hai, is liye poori app band hoti hai. Yeh category `webfilter/categories/social-video.txt` mein hai: `*` wali line pattern hoti hai, aur baqi lines domain hain jin ke subdomains bhi band hote hain. Is category ko kisi bhi policy mein `block social-video` likh kar lagaya ja sakta hai.
+
+**Note:**
+- Pehle se download ki hui (offline) videos chal jayengi.
+- Kabhi kabhi Facebook purani videos `scontent` server se bhi deta hai. Aisi video agar chal jaye to `block social` se poora Facebook band karein.
+- Agar koi VPN istemal kare to VPN bhi band karna hoga: `block vpn-proxy`.
+
 Policy hatana: `sudo radius-admin user policy ali -` (wapas group policy), ya address-list entry remove.
 
-**Kaise kaam karta hai:** HTTPS connection ke shuru mein website ka naam (SNI) jata hai; router har policy ke liye us naam ko category list se milata hai (`wf-social`, `wf-gaming` ... chains — sab policies share karti hain). Policy wale users ka QUIC (UDP 443) band hai taa ke browser TCP par aaye jahan naam dikhta hai. `dns ...` wali policy ke users ka DNS us family-safe DNS par jata hai (adult sites wahan band). `tests/simulate-policies.py` 23 cases check karta hai (office time, raat, har policy ki DNS, normal users par asar nahi).
+**Kaise kaam karta hai:** HTTPS connection ke shuru mein website ka naam (SNI) jata hai; router har policy ke liye us naam ko category list se milata hai (`wf-social`, `wf-gaming` ... chains — sab policies share karti hain). Policy wale users ka QUIC (UDP 443) band hai taa ke browser TCP par aaye jahan naam dikhta hai. Agar policy ki sab blocks par `time=` laga ho to QUIC bhi sirf usi waqt band hota hai. `dns ...` wali policy ke users ka DNS us family-safe DNS par jata hai (adult sites wahan band). `tests/simulate-policies.py` 39 cases check karta hai (office time, raat, har policy ki DNS, normal users par asar nahi).
 
 ### Turant disconnect (kick)
 

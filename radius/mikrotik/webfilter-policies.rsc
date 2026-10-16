@@ -7,7 +7,7 @@
 #   subnet / VLAN       : /ip firewall address-list add list=policy-staff address=192.168.20.0/24
 #   hotspot user        : radius-admin user policy ali students
 #   hotspot group       : radius-admin group add class-9 --policy students
-# Policies: guests night-off no-internet staff students 
+# Policies: guests night-off no-internet no-video-day no-video staff students 
 # Checks the HTTPS site name (SNI), so it works per device even when DNS answers are cached.
 
 /ip firewall filter
@@ -180,6 +180,36 @@ add chain=wf-social protocol=tcp tls-host="*.bigo.tv" action=reject reject-with=
 add chain=wf-social protocol=tcp tls-host="quora.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social" comment="wfchain:wf-social"
 add chain=wf-social protocol=tcp tls-host="*.quora.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social" comment="wfchain:wf-social"
 add chain=wf-social action=return comment="wfchain:wf-social"
+add chain=wf-social-video protocol=tcp tls-host="video*.fbcdn.net" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="googlevideo.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="*.googlevideo.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="tiktok.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="*.tiktok.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="tiktokv.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="*.tiktokv.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="tiktokv.us" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="*.tiktokv.us" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="tiktokv.eu" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="*.tiktokv.eu" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="tiktokw.us" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="*.tiktokw.us" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="tiktokcdn.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="*.tiktokcdn.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="tiktokcdn-us.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="*.tiktokcdn-us.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="tiktokcdn-eu.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="*.tiktokcdn-eu.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="byteoversea.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="*.byteoversea.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="ibytedtos.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="*.ibytedtos.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="ibyteimg.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="*.ibyteimg.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="ttwstatic.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="*.ttwstatic.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="musical.ly" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video protocol=tcp tls-host="*.musical.ly" action=reject reject-with=tcp-reset log=yes log-prefix="WF-social-video" comment="wfchain:wf-social-video"
+add chain=wf-social-video action=return comment="wfchain:wf-social-video"
 add chain=wf-torrent-piracy protocol=tcp tls-host="thepiratebay.org" action=reject reject-with=tcp-reset log=yes log-prefix="WF-torrent-piracy" comment="wfchain:wf-torrent-piracy"
 add chain=wf-torrent-piracy protocol=tcp tls-host="*.thepiratebay.org" action=reject reject-with=tcp-reset log=yes log-prefix="WF-torrent-piracy" comment="wfchain:wf-torrent-piracy"
 add chain=wf-torrent-piracy protocol=tcp tls-host="1337x.to" action=reject reject-with=tcp-reset log=yes log-prefix="WF-torrent-piracy" comment="wfchain:wf-torrent-piracy"
@@ -335,6 +365,12 @@ add chain=forward src-address-list=policy-night-off protocol=udp dst-port=443 ac
 add chain=forward src-address-list=policy-no-internet connection-state=new action=log log-prefix="WF-noinet" limit=20/1m,10:packet comment="wfpolicy:no-internet no internet (log)"
 add chain=forward src-address-list=policy-no-internet protocol=tcp action=reject reject-with=tcp-reset comment="wfpolicy:no-internet no internet"
 add chain=forward src-address-list=policy-no-internet action=reject reject-with=icmp-admin-prohibited comment="wfpolicy:no-internet no internet"
+# --- policy no-video-day: No video during the day (8:00-20:00 every day); videos allowed at night
+add chain=forward src-address-list=policy-no-video-day protocol=tcp dst-port=443 action=jump jump-target=wf-social-video time=8h-20h,mon,tue,wed,thu,fri,sat,sun comment="wfpolicy:no-video-day social-video"
+add chain=forward src-address-list=policy-no-video-day protocol=udp dst-port=443 action=drop time=8h-20h,mon,tue,wed,thu,fri,sat,sun comment="wfpolicy:no-video-day no QUIC"
+# --- policy no-video: No video: Facebook/Instagram videos & Reels, YouTube and TikTok do not play; chat, photos, WhatsApp, Google work
+add chain=forward src-address-list=policy-no-video protocol=tcp dst-port=443 action=jump jump-target=wf-social-video comment="wfpolicy:no-video social-video"
+add chain=forward src-address-list=policy-no-video protocol=udp dst-port=443 action=drop comment="wfpolicy:no-video no QUIC"
 # --- policy staff: Staff: social media and video only blocked during office hours
 add chain=forward src-address-list=policy-staff protocol=tcp dst-port=443 action=jump jump-target=wf-social time=9h-17h,mon,tue,wed,thu,fri,sat comment="wfpolicy:staff social"
 add chain=forward src-address-list=policy-staff protocol=tcp dst-port=443 action=jump jump-target=wf-video-streaming time=9h-17h,mon,tue,wed,thu,fri,sat comment="wfpolicy:staff video-streaming"

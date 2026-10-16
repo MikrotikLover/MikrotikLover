@@ -1,0 +1,21 @@
+# Videos in Facebook / YouTube / TikTok (the apps, chat and photos keep working)
+# Lines with * are name patterns (checked on the HTTPS site name and as a DNS regexp).
+# Facebook + Messenger + Instagram videos and Reels come from video*.fbcdn.net;
+# photos (scontent*.fbcdn.net) and chat are not touched.
+video*.fbcdn.net
+# YouTube: the video streams. youtube.com still opens (search, comments), videos do not play.
+googlevideo.com
+# TikTok is all video: the whole app.
+tiktok.com
+tiktokv.com
+tiktokv.us
+tiktokv.eu
+tiktokw.us
+tiktokcdn.com
+tiktokcdn-us.com
+tiktokcdn-eu.com
+byteoversea.com
+ibytedtos.com
+ibyteimg.com
+ttwstatic.com
+musical.ly

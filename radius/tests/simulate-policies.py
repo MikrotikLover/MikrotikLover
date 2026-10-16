@@ -65,6 +65,23 @@ CASES = [
     ("night-off: 02:00",                   F("policy-night-off", "www.google.com", hour=2), "reject"),
     ("night-off: 10:00 google",            F("policy-night-off", "www.google.com", hour=10),"allow"),
     ("normal user: facebook",              F("lan", "www.facebook.com"),                    "allow"),
+    # no-video: Facebook/YouTube/TikTok videos blocked, the rest of the apps work
+    ("no-video: facebook video",           F("policy-no-video", "video.fkhi4-1.fna.fbcdn.net"), "reject"),
+    ("no-video: facebook reel (video-)",   F("policy-no-video", "video-sin6-2.xx.fbcdn.net"), "reject"),
+    ("no-video: youtube stream",           F("policy-no-video", "rr3---sn-4g5edn6r.googlevideo.com"), "reject"),
+    ("no-video: tiktok app",               F("policy-no-video", "api16-normal-c-alisg.tiktokv.com"), "reject"),
+    ("no-video: tiktok video cdn",         F("policy-no-video", "v16-webapp-prime.tiktok.com"), "reject"),
+    ("no-video: tiktok web",               F("policy-no-video", "www.tiktok.com"),           "reject"),
+    ("no-video: facebook feed",            F("policy-no-video", "www.facebook.com"),         "allow"),
+    ("no-video: facebook photo",           F("policy-no-video", "scontent.fkhi4-1.fna.fbcdn.net"), "allow"),
+    ("no-video: messenger chat",           F("policy-no-video", "edge-chat.facebook.com"),   "allow"),
+    ("no-video: whatsapp",                 F("policy-no-video", "g.whatsapp.net"),           "allow"),
+    ("no-video: youtube.com page",         F("policy-no-video", "www.youtube.com"),          "allow"),
+    ("no-video: google search",            F("policy-no-video", "www.google.com"),           "allow"),
+    ("no-video: QUIC (video over UDP)",    F("policy-no-video", None, "udp"),                "drop"),
+    ("no-video-day: youtube at 11:00",     F("policy-no-video-day", "rr1---sn-x.googlevideo.com"), "reject"),
+    ("no-video-day: youtube at 22:00",     F("policy-no-video-day", "rr1---sn-x.googlevideo.com", hour=22), "allow"),
+    ("no-video-day: QUIC at 22:00",        F("policy-no-video-day", None, "udp", hour=22),   "allow"),
 ]
 fail = 0
 for desc, f, exp in CASES:

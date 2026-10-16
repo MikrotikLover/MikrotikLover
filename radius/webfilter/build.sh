@@ -19,25 +19,36 @@ if [ "${1:-}" = --update-meta ]; then
     echo "build.sh: allowonly/meta-ipv4.txt updated ($(grep -c / allowonly/meta-ipv4.txt) networks)" >&2
 fi
 
+valid_name() { # valid_name NAME FILE: a domain, or a pattern with * (e.g. video*.fbcdn.net)
+    [[ $1 =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] && return
+    [[ $1 == *'*'* && $1 =~ ^[a-z0-9*][a-z0-9*-]*(\.[a-z0-9*][a-z0-9*-]*)+$ && $1 =~ \.[a-z0-9-]+\.[a-z]+$ ]] && return
+    echo "build.sh: invalid domain '$1' in $2" >&2; exit 1
+}
+
 domains() { # domains FILE -> validated lowercase domains, one per line
     local d
     while IFS= read -r d || [ -n "$d" ]; do
         d=${d%%#*}; d=${d//[[:space:]]/}; d=${d,,}
         [ -n "$d" ] || continue
-        [[ $d =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] || { echo "build.sh: invalid domain '$d' in $1" >&2; exit 1; }
+        valid_name "$d" "$1"
         echo "$d"
     done < "$1"
 }
 
 static_block() { # static_block CATEGORY FILE  -> RouterOS lines
-    local cat=$1 file=$2 d n=0
+    local cat=$1 file=$2 d re n=0
     echo "/ip dns static"
     echo "remove [find comment=\"webfilter:$cat\"]"
     while IFS= read -r d || [ -n "$d" ]; do
         d=${d%%#*}; d=${d//[[:space:]]/}; d=${d,,}
         [ -n "$d" ] || continue
-        [[ $d =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] || { echo "build.sh: invalid domain '$d' in $file" >&2; exit 1; }
-        echo "add name=$d type=NXDOMAIN match-subdomain=yes comment=\"webfilter:$cat\""
+        valid_name "$d" "$file"
+        if [[ $d == *'*'* ]]; then   # pattern -> anchored DNS regexp: * = anything, . = a dot
+            re=${d//./[.]}; re=${re//\*/.*}
+            echo "add regexp=\"^$re\\\$\" type=NXDOMAIN comment=\"webfilter:$cat\""
+        else
+            echo "add name=$d type=NXDOMAIN match-subdomain=yes comment=\"webfilter:$cat\""
+        fi
         n=$((n+1))
     done < "$file"
     echo "build.sh: $cat — $n domains" >&2
@@ -187,7 +198,7 @@ for pf in policies/*.txt; do
     [ "$p" = README ] && continue
     [[ $p =~ ^[a-z0-9-]{1,40}$ ]] || { echo "build.sh: bad policy name $p" >&2; exit 1; }
     L="policy-$p" C="wfpolicy:$p"
-    any=0 ech=0 dns=router
+    any=0 ech=0 dns=router untimed=0 qtimes=()
     {
         echo "# --- policy $p: $(head -1 "$pf" | sed 's/^# *//')"
         while IFS= read -r line || [ -n "$line" ]; do
@@ -202,6 +213,7 @@ for pf in policies/*.txt; do
                     [[ $val =~ ^[a-z0-9-]+$ ]] || { echo "build.sh: bad category '$val' in $pf" >&2; exit 1; }
                     [ "$val" = keywords ] || [ -f "categories/$val.txt" ] || { echo "build.sh: unknown category '$val' in $pf" >&2; exit 1; }
                     used_cats+=("$val"); any=1
+                    if [ -z "$t" ]; then untimed=1; else qtimes+=("$t"); fi
                     echo "add chain=forward src-address-list=$L protocol=tcp dst-port=443 action=jump jump-target=wf-$val$t comment=\"$C $val\"" ;;
                 block-all)
                     [[ -z $val || $val == time=* ]] || { echo "build.sh: bad block-all in $pf" >&2; exit 1; }
@@ -220,7 +232,12 @@ for pf in policies/*.txt; do
         fi
         if [ "$any" = 1 ]; then
             # QUIC hides the site name from the router; browsers fall back to TCP where it is checked.
-            echo "add chain=forward src-address-list=$L protocol=udp dst-port=443 action=drop comment=\"$C no QUIC\""
+            # Only while a block is active: a policy with time= blocks only lets QUIC through outside those times.
+            if [ "$untimed" = 1 ]; then qtimes=(""); fi
+            for qt in $(printf '%s\n' "${qtimes[@]}" | sort -u | sed 's/^ //;s/^$/-/'); do
+                [ "$qt" = - ] && qt="" || qt=" $qt"
+                echo "add chain=forward src-address-list=$L protocol=udp dst-port=443 action=drop$qt comment=\"$C no QUIC\""
+            done
         fi
         if [ "$dns" != router ]; then
             echo "/ip firewall nat"
@@ -265,7 +282,7 @@ sni_rules() { # sni_rules CHAIN PREFIX < patterns
             { for k in "${kw_any[@]}"; do echo "*$k*"; done
               for k in "${kw_start[@]}"; do printf '%s\n' "$k*" "*.$k*" "*-$k*"; done; } | sni_rules wf-keywords WF-keywords
         else
-            domains "categories/$c.txt" | while IFS= read -r d; do printf '%s\n' "$d" "*.$d"; done | sni_rules "wf-$c" "WF-$c"
+            domains "categories/$c.txt" | while IFS= read -r d; do if [[ $d == *'*'* ]]; then echo "$d"; else printf '%s\n' "$d" "*.$d"; fi; done | sni_rules "wf-$c" "WF-$c"
         fi
         echo "add chain=wf-$c action=return comment=\"wfchain:wf-$c\""
     done
