@@ -101,6 +101,9 @@ sudo radius-admin mac del     AA-BB-CC-DD-EE-FF
 | `hotspot.rsc` | Hotspot captive portal login |
 | `mac-auth.rsc` | MAC authentication: (A) wifi package `query-radius`, (B) legacy wireless, (C) hotspot `login-by=mac` |
 | `webfilter-*.rsc` | Website category blocking — section 5b |
+| `webfilter-policies.rsc` | Single user / group / IP range ki alag policies, time ke saath |
+| `webfilter-logging.rsc` | Blocked attempts server par (`radius-admin blocked`) |
+| `allow-only-whatsapp.rsc` | Sirf WhatsApp |
 
 Wi-Fi aur hotspot dono ek router par hain to ek hi entry kafi hai: `/radius add address=... secret=... service=wireless,hotspot`.
 
@@ -181,6 +184,65 @@ Is liye keyword blocking 3 tareeqon se hoti hai:
 
 **Behtareen combination:** `webfilter-base` + `webfilter-adlists` (adult ~75k sites) + `webfilter-keywords` + `webfilter-safesearch` + `webfilter-vpn-protocols`.
 
+### Policies — Single user / Group / IP Range blocking — `webfilter-policies.rsc`
+
+Upar wali DNS blocking **sab** par lagti hai. Policies se har user, group ya IP range ki **alag** blocking hoti hai.
+
+**Tayyar policies** (`webfilter/policies/*.txt` — edit karein ya nayi banayein, phir `./webfilter/build.sh`):
+
+| Policy | Kya band |
+|---|---|
+| `students` | Social, video, gaming, VPN, torrent, adult words + CleanBrowsing family DNS + ECH band |
+| `staff` | Social aur video **sirf office time** (9–5, Mon–Sat); gaming, torrent, adult words hamesha |
+| `guests` | Torrent, VPN, adult words + Cloudflare family DNS |
+| `no-internet` | Internet bilkul band |
+| `night-off` | Raat 12 se 6 tak internet band, din mein guests jaisa |
+
+Policy file ka format:
+```
+block social                              # category (categories/*.txt) ya "keywords"
+block video-streaming time=9h-17h,mon,tue,wed,thu,fri    # sirf is waqt
+block-all time=0s-6h,sun,mon,tue,wed,thu,fri,sat         # internet band (is waqt)
+dns family            # router | family | adguard-family | cleanbrowsing-family | cleanbrowsing-adult
+strict-ech            # Encrypted Client Hello bhi band (site ka naam chhupne nahi deta)
+```
+
+**Kis par lagani hai** — device ka IP address list `policy-<naam>` mein hona chahiye:
+
+| Kis par | Kaise |
+|---|---|
+| **Single user** (hotspot) | `sudo radius-admin user policy ali students` — sirf is user par, group se upar. Turant kick hota hai taa ke naye login par policy lag jaye |
+| **Single device** (MAC) | `/ip dhcp-server lease make-static [find mac-address=AA:BB:CC:DD:EE:FF]` → `/ip dhcp-server lease set [find mac-address=AA:BB:CC:DD:EE:FF] address-lists=policy-students` |
+| **Single IP** | `/ip firewall address-list add list=policy-no-internet address=192.168.88.23 comment="Ahmed"` |
+| **IP Range** | `/ip firewall address-list add list=policy-students address=192.168.88.100-192.168.88.150` |
+| **Subnet / VLAN** | `/ip firewall address-list add list=policy-staff address=192.168.20.0/24` |
+| **Group** (hotspot) | `sudo radius-admin group add class-9 --policy students` — group ke sab users |
+| **Group** (WPA-Enterprise) | Group ko VLAN dein (`--vlan 20`) aur us subnet ko policy list mein daalein |
+
+Policy hatana: `sudo radius-admin user policy ali -` (wapas group policy), ya address-list entry remove.
+
+**Kaise kaam karta hai:** HTTPS connection ke shuru mein website ka naam (SNI) jata hai; router har policy ke liye us naam ko category list se milata hai (`wf-social`, `wf-gaming` ... chains — sab policies share karti hain). Policy wale users ka QUIC (UDP 443) band hai taa ke browser TCP par aaye jahan naam dikhta hai. `dns ...` wali policy ke users ka DNS us family-safe DNS par jata hai (adult sites wahan band). `tests/simulate-policies.py` 23 cases check karta hai (office time, raat, har policy ki DNS, normal users par asar nahi).
+
+### Turant disconnect (kick)
+
+```bash
+sudo radius-admin kick ali                  # ya MAC: radius-admin kick aa:bb:cc:dd:ee:ff
+```
+Router ko RADIUS Disconnect-Request (port 3799) bhejta hai. `user disable` aur `user policy` khud bhi kick karte hain. Router par `/radius incoming set accept=yes` hona chahiye (scripts mein hai).
+
+### Blocked report — kis ne kya kholne ki koshish ki
+
+1. Router par `webfilter-logging.rsc` import karein (`RADIUS_SERVER_IP` badal kar). Server UDP 514 par sirf private networks aur registered routers ke logs leta hai.
+2. ```bash
+   sudo radius-admin blocked              # last 30
+   sudo radius-admin blocked 100 -u ali   # sirf ali ke
+   ```
+   ```
+   time                 user  ip         mac                category  destination
+   2026-10-16 18:00:44  ali   10.5.0.2   AA-BB-CC-00-00-02  social    157.240.1.35:443
+   ```
+   IP/MAC se RADIUS session dhoond kar **username** dikhata hai. Logs `/var/log/mikrotik/webfilter.log` (8 hafte rotate).
+
 ### Sirf WhatsApp (baqi sab band) — `allow-only-whatsapp.rsc`
 
 Kisi user/device ko sirf WhatsApp dena ho (chat, voice/video call, photo/video, voice note, status, WhatsApp Web) aur **YouTube, Facebook, Instagram, TikTok, browser — sab band**:
@@ -229,6 +291,7 @@ Kisi bhi category ka naam badal kar (`webfilter:video-streaming`, `webfilter:gam
 ```bash
 python3 tests/lint-rsc.py             # har .rsc: quotes, braces, menu aur property names
 python3 tests/simulate-allowonly.py   # WhatsApp-only rules ka simulation
+python3 tests/simulate-policies.py    # policies: user/group/range, office time, raat
 ```
 
 **Limitations (honestly):**

@@ -10,7 +10,8 @@ import re, sys, glob, os
 
 FW = {"chain", "in-interface-list", "src-address-list", "dst-address-list", "src-address",
       "dst-address", "protocol", "dst-port", "action", "to-addresses", "to-ports",
-      "reject-with", "comment", "tls-host", "place-before", "disabled"}
+      "reject-with", "comment", "tls-host", "place-before", "disabled", "jump-target", "time",
+      "log", "log-prefix", "connection-state", "limit"}
 PROPS = {
     "/radius": {"address", "secret", "service", "timeout", "comment", "src-address"},
     "/radius incoming": {"accept"},
@@ -31,9 +32,11 @@ PROPS = {
         "unicast-ciphers", "group-ciphers", "radius-eap-accounting", "wpa2-pre-shared-key",
         "radius-mac-authentication", "radius-mac-accounting", "radius-mac-mode", "radius-mac-format"},
     "/interface wireless": {"security-profile", "ssid", "mode", "disabled", "master-interface", "name", "vlan-mode"},
+    "/system logging action": {"name", "target", "remote", "remote-port"},
+    "/system logging": {"topics", "action", "prefix"},
     "/ip hotspot profile": {"use-radius", "radius-accounting", "radius-interim-update", "login-by", "mac-auth-mode"},
 }
-VERBS = {"add", "set", "remove", "move", ":foreach", "}"}
+VERBS = {"add", "set", "remove", "move", ":foreach", ":if", "}"}
 
 def strip_quoted(s):
     return re.sub(r'"(?:\\.|[^"\\])*"', 'Q', s)

@@ -1,0 +1,9 @@
+# Students / kids: no social media, video, games, VPN, torrents, adult words; family-safe DNS
+block social
+block video-streaming
+block gaming
+block vpn-proxy
+block torrent-piracy
+block keywords
+dns cleanbrowsing-family
+strict-ech

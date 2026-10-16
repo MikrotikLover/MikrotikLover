@@ -1,0 +1,2 @@
+# No internet at all (single user / device / range punishment, unpaid, etc.)
+block-all

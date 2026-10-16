@@ -69,6 +69,28 @@ parse_pass_opts() { # common options: -p PASS, -g GROUP, --nt-hash
     return 0
 }
 
+# rsyslog receives the routers' web-filter logs; only accept them from localhost, private
+# networks and the registered routers (NAS table).
+syslog_sync() {
+    [ -d /etc/rsyslog.d ] || return 0
+    local senders="127.0.0.1, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16" ip
+    for ip in $(echo "SELECT nasname FROM nas" | db); do senders+=", $ip"; done
+    cat > /etc/rsyslog.d/30-mikrotiklover.conf <<EOF
+# Managed by radius-admin (MikrotikLover) — MikroTik web-filter logs
+\$AllowedSender UDP, $senders
+module(load="imudp")
+template(name="mikrotiklover_wf" type="string" string="%timegenerated:::date-rfc3339% %fromhost-ip% %syslogtag%%msg%\\n")
+ruleset(name="mikrotiklover") {
+    if (\$rawmsg contains "WF-") then {
+        action(type="omfile" file="$WF_LOG" template="mikrotiklover_wf" fileCreateMode="0640" fileGroup="adm")
+    }
+    stop
+}
+input(type="imudp" port="514" ruleset="mikrotiklover")
+EOF
+    svc restart rsyslog >/dev/null 2>&1 || true
+}
+
 restart_radius() {
     freeradius -C -lstdout >/dev/null 2>&1 || die "FreeRADIUS config check failed (run: freeradius -XC)"
     svc restart freeradius >/dev/null 2>&1
@@ -110,7 +132,8 @@ cmd_user() {
         user_exists "$u" || die "No such user '$u'"
         echo "DELETE FROM radcheck WHERE username=$(q "$u") AND attribute='Auth-Type';
               INSERT INTO radcheck (username,attribute,op,value) VALUES ($(q "$u"),'Auth-Type',':=','Reject');" | db
-        ok "User '$u' disabled (already-connected devices drop at next re-authentication)"
+        ok "User '$u' disabled"
+        kick_user "$u" quiet
         ;;
     enable)
         local u=${1:-}; valid_name "$u" username
@@ -135,12 +158,28 @@ cmd_user() {
             ok "User '$u' moved to group '$g'"
         fi
         ;;
+    policy)
+        local u=${1:-} p=${2:-}; valid_name "$u" username; [ -n "$p" ] || die "usage: radius-admin user policy NAME POLICY|-"
+        user_exists "$u" || die "No such user '$u'"
+        if [ "$p" = - ]; then
+            echo "DELETE FROM radreply WHERE username=$(q "$u") AND attribute='Mikrotik-Address-List';" | db
+            ok "User '$u' now follows the group policy"
+        else
+            valid_policy "$p"
+            echo "START TRANSACTION; DELETE FROM radreply WHERE username=$(q "$u") AND attribute='Mikrotik-Address-List';
+                  INSERT INTO radreply (username,attribute,op,value) VALUES ($(q "$u"),'Mikrotik-Address-List',':=',$(q "policy-$p")); COMMIT;" | db
+            ok "User '$u' → policy '$p' (overrides the group policy)"
+        fi
+        kick_user "$u" quiet   # re-login picks up the new policy
+        ;;
     list|ls)
         echo "SELECT c.username AS user,
                      COALESCE(GROUP_CONCAT(DISTINCT g.groupname),'-') AS \`group\`,
                      IF(SUM(c.attribute='Auth-Type' AND c.value='Reject'),'DISABLED','active') AS status,
                      CASE WHEN SUM(c.attribute='Calling-Station-Id') THEN 'mac-device'
-                          WHEN SUM(c.attribute='NT-Password') THEN 'nt-hash' ELSE 'cleartext' END AS login
+                          WHEN SUM(c.attribute='NT-Password') THEN 'nt-hash' ELSE 'cleartext' END AS login,
+                     COALESCE((SELECT REPLACE(value,'policy-','') FROM radreply r WHERE r.username=c.username AND r.attribute='Mikrotik-Address-List' LIMIT 1),
+                              (SELECT CONCAT(REPLACE(value,'policy-',''),' (group)') FROM radgroupreply gr WHERE gr.groupname=MAX(g.groupname) AND gr.attribute='Mikrotik-Address-List' LIMIT 1),'-') AS policy
               FROM radcheck c LEFT JOIN radusergroup g ON g.username=c.username
               GROUP BY c.username ORDER BY c.username;" | dbt
         ;;
@@ -153,7 +192,7 @@ cmd_user() {
         echo "Last logins:"
         echo "SELECT authdate, reply FROM radpostauth WHERE username=$(q "$u") ORDER BY id DESC LIMIT 5;" | dbt
         ;;
-    *) die "Unknown: user $sub (add|passwd|del|disable|enable|group|list|show)" ;;
+    *) die "Unknown: user $sub (add|passwd|del|disable|enable|group|policy|list|show)" ;;
     esac
 }
 
@@ -185,10 +224,11 @@ cmd_group() {
                 local a=Session-Timeout; [ "$1" = --idle-timeout ] && a=Idle-Timeout
                 sql+="DELETE FROM radgroupreply WHERE groupname=$(q "$g") AND attribute='$a';
                       INSERT INTO radgroupreply (groupname,attribute,op,value) VALUES ($(q "$g"),'$a',':=','$v');" ;;
-            --address-list)
-                valid_name "$v" "address list"
+            --address-list|--policy)
+                if [ "$1" = --policy ]; then valid_policy "$v"; v="policy-$v"; else valid_name "$v" "address list"; fi
+                # "=" (not ":="): a per-user policy (radius-admin user policy) takes precedence.
                 sql+="DELETE FROM radgroupreply WHERE groupname=$(q "$g") AND attribute='Mikrotik-Address-List';
-                      INSERT INTO radgroupreply (groupname,attribute,op,value) VALUES ($(q "$g"),'Mikrotik-Address-List',':=',$(q "$v"));" ;;
+                      INSERT INTO radgroupreply (groupname,attribute,op,value) VALUES ($(q "$g"),'Mikrotik-Address-List','=',$(q "$v"));" ;;
             --max-sessions)
                 valid_int "$v" "max-sessions"
                 sql+="DELETE FROM radgroupcheck WHERE groupname=$(q "$g") AND attribute='Simultaneous-Use';
@@ -245,6 +285,7 @@ cmd_nas() {
               INSERT INTO nas (nasname,shortname,type,secret,description) VALUES ($(q "$ip"),$(q "$name"),'other',$(q "$secret"),'MikroTik');
               COMMIT;" | db
         restart_radius
+        syslog_sync
         ok "Router $ip ($name) added — FreeRADIUS restarted"
         [ "$generated" = 0 ] || echo "   Secret: $secret"
         echo "   On the MikroTik:  /radius add address=<this-server-ip> secret=$secret service=wireless,hotspot,login timeout=3s"
@@ -253,6 +294,7 @@ cmd_nas() {
         local ip=${1:-}; valid_ip "$ip"
         echo "DELETE FROM nas WHERE nasname=$(q "$ip");" | db
         restart_radius
+        syslog_sync
         ok "Router $ip removed"
         ;;
     list|ls)
@@ -322,6 +364,64 @@ cmd_mac() {
         ;;
     *) die "Unknown: mac $sub (add|del|disable|enable|group|list)" ;;
     esac
+}
+
+valid_policy() { [[ $1 =~ ^[a-z0-9-]{1,40}$ ]] || die "Invalid policy '$1' (a-z 0-9 -; see webfilter/policies/)"; }
+
+# Disconnect a user's active sessions on the MikroTik (RADIUS Disconnect-Request, port 3799;
+# the router needs "/radius incoming set accept=yes").
+kick_user() { # kick_user USER [quiet]
+    local u=$1 quiet=${2:-} rows n=0
+    rows=$(echo "SELECT nasipaddress, acctsessionid, IFNULL(framedipaddress,''), IFNULL(callingstationid,'')
+                 FROM radacct WHERE username=$(q "$u") AND acctstoptime IS NULL" | db)
+    if [ -z "$rows" ]; then [ -n "$quiet" ] || echo "No active session for '$u'"; return 0; fi
+    local nascount; nascount=$(echo "SELECT COUNT(*) FROM nas" | db)
+    while IFS=$'\t' read -r nas sid ip mac; do
+        local target=$nas secret
+        secret=$(echo "SELECT secret FROM nas WHERE nasname=$(q "$nas") LIMIT 1" | db)
+        if [ -z "$secret" ] && [ "$nascount" = 1 ]; then   # router behind NAT: NAS-IP differs from its public IP
+            target=$(echo "SELECT nasname FROM nas LIMIT 1" | db); secret=$(echo "SELECT secret FROM nas LIMIT 1" | db)
+        fi
+        if [ -z "$secret" ] || [[ $target == */* ]]; then
+            echo "  ! cannot reach router $nas for '$u' (add it with its exact IP: radius-admin nas add)" >&2; continue
+        fi
+        sid=${sid//\\/\\\\}; sid=${sid//\"/\\\"}
+        local req="User-Name = \"$u\"
+Acct-Session-Id = \"$sid\""
+        [ -z "$ip" ] || req+=$'\n'"Framed-IP-Address = $ip"
+        [ -z "$mac" ] || req+=$'\n'"Calling-Station-Id = \"$mac\""
+        if printf '%s\n' "$req" | radclient -x -r 1 -t 3 "$target:3799" disconnect "$secret" 2>&1 | grep -q 'Disconnect-ACK'; then
+            n=$((n+1))
+        else
+            echo "  ! router $target did not confirm the disconnect (session $sid) — enable /radius incoming accept=yes" >&2
+        fi
+    done <<<"$rows"
+    [ "$n" = 0 ] || ok "Disconnected $n session(s) of '$u'"
+}
+
+cmd_kick() {
+    local u=${1:-}; [ -n "$u" ] || die "usage: radius-admin kick USER|MAC"
+    [[ $u =~ ^[0-9A-Fa-f:.-]{12,17}$ ]] && [[ ${u//[-:.]/} =~ ^[0-9A-Fa-f]{12}$ ]] && u=$(norm_mac "$u")
+    valid_name "$u" username
+    kick_user "$u"
+}
+
+# Blocked-site report from the routers' firewall log (webfilter-logging.rsc → rsyslog on this server).
+WF_LOG=/var/log/mikrotik/webfilter.log
+cmd_blocked() {
+    local n=30 user=""
+    while [ $# -gt 0 ]; do
+        case $1 in
+            -u|--user) user=${2:-}; valid_name "$user" username; shift 2 ;;
+            *) valid_int "$1" count; n=$1; shift ;;
+        esac
+    done
+    [ -r "$WF_LOG" ] || die "No log yet ($WF_LOG). Import mikrotik/webfilter-logging.rsc on the router."
+    local sessions; sessions=$(mktemp); trap 'rm -f "$sessions"' RETURN
+    echo "SELECT username, IFNULL(framedipaddress,''), IFNULL(callingstationid,''),
+                 UNIX_TIMESTAMP(acctstarttime), UNIX_TIMESTAMP(IFNULL(acctstoptime, NOW() + INTERVAL 1 DAY))
+          FROM radacct WHERE acctstarttime >= NOW() - INTERVAL 8 DAY" | db > "$sessions"
+    tail -n 20000 "$WF_LOG" | python3 -I /usr/local/lib/mikrotiklover/wf-report.py "$sessions" "$n" "$user"
 }
 
 cmd_online() {
@@ -398,6 +498,13 @@ Groups (speed limit, VLAN, timeouts, devices per user)
                  [--address-list web-filter-exempt]   (hotspot: user's IP joins this list)
   group del NAME | group show NAME | group list
 
+Policies / blocking (per user, group, IP range — see webfilter/policies/)
+  user policy NAME POLICY|-            this user only (overrides group); kicks to apply
+  group add NAME --policy POLICY       whole group
+  kick USER|MAC                        disconnect now (re-login applies changes)
+  blocked [N] [-u USER]                who tried to open blocked sites (router log)
+  IP range / single device: on the router — see README "Policies"
+
 MAC authentication (devices without username/password: printers, CCTV, TVs, POS)
   mac add MAC [-g GROUP] [-d "Reception printer"]   any format: aa:bb:.., AABB.CCDD.EEFF
   mac del|disable|enable MAC | mac group MAC GROUP|- | mac list
@@ -423,6 +530,9 @@ case ${1:-help} in
     group)   shift; cmd_group "$@" ;;
     nas)     shift; cmd_nas "$@" ;;
     mac)     shift; cmd_mac "$@" ;;
+    kick)    shift; cmd_kick "$@" ;;
+    blocked) shift; cmd_blocked "$@" ;;
+    syslog-sync) syslog_sync ;;
     online)  cmd_online ;;
     log)     shift; cmd_log "$@" ;;
     usage)   shift; cmd_usage "$@" ;;

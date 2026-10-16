@@ -36,7 +36,7 @@ command -v apt-get >/dev/null || die "Only Debian/Ubuntu are supported"
 log "Installing FreeRADIUS + MariaDB"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq freeradius freeradius-mysql freeradius-utils mariadb-server openssl >/dev/null
+apt-get install -y -qq freeradius freeradius-mysql freeradius-utils mariadb-server openssl rsyslog python3 >/dev/null
 # eapol_test lets "radius-admin test --peap" simulate a real Wi-Fi client (optional package)
 apt-get install -y -qq eapoltest >/dev/null 2>&1 || warn "eapoltest not available; PEAP self-test disabled"
 [ -d "$RADDB" ] || die "$RADDB not found — unexpected FreeRADIUS layout"
@@ -185,6 +185,29 @@ grep -q "$LOCAL_SECRET" "$RADDB/clients.conf" || warn "Could not set the localho
 
 # ---------------------------------------------------------------- admin tool
 install -m 750 "$SCRIPT_DIR/radius-admin" /usr/local/sbin/radius-admin
+install -d -m 755 /usr/local/lib/mikrotiklover
+install -m 644 "$SCRIPT_DIR/tools/wf-report.py" /usr/local/lib/mikrotiklover/wf-report.py
+
+# ---------------------------------------------------------------- router logs (blocked-site report)
+log "Configuring rsyslog for router web-filter logs (UDP 514)"
+# Ubuntu's rsyslog drops privileges to user "syslog"; Debian's runs as root.
+if id syslog >/dev/null 2>&1; then install -d -m 750 -o syslog -g adm /var/log/mikrotik
+else install -d -m 750 -o root -g adm /var/log/mikrotik; fi
+cat > /etc/logrotate.d/mikrotiklover-webfilter <<'EOF'
+/var/log/mikrotik/webfilter.log {
+    weekly
+    rotate 8
+    compress
+    missingok
+    notifempty
+    postrotate
+        /usr/lib/rsyslog/rsyslog-rotate 2>/dev/null || true
+    endscript
+}
+EOF
+svc enable rsyslog >/dev/null 2>&1 || true
+svc start rsyslog >/dev/null 2>&1 || true
+/usr/local/sbin/radius-admin syslog-sync
 
 # ---------------------------------------------------------------- start
 log "Checking configuration"
@@ -196,7 +219,7 @@ cat <<EOF
 
 $(printf '\033[1;32m')RADIUS server is ready.$(printf '\033[0m')
 
-  Ports            : 1812/udp (auth), 1813/udp (accounting) — open them in your firewall
+  Ports            : 1812/udp (auth), 1813/udp (accounting), 514/udp (router logs) — open them
                      for your MikroTik IPs only (see README.md).
   Settings         : $CONF_FILE
   CA certificate   : $CERT_DIR/ca.pem  (ca.der for Windows/Android)
