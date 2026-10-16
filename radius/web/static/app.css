@@ -186,3 +186,27 @@ a.btn { text-decoration: none; }
 .applist details[open] { padding-bottom: 14px; }
 .applist details .toolbar { margin: 10px 0; }
 .applist .table-wrap { margin: 0 -12px -14px; }
+
+/* blocking editor */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; font-size: 13px; cursor: pointer; background: var(--panel); user-select: none; }
+.chip input { margin: 0; }
+.chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.chip small { color: var(--muted); }
+.checks { display: grid; gap: 8px; }
+.check { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
+.check.on { border-color: var(--accent); background: var(--accent-soft); }
+.check b { display: block; font-size: 13px; }
+.check span { color: var(--muted); font-size: 12px; }
+.applist-scroll { max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; padding: 8px; }
+.applist-scroll h4 { margin: 8px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.code-box { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; margin: 0; }
+.steps { display: grid; gap: 10px; counter-reset: step; }
+.steps > div { display: flex; gap: 12px; align-items: flex-start; }
+.steps > div::before { counter-increment: step; content: counter(step); flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 13px; }
+.policy-card .rules { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+dialog:has(.policy-editor) { width: min(780px, calc(100vw - 32px)); }
+.policy-editor { min-width: 0; }
+.policy-editor .checks { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+[hidden] { display: none !important; }
+.check input { flex: none; width: 16px; height: 16px; margin-top: 2px; }

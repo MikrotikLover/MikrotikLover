@@ -1,0 +1,2 @@
+# No VPN: VPN apps, websites, servers and protocols blocked (and logged); everything else works
+block-vpn

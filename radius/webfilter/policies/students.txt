@@ -2,7 +2,7 @@
 block social
 block video-streaming
 block gaming
-block vpn-proxy
+block-vpn
 block torrent-piracy
 block keywords
 dns cleanbrowsing-family

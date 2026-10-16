@@ -41,6 +41,8 @@ const ICONS = {
   money: "M3 6h18v12H3zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6M6 9v.01M18 15v.01",
   print: "M6 9V3h12v6M6 18H4v-7h16v7h-2M7 14h10v7H7z",
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14m10 3-5.2-5.2",
+  block: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M5.6 5.6l12.8 12.8",
+  vpn: "M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6zM9 12l2 2 4-4",
   apps: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
   ports: "M7 7h10v10H7zM3 9h4M3 15h4M17 9h4M17 15h4M9 3v4M15 3v4M9 17v4M15 17v4",
   plus: "M12 5v14M5 12h14",
@@ -202,7 +204,8 @@ const NAV = [
   ["macs", "MAC devices", "mac"], ["routers", "Routers", "router"], "-",
   ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
-  ["data", "Data usage", "data"], ["apps", "Apps on network", "apps"], ["ports", "Ports & protocols", "ports"], "-", ["settings", "Settings", "settings"],
+  ["data", "Data usage", "data"], ["apps", "Apps on network", "apps"], ["ports", "Ports & protocols", "ports"], "-",
+  ["blocking", "Blocking", "block"], ["vpn", "VPN watch", "vpn"], "-", ["settings", "Settings", "settings"],
 ];
 
 function shell(title, content, actions) {
@@ -450,7 +453,7 @@ ROUTES.groups = async () => {
 ROUTES.macs = async () => {
   const [{ macs }, { groups }] = await Promise.all([api("GET", "/api/macs"), api("GET", "/api/groups")]);
   const add = () => {
-    const form = h("form", { class: "form", onsubmit: (e) => e.preventDefault() },
+    const form = h("form", { class: "form policy-editor", onsubmit: (e) => e.preventDefault() },
       h("label", { class: "field" }, "MAC address", h("span", { class: "help" }, "Any format: aa:bb:cc:dd:ee:ff, AABB.CCDD.EEFF"), h("input", { name: "mac", required: true, placeholder: "aa:bb:cc:dd:ee:ff" })),
       h("label", { class: "field" }, "Description", h("input", { name: "description", maxlength: 128, placeholder: "Reception printer" })),
       h("label", { class: "field" }, "Group", h("select", { name: "group" }, h("option", { value: "" }, "— none —"), groups.map((g) => h("option", { value: g.name }, g.name)))));
@@ -480,7 +483,7 @@ ROUTES.macs = async () => {
 ROUTES.routers = async () => {
   const { nas } = await api("GET", "/api/nas");
   const add = () => {
-    const form = h("form", { class: "form", onsubmit: (e) => e.preventDefault() },
+    const form = h("form", { class: "form policy-editor", onsubmit: (e) => e.preventDefault() },
       h("label", { class: "field" }, "Router IP", h("span", { class: "help" }, "The address RADIUS packets come from (public IP behind NAT, or the WireGuard IP). A subnet like 10.10.0.0/24 is allowed."),
         h("input", { name: "ip", required: true, placeholder: "192.168.88.1" })),
       h("label", { class: "field" }, "Name", h("input", { name: "name", placeholder: "office-hap" })),
@@ -1004,6 +1007,217 @@ ROUTES.cdn = async (initial) => {
   loadUnknown().catch(() => unknown.replaceChildren(h("div", { class: "empty" }, "No traffic data.")));
   loadApps().catch((e) => appsBox.replaceChildren(h("div", { class: "note" }, e.message)));
   if (initial) await check(initial);
+};
+
+// ------------------------------------------------------------------ blocking: policies (what is blocked, for whom) + router sync
+const DAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+function timeSpec(t) {             // {from, to, days} -> RouterOS time= value
+  const f = Number(t.from), e = Number(t.to);
+  return `${f ? f + "h" : "0s"}-${e >= 24 ? "23h59m59s" : e + "h"},${t.days.join(",")}`;
+}
+function parseTime(s) {            // "9h-17h,mon,tue" | "0s-6h,..." | "8h-23h59m59s,..." -> {from, to, days}
+  const m = /^(\d+)[hs]-(\d+)h(59m59s)?,([a-z,]+)$/.exec(s || "");
+  return m ? { from: Number(m[1]), to: m[3] ? 24 : Number(m[2]), days: m[4].split(",") } : null;
+}
+function ruleLabel(r) {
+  const t = r.time ? ` (${r.time.replace(/,.*$/, "").replace("0s", "0h").replace("23h59m59s", "24h")})` : "";
+  switch (r.kind) {
+    case "block": return badge(`${r.value === "keywords" ? "adult words" : r.value}${t}`, "bad");
+    case "block-app": return badge(`app: ${r.value}${t}`, "bad");
+    case "block-vpn": return badge(`VPN blocked${t}`, "bad");
+    case "allow-only": return badge(`ONLY ${r.value}`, "warn");
+    case "block-all": return badge(`no internet${t}`, "bad");
+    case "dns": return badge(`DNS: ${r.value}`, "info");
+    case "strict-ech": return badge("ECH blocked", "info");
+    default: return badge(`${r.kind} ${r.value}`);
+  }
+}
+
+function policyEditor(meta, pol) {
+  const rules = pol ? pol.rules : [];
+  const has = (kind, value) => rules.some((r) => r.kind === kind && (value === undefined || r.value === value));
+  const firstTime = rules.find((r) => r.time)?.time || "";
+  const t0 = parseTime(firstTime) || { from: 9, to: 17, days: DAY_NAMES.slice(0, 6) };
+  const name = h("input", { name: "name", required: true, pattern: "[a-z0-9\\-]{1,40}", placeholder: "e.g. kids", value: pol?.name || "", disabled: !!pol });
+  const desc = h("input", { placeholder: "e.g. Kids: no TikTok, no YouTube videos", value: pol?.description || "" });
+  const mode = has("allow-only") ? "only" : has("block-all") && !firstTime ? "none" : "block";
+  const modeSel = h("select", {}, [["block", "Block what I choose (the rest works)"], ["only", "WhatsApp ONLY (everything else blocked)"], ["none", "No internet at all"]]
+    .map(([v, l]) => h("option", { value: v, selected: v === mode }, l)));
+  const check = (title, help, on) => {
+    const cb = h("input", { type: "checkbox", checked: on });
+    const el = h("label", { class: "check" + (on ? " on" : "") }, cb, h("div", {}, h("b", {}, title), h("span", {}, help)));
+    cb.addEventListener("change", () => { el.classList.toggle("on", cb.checked); preview(); });
+    el.cb = cb; return el;
+  };
+  const cats = meta.categories.map((c) => Object.assign(check(c.name === "keywords" ? "Adult words" : c.name, c.description, has("block", c.name)), { value: c.name }));
+  const vpn = check("Block VPN", "VPN apps and websites, the VPN servers seen on your network (list grows by itself), OpenVPN / WireGuard / IPsec / PPTP / Tor. Every try is logged → VPN watch.", has("block-vpn"));
+  const appChosen = new Set(rules.filter((r) => r.kind === "block-app").map((r) => r.value));
+  const appSearch = h("input", { type: "search", placeholder: "Search apps: pubg, tiktok, snapchat, netflix …" });
+  const appBox = h("div", { class: "applist-scroll" });
+  const chosenBox = h("div", { class: "chips" });
+  const drawApps = () => {
+    const qy = appSearch.value.trim().toLowerCase();
+    const groups = new Map();
+    meta.apps.filter((a) => !qy || a.app.toLowerCase().includes(qy) || a.category.includes(qy)).forEach((a) => {
+      if (!groups.has(a.category)) groups.set(a.category, []);
+      groups.get(a.category).push(a);
+    });
+    appBox.replaceChildren(...[...groups].map(([cat, list]) => [h("h4", {}, cat), h("div", { class: "chips" }, list.map((a) => {
+      const cb = h("input", { type: "checkbox", checked: appChosen.has(a.app) });
+      const chip = h("label", { class: "chip" + (appChosen.has(a.app) ? " on" : "") }, cb, a.app, a.discovered ? h("small", {}, "new") : null);
+      cb.addEventListener("change", () => { cb.checked ? appChosen.add(a.app) : appChosen.delete(a.app); chip.classList.toggle("on", cb.checked); drawChosen(); preview(); });
+      return chip;
+    }))]).flat());
+    if (!appBox.children.length) appBox.append(h("div", { class: "muted" }, "No app with that name."));
+  };
+  const drawChosen = () => chosenBox.replaceChildren(...(appChosen.size ? [...appChosen].map((a) => badge(a, "bad")) : [h("span", { class: "muted" }, "No single apps chosen.")]));
+  appSearch.addEventListener("input", drawApps);
+  const whenSel = h("select", {}, h("option", { value: "always", selected: !firstTime }, "Always"), h("option", { value: "time", selected: !!firstTime }, "Only at these times"));
+  const hours = (v) => Array.from({ length: 25 }, (_, i) => h("option", { value: i, selected: i === v }, `${String(i).padStart(2, "0")}:00`));
+  const from = h("select", {}, hours(t0.from)), to = h("select", {}, hours(t0.to));
+  const days = DAY_NAMES.map((d) => { const cb = h("input", { type: "checkbox", checked: t0.days.includes(d) }); cb.addEventListener("change", preview); return h("label", { class: "chip" }, cb, d); });
+  const timeRow = h("div", { class: "toolbar" }, from, "→", to, h("div", { class: "chips" }, days));
+  const dnsSel = h("select", {}, [["router", "Router DNS (normal)"], ["family", "Cloudflare Family (no adult)"], ["adguard-family", "AdGuard Family"], ["cleanbrowsing-family", "CleanBrowsing Family"], ["cleanbrowsing-adult", "CleanBrowsing Adult filter"]]
+    .map(([v, l]) => h("option", { value: v, selected: (rules.find((r) => r.kind === "dns")?.value || "router") === v }, l)));
+  const ech = check("Block hidden site names (ECH)", "Stops browsers from hiding the site name; a few Cloudflare sites may not open.", has("strict-ech"));
+  const out = h("pre", { class: "code-box" });
+  const blockSection = h("div", { class: "stack" },
+    h("label", { class: "field" }, "Categories", h("span", { class: "help" }, "Whole groups of sites and apps. Lists are kept up to date on the server."), h("div", { class: "checks" }, cats)),
+    vpn,
+    h("label", { class: "field" }, "Single apps", h("span", { class: "help" }, "Every known domain of the app is blocked, the ones learned on your network too. \"new\" = discovered automatically."), appSearch, appBox, chosenBox),
+    h("label", { class: "field" }, "When", whenSel, timeRow),
+    h("label", { class: "field" }, "DNS for these users", dnsSel), ech);
+  function text() {
+    const tm = whenSel.value === "time" ? ` time=${timeSpec({ from: from.value, to: to.value, days: days.filter((d) => d.querySelector("input").checked).map((d) => d.textContent) })}` : "";
+    const lines = [`# ${desc.value.trim() || name.value || "policy"}`];
+    if (modeSel.value === "only") lines.push("allow-only whatsapp");
+    else if (modeSel.value === "none") lines.push("block-all");
+    else {
+      cats.filter((c) => c.cb.checked).forEach((c) => lines.push(`block ${c.value}${tm}`));
+      [...appChosen].forEach((a) => lines.push(`block-app ${a}${tm}`));
+      if (vpn.cb.checked) lines.push(`block-vpn${tm}`);
+      if (dnsSel.value !== "router") lines.push(`dns ${dnsSel.value}`);
+      if (ech.cb.checked) lines.push("strict-ech");
+    }
+    return lines.join("\n") + "\n";
+  }
+  function preview() {
+    blockSection.hidden = modeSel.value !== "block";
+    timeRow.hidden = whenSel.value !== "time";
+    out.textContent = text();
+  }
+  [modeSel, whenSel, from, to, dnsSel].forEach((el) => el.addEventListener("change", preview));
+  [desc, name].forEach((el) => el.addEventListener("input", preview));
+  drawApps(); drawChosen(); preview();
+  const onlyNote = h("div", { class: "note", hidden: modeSel.value !== "only" }, "WhatsApp only: chat, voice/video calls, photos and status work. Facebook, Instagram, YouTube, browsers and every other app are blocked.");
+  const form = h("form", { class: "form policy-editor", onsubmit: (e) => e.preventDefault() },
+    h("div", { class: "form cols" }, h("label", { class: "field" }, "Policy name", h("span", { class: "help" }, "small letters, digits, -"), name),
+      h("label", { class: "field" }, "Description", h("span", { class: "help" }, "shown when you pick a policy"), desc)),
+    h("label", { class: "field" }, "What should these users get?", modeSel),
+    onlyNote,
+    blockSection,
+    h("label", { class: "field" }, "Policy file (what the server stores)", out));
+  modeSel.addEventListener("change", () => { onlyNote.hidden = modeSel.value !== "only"; });
+  return { form, text, name: () => name.value.trim() };
+}
+
+ROUTES.blocking = async () => {
+  const [meta, ul] = await Promise.all([api("GET", "/api/blocking"), api("GET", "/api/users")]);
+  const r = meta.router;
+  const openEditor = (pol) => {
+    const ed = policyEditor(meta, pol);
+    dialog(pol ? `Edit policy ${pol.name}` : "New blocking policy", ed.form, [{ label: "Cancel" }, { label: "Save policy", class: "primary", action: async () => {
+      if (!ed.form.reportValidity()) return false;
+      const res = await act(api("POST", "/api/policies", { name: ed.name(), text: ed.text() }));
+      if (!res) return false;
+      route();
+    } }]);
+  };
+  const policySel = (id) => h("select", { id }, meta.policies.map((p) => h("option", { value: p.name }, `${p.name} — ${p.description}`)));
+  const userIn = h("input", { list: "bl-users", placeholder: "User name", autocomplete: "off" });
+  const userPol = policySel("bl-upol"), groupPol = policySel("bl-gpol");
+  const groupSel = h("select", {}, h("option", { value: "" }, "— group —"));
+  api("GET", "/api/groups").then((g) => g.groups.forEach((x) => groupSel.append(h("option", { value: x.name }, x.name)))).catch(() => {});
+  const cards = meta.policies.map((p) => h("div", { class: "card policy-card" },
+    h("h2", {}, h("span", {}, p.name), h("span", { class: "sub" }, `${p.users.length} user(s), ${p.groups.length} group(s)`)),
+    h("div", { class: "muted" }, p.description),
+    h("div", { class: "rules" }, p.rules.map(ruleLabel)),
+    p.users.length || p.groups.length ? h("div", { class: "muted" }, "Used by: ", [...p.users, ...p.groups.map((g) => `${g} (group)`)].join(", ")) : null,
+    isAdmin() ? h("div", { class: "toolbar" }, h("button", { class: "small", onclick: () => openEditor(p) }, "Edit"),
+      h("button", { class: "small", onclick: async () => { if (await confirmDlg("Delete policy", `Delete policy "${p.name}"?`)) { await act(api("DELETE", `/api/policies/${encodeURIComponent(p.name)}`)); route(); } } }, "Delete")) : null));
+  const script = h("pre", { class: "code-box" }, `# Router auto-sync (every 15 min, only when something changed)
+# Dashboard → "Download router script", then on the router:
+#   Files → upload mikrotiklover-autosync.rsc   →   Terminal:  /import mikrotiklover-autosync.rsc
+# Server: ${r.url}   version ${r.version || "—"}   built ${r.built || "—"}`);
+  const ipIn = h("input", { placeholder: "server IP as the router sees it", value: /^\d+\.\d+\.\d+\.\d+$/.test(location.hostname) ? location.hostname : "" });
+  shell("Blocking", h("div", { class: "stack" },
+    card("How to block apps or websites for a user", null, h("div", { class: "steps" },
+      h("div", {}, h("span", {}, h("b", {}, "Make a policy"), " — tick categories, single apps (TikTok, PUBG …), Block VPN, or choose WhatsApp ONLY. Ready-made ones are below.")),
+      h("div", {}, h("span", {}, h("b", {}, "Give it to a user or a group"), " — box below, or Users → user → Own web-filter policy. The user is disconnected once and gets it at the next login.")),
+      h("div", {}, h("span", {}, h("b", {}, "Router auto-sync"), " — import the router script once; afterwards every change reaches the router by itself within 15 minutes.")))),
+    isAdmin() ? h("div", { class: "grid g-2" },
+      card("Give a policy to a user", null, h("div", { class: "toolbar" }, userIn, h("datalist", { id: "bl-users" }, ul.users.map((u) => h("option", { value: u.username }))), userPol,
+        h("button", { class: "primary", onclick: async () => {
+          if (!userIn.value.trim()) return toast("Type a user name", true);
+          await act(api("POST", `/api/users/${encodeURIComponent(userIn.value.trim())}/policy`, { policy: userPol.value })); route();
+        } }, "Apply"))),
+      card("Give a policy to a whole group", null, h("div", { class: "toolbar" }, groupSel, groupPol,
+        h("button", { class: "primary", onclick: async () => {
+          if (!groupSel.value) return toast("Choose a group", true);
+          await act(api("POST", "/api/groups", { name: groupSel.value, policy: groupPol.value, edit: true })); route();
+        } }, "Apply")))) : null,
+    card("Policies", `${meta.policies.length}`, isAdmin() ? h("div", { class: "toolbar" }, h("button", { class: "primary", onclick: () => openEditor(null) }, "+ New policy")) : null),
+    h("div", { class: "grid g-2" }, cards),
+    card("Router auto-sync", r.version ? `version ${r.version} · built ${r.built} · ${num(r.vpn_servers)} VPN servers` : "not built yet",
+      script,
+      isAdmin() ? h("div", { class: "toolbar" }, ipIn,
+        h("button", { onclick: () => { if (!/^\d+\.\d+\.\d+\.\d+$/.test(ipIn.value.trim())) return toast("Type the server's IP address", true); location.href = `/api/router/autosync.rsc?ip=${encodeURIComponent(ipIn.value.trim())}`; } }, "⬇ Download router script"),
+        h("button", { onclick: async () => { await act(api("POST", "/api/router/build")); route(); } }, "Rebuild now")) : null),
+  ));
+};
+
+// ------------------------------------------------------------------ VPN watch: who tries a VPN + the automatic VPN lists
+ROUTES.vpn = async (tab = "users") => {
+  const tabs = [["users", "Who tried"], ["attempts", "All attempts"], ["servers", "VPN servers (auto list)"], ["names", "VPN names (auto list)"], ["howto", "How to block"]];
+  const days = h("select", {}, [["1", "Today"], ["7", "7 days"], ["30", "30 days"], ["90", "90 days"]].map(([v, l]) => h("option", { value: v, selected: v === "7" }, l)));
+  const user = h("input", { type: "search", placeholder: "User" });
+  const holder = h("div", { class: "stack" });
+  const src = { dns: ["DNS", "info"], blocked: ["router blocked", "ok"], flow: ["traffic", "warn"] };
+  const srcBadges = (s) => h("span", { class: "chips" }, String(s || "").split(",").filter(Boolean).map((x) => badge(...(src[x] || [x]))));
+  const who = (r) => h("span", {}, r.username ? h("a", { href: `#/users/${encodeURIComponent(r.username)}` }, r.username) : h("span", { class: "muted" }, "(no login)"), h("div", { class: "muted" }, r.client_ip || r.devices || ""));
+  const notVpn = (nm) => isAdmin() ? h("button", { class: "small", title: "e.g. your office VPN — never list or block it", onclick: async () => {
+    if (await confirmDlg("Not a VPN", `Remove ${nm} from the VPN lists and never block it?`, "Not a VPN", false)) { await act(api("POST", "/api/vpn/ignore", { name: nm })); load(); }
+  } }, "Not a VPN") : null;
+  const load = async () => {
+    const d = await api("GET", `/api/vpn?${new URLSearchParams({ days: days.value, user: user.value.trim(), top: 500 })}`);
+    const t = d.totals;
+    const tiles = h("div", { class: "grid g-tiles" }, tile("Users who tried a VPN", num(t.users)), tile("Tries", num(t.tries), `${num(t.blocked)} blocked by the router`),
+      tile("VPN servers known", num(t.servers), "grows by itself"), tile("VPN names known", num(t.domains), "apps & websites"));
+    let body;
+    if (tab === "users") body = table([{ label: "User", render: who }, { label: "VPN", key: "vpns", wrap: true }, { label: "Tries", key: "tries", num: true },
+      { label: "Result", render: (r) => Number(r.connected) ? badge("maybe connected", "bad") : Number(r.blocked) ? badge("blocked", "ok") : badge("seen", "warn") },
+      { label: "First / last", render: (r) => h("span", {}, String(r.first).slice(5, 16), h("div", { class: "muted" }, String(r.last).slice(5, 16))) }], d.users, "Nobody tried a VPN in this period.");
+    else if (tab === "attempts") body = table([{ label: "Last", render: (r) => String(r.last).slice(5, 16) }, { label: "User", render: who }, { label: "VPN", key: "kind" },
+      { label: "What", render: (r) => h("code", {}, r.what), wrap: true }, { label: "Seen by", render: (r) => srcBadges(r.sources) }, { label: "Tries", key: "tries", num: true },
+      { label: "Data", num: true, render: (r) => Number(r.bytes) ? bytes(r.bytes) : "—" }], d.attempts, "No VPN attempts in this period.");
+    else if (tab === "servers") body = [h("div", { class: "note" }, "Every VPN server IP seen on your network: from VPN app names in DNS, VPN protocols in traffic, and connections the router blocked. The router gets this list (address list vpn-servers) through auto-sync; policies with \"Block VPN\" block it. Shared CDN / big-company IPs are never added."),
+      table([{ label: "IP", render: (r) => h("code", {}, r.ip) }, { label: "VPN", key: "kind" }, { label: "Found by", key: "why", wrap: true },
+        { label: "First / last seen", render: (r) => h("span", {}, String(r.first_seen).slice(0, 16), h("div", { class: "muted" }, String(r.last_seen).slice(0, 16))) }, { label: "", render: (r) => notVpn(r.ip) }], d.servers, "No VPN server seen yet.")];
+    else if (tab === "names") body = table([{ label: "Name", render: (r) => h("code", {}, r.domain) }, { label: "VPN", key: "kind" }, { label: "Why", key: "why" },
+      { label: "First / last seen", render: (r) => h("span", {}, String(r.first_seen).slice(0, 16), h("div", { class: "muted" }, String(r.last_seen).slice(0, 16))) }, { label: "", render: (r) => notVpn(r.domain) }], d.domains, "No VPN name seen yet.");
+    else body = h("div", { class: "steps" },
+      h("div", {}, h("span", {}, h("b", {}, "Blocking → policy with \"Block VPN\""), " — the ready-made ", h("code", {}, "no-vpn"), " policy, or tick Block VPN in any policy (students and guests already have it).")),
+      h("div", {}, h("span", {}, h("b", {}, "Give it to users or groups"), " — Blocking → \"Give a policy to a user / group\". For everyone: give the policy to every group, or import ", h("code", {}, "webfilter-vpn-protocols.rsc"), " on the router (protocols only).")),
+      h("div", {}, h("span", {}, h("b", {}, "Router auto-sync"), " — keeps the router's VPN server list and VPN names up to date every 15 minutes.")),
+      h("div", {}, h("span", {}, h("b", {}, "Watch this page"), " — every try is listed here: who, which VPN, and whether the router blocked it. \"maybe connected\" = a VPN connection moved data (no blocking policy on that user yet).")));
+    holder.replaceChildren(tiles, h("div", { class: "card" }, body));
+  };
+  shell("VPN watch", h("div", { class: "stack" },
+    h("div", { class: "tabs" }, tabs.map(([k, l]) => h("a", { href: `#/vpn/${k}`, class: k === tab ? "active" : "" }, l))),
+    card(null, null, h("div", { class: "toolbar" }, days, user, h("button", { class: "primary", onclick: () => load().catch((e) => toast(e.message, true)) }, "Show"),
+      isAdmin() ? h("button", { onclick: async () => { await act(api("POST", "/api/vpn/scan")); load(); } }, "Scan logs now") : null)),
+    holder));
+  await load();
 };
 
 // ------------------------------------------------------------------ apps on the network (automatic list)

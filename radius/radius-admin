@@ -175,7 +175,7 @@ cmd_user() {
             echo "DELETE FROM radreply WHERE username=$(q "$u") AND attribute='Mikrotik-Address-List';" | db
             ok "User '$u' now follows the group policy"
         else
-            valid_policy "$p"
+            valid_policy "$p"; policy_exists "$p" || die "No policy '$p' (radius-admin policy list)"
             echo "START TRANSACTION; DELETE FROM radreply WHERE username=$(q "$u") AND attribute='Mikrotik-Address-List';
                   INSERT INTO radreply (username,attribute,op,value) VALUES ($(q "$u"),'Mikrotik-Address-List',':=',$(q "policy-$p")); COMMIT;" | db
             ok "User '$u' → policy '$p' (overrides the group policy)"
@@ -276,7 +276,7 @@ cmd_group() {
                 sql+="DELETE FROM radgroupreply WHERE groupname=$(q "$g") AND attribute='$a';
                       INSERT INTO radgroupreply (groupname,attribute,op,value) VALUES ($(q "$g"),'$a',':=','$v');" ;;
             --address-list|--policy)
-                if [ "$1" = --policy ]; then valid_policy "$v"; v="policy-$v"; else valid_name "$v" "address list"; fi
+                if [ "$1" = --policy ]; then valid_policy "$v"; policy_exists "$v" || die "No policy '$v'"; v="policy-$v"; else valid_name "$v" "address list"; fi
                 # "=" (not ":="): a per-user policy (radius-admin user policy) takes precedence.
                 sql+="DELETE FROM radgroupreply WHERE groupname=$(q "$g") AND attribute='Mikrotik-Address-List';
                       INSERT INTO radgroupreply (groupname,attribute,op,value) VALUES ($(q "$g"),'Mikrotik-Address-List','=',$(q "$v"));" ;;
@@ -1078,6 +1078,164 @@ cmd_apps() {
     esac
 }
 
+# ---------------------------------------------------------------- web-filter policies + router sync
+POLICY_DIR=/var/lib/mikrotiklover/policies
+ROUTER_DIR=/var/lib/mikrotiklover/router
+WF_DIR=/usr/local/lib/mikrotiklover/webfilter
+
+policy_exists() { [ -f "$POLICY_DIR/$1.txt" ]; }
+policy_users() { # number of users + groups that use policy $1
+    echo "SELECT (SELECT COUNT(*) FROM radreply WHERE attribute='Mikrotik-Address-List' AND value=$(q "policy-$1"))
+               + (SELECT COUNT(*) FROM radgroupreply WHERE attribute='Mikrotik-Address-List' AND value=$(q "policy-$1"))" | db
+}
+router_key_perms() {
+    chmod 640 "$ROUTER_DIR/key"
+    chgrp "$(id -gn mlweb 2>/dev/null || echo root)" "$ROUTER_DIR/key" 2>/dev/null || true
+}
+
+cmd_policy() {
+    local sub=${1:-list}; shift || true
+    case $sub in
+    list|ls)
+        local f n groups
+        for f in "$POLICY_DIR"/*.txt; do
+            [ -f "$f" ] || continue
+            n=$(basename "$f" .txt); [ "$n" = README ] && continue
+            groups=$(echo "SELECT COALESCE(GROUP_CONCAT(groupname),'') FROM radgroupreply WHERE attribute='Mikrotik-Address-List' AND value=$(q "policy-$n")" | db)
+            printf '%-18s %s\n' "$n" "$(head -1 "$f" | sed 's/^# *//')"
+            printf '%-18s %s\n' "" "$(grep -v '^[[:space:]]*#' "$f" | grep . | paste -sd ';' | sed 's/;/; /g')"
+            printf '%-18s used by %s user(s)/group(s)   groups: %s\n' "" "$(policy_users "$n")" "${groups:--}"
+        done ;;
+    show)
+        local n=${1:-}; valid_policy "$n"; policy_exists "$n" || die "No policy '$n'"
+        cat "$POLICY_DIR/$n.txt" ;;
+    set)
+        # radius-admin policy set NAME < file   (first line "# description", then directives)
+        local n=${1:-}; valid_policy "$n"
+        [ ! -t 0 ] || die "usage: radius-admin policy set NAME < policy.txt"
+        install -d -m 755 "$POLICY_DIR"
+        local new old out
+        new=$(head -c 20000)
+        grep -qv '^[[:space:]]*\(#.*\)\?$' <<<"$new" || die "The policy has no rules"
+        ! LC_ALL=C grep -q '[^[:print:][:space:]]' <<<"$new" || die "Only plain text"
+        old=""; policy_exists "$n" && old=$(cat "$POLICY_DIR/$n.txt")
+        printf '%s\n' "$new" > "$POLICY_DIR/$n.txt"; chmod 644 "$POLICY_DIR/$n.txt"
+        if ! out=$(cmd_policy build 2>&1); then
+            if [ -n "$old" ]; then printf '%s\n' "$old" > "$POLICY_DIR/$n.txt"; else rm -f "${POLICY_DIR:?}/${n:?}.txt"; fi
+            cmd_policy build >/dev/null 2>&1 || true
+            die "$(grep -o 'build.sh: .*' <<<"$out" | tail -1 | sed 's/^build.sh: //')"
+        fi
+        ok "Policy '$n' saved; router rules rebuilt (routers with auto-sync pick it up within 15 minutes)" ;;
+    del|delete|rm)
+        local n=${1:-}; valid_policy "$n"; policy_exists "$n" || die "No policy '$n'"
+        local used; used=$(policy_users "$n")
+        [ "$used" = 0 ] || die "Policy '$n' is still used by $used user(s)/group(s) — change them first"
+        rm -f "${POLICY_DIR:?}/${n:?}.txt"
+        cmd_policy build >/dev/null
+        ok "Policy '$n' deleted" ;;
+    build)
+        install -d -m 755 "$ROUTER_DIR" "$POLICY_DIR"
+        local lists; lists=$(mktemp -d)
+        { echo "SELECT domain FROM ml_vpn_domain ORDER BY domain" | db 2>/dev/null || true; } | grep -E '^[a-z0-9.-]+$' > "$lists/vpn-domains.txt" || true
+        if ! WF_OUT="$lists" POLICY_DIR="$POLICY_DIR" VPN_DOMAINS="$lists/vpn-domains.txt" CDNMAP=/usr/local/lib/mikrotiklover/cdnmap.py \
+               bash "$WF_DIR/build.sh" 2>"$lists/build.log"; then
+            cat "$lists/build.log" >&2; rm -rf "${lists:?}"; die "router rules not built"
+        fi
+        {
+            echo "# VPN servers seen on this network$( [ -f /var/lib/mikrotiklover/vpn-public.txt ] && echo ' + public VPN/Tor lists') — radius-admin vpn servers"
+            echo "/ip firewall address-list"
+            echo "remove [find list=vpn-servers]"
+            { echo "SELECT ip, kind FROM ml_vpn_server WHERE ip REGEXP '^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+\$' ORDER BY ip" | db 2>/dev/null || true
+              [ ! -f /var/lib/mikrotiklover/vpn-public.txt ] || cat /var/lib/mikrotiklover/vpn-public.txt
+            } | awk -F'\t' '$1 ~ /^[0-9.]+(\/[0-9]+)?$/ && !seen[$1]++ { gsub(/["\\$]/, "", $2); printf "add list=vpn-servers address=%s comment=\"mlsync: %s\"\n", $1, substr($2, 1, 60) }'
+        } > "$lists/vpn-servers.rsc"
+        {
+            echo "# MikrotikLover router sync — generated by radius-admin policy build. Do not edit on the router."
+            cat "$lists/webfilter-policies.rsc"
+            echo
+            cat "$lists/vpn-servers.rsc"
+        } > "$lists/sync.rsc"
+        install -m 644 "$lists/webfilter-policies.rsc" "$lists/vpn-servers.rsc" "$lists/sync.rsc" "$ROUTER_DIR/"
+        sha256sum "$ROUTER_DIR/sync.rsc" | cut -c1-16 > "$ROUTER_DIR/version.tmp"
+        mv "$ROUTER_DIR/version.tmp" "$ROUTER_DIR/version"; chmod 644 "$ROUTER_DIR/version"
+        [ -s "$ROUTER_DIR/key" ] || gen_pass 32 > "$ROUTER_DIR/key"
+        router_key_perms
+        local nsrv npol
+        nsrv=$(grep -c '^add list=vpn-servers' "$ROUTER_DIR/vpn-servers.rsc" || true)
+        npol=$(find "$POLICY_DIR" -maxdepth 1 -name '*.txt' ! -name README.txt | wc -l)
+        rm -rf "${lists:?}"
+        ok "Router rules built: $npol policies, $nsrv VPN servers, version $(cat "$ROUTER_DIR/version")" ;;
+    sync|sync-info)
+        [ -s "$ROUTER_DIR/key" ] || cmd_policy build >/dev/null
+        local dom; dom=$(echo "SELECT v FROM ml_setting WHERE k='radius_domain'" | db 2>/dev/null || true); dom=${dom:-${RADIUS_DOMAIN:-radius.local}}
+        echo "url=https://$dom:${WEB_PORT:-8443}/api/public/router"
+        echo "key=$(cat "$ROUTER_DIR/key")"
+        echo "version=$(cat "$ROUTER_DIR/version" 2>/dev/null)"
+        echo "built=$(date -r "$ROUTER_DIR/sync.rsc" '+%Y-%m-%d %H:%M' 2>/dev/null)" ;;
+    new-key)
+        install -d -m 755 "$ROUTER_DIR"; gen_pass 32 > "$ROUTER_DIR/key"; router_key_perms
+        ok "New router sync key — update the ml-sync script on every router (dashboard → Blocking → Router auto-sync)" ;;
+    *) die "usage: radius-admin policy list | show NAME | set NAME < file | del NAME | build | sync | new-key" ;;
+    esac
+}
+
+# ---------------------------------------------------------------- VPN watch
+VPN_IGNORE=/var/lib/mikrotiklover/vpn-ignore.txt
+cmd_vpn() {
+    local sub=attempts days=7 user="" top=100
+    case ${1:-} in attempts|users|servers|domains|scan|update|ignore|unignore) sub=$1; shift ;; esac
+    case $sub in
+    scan)
+        local out sql
+        sql=$(mktemp)
+        if ! out=$(python3 -I /usr/local/lib/mikrotiklover/vpn.py sql --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" 2>&1 >"$sql"); then
+            rm -f "${sql:?}"; die "VPN scan failed: $out"
+        fi
+        db < "$sql"; rm -f "${sql:?}"
+        ok "${out#vpn: }"; return ;;
+    update)
+        python3 -I /usr/local/lib/mikrotiklover/vpn.py public /var/lib/mikrotiklover/vpn-public.txt
+        cmd_policy build; return ;;
+    ignore|unignore)
+        local x=${1:-}; [[ $x =~ ^[a-z0-9.-]{1,253}$ ]] || die "usage: radius-admin vpn $sub DOMAIN|IP"
+        touch "$VPN_IGNORE"
+        if [ "$sub" = ignore ]; then
+            grep -qxF "$x" "$VPN_IGNORE" || echo "$x" >> "$VPN_IGNORE"
+            echo "DELETE FROM ml_vpn_domain WHERE domain=$(q "$x") OR domain LIKE $(q "%.$x");
+                  DELETE FROM ml_vpn_server WHERE ip=$(q "$x") OR why LIKE $(q "DNS %$x");" | db
+            ok "$x is not a VPN: removed from the lists, router rules rebuilt"
+        else
+            grep -vxF "$x" "$VPN_IGNORE" > "$VPN_IGNORE.tmp" || true; mv "$VPN_IGNORE.tmp" "$VPN_IGNORE"
+            ok "$x can be detected as a VPN again"
+        fi
+        cmd_policy build >/dev/null; return ;;
+    esac
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --days) days=${2:-}; valid_int "$days" days; shift 2 ;;
+            -u|--user) user=${2:-}; valid_name "$user" username; shift 2 ;;
+            --top) top=${2:-}; valid_int "$top" top; shift 2 ;;
+            *) die "usage: radius-admin vpn [attempts|users|servers|domains] [--days N] [-u USER] | vpn scan | vpn update | vpn ignore|unignore NAME" ;;
+        esac
+    done
+    local w="bucket >= NOW() - INTERVAL $days DAY"
+    [ -z "$user" ] || w+=" AND username=$(q "$user")"
+    case $sub in
+        attempts) echo "SELECT DATE_FORMAT(MAX(last_seen),'%Y-%m-%d %H:%i') AS last, NULLIF(username,'') AS user, client_ip AS device, kind,
+                               what, GROUP_CONCAT(DISTINCT source ORDER BY source) AS seen_by, SUM(hits) AS tries,
+                               IF(SUM(source='blocked'),'BLOCKED',IF(SUM(source='flow' AND bytes > 200000),'CONNECTED?','-')) AS status
+                        FROM ml_vpn_event WHERE $w GROUP BY client_ip, username, kind, what ORDER BY MAX(last_seen) DESC LIMIT $top;" | dbt ;;
+        users) echo "SELECT COALESCE(NULLIF(username,''),'(no login)') AS user, GROUP_CONCAT(DISTINCT client_ip) AS devices,
+                            GROUP_CONCAT(DISTINCT kind ORDER BY kind SEPARATOR ', ') AS vpn, SUM(hits) AS tries,
+                            IF(SUM(source='blocked'),'yes','no') AS blocked, DATE_FORMAT(MIN(first_seen),'%m-%d %H:%i') AS first,
+                            DATE_FORMAT(MAX(last_seen),'%m-%d %H:%i') AS last
+                     FROM ml_vpn_event WHERE $w GROUP BY COALESCE(NULLIF(username,''),client_ip) ORDER BY SUM(hits) DESC LIMIT $top;" | dbt ;;
+        servers) echo "SELECT ip, kind, why, first_seen, last_seen FROM ml_vpn_server ORDER BY last_seen DESC LIMIT $top;" | dbt
+                 echo "$(echo "SELECT COUNT(*) FROM ml_vpn_server" | db) VPN server IPs learned$( [ -f /var/lib/mikrotiklover/vpn-public.txt ] && echo " + $(wc -l < /var/lib/mikrotiklover/vpn-public.txt) public networks")" ;;
+        domains) echo "SELECT domain, kind, why, first_seen, last_seen FROM ml_vpn_domain ORDER BY last_seen DESC LIMIT $top;" | dbt ;;
+    esac
+}
+
 cmd_sales() {
     local days=${1:-30}; valid_int "$days" days
     echo "SELECT DATE(at) AS day, COUNT(*) AS sales, SUM(kind='voucher') AS vouchers, SUM(kind='renew') AS renewals,
@@ -1168,6 +1326,17 @@ Ports & protocols (traffic collector)
   apps users APP                        which devices/users use an app (name or site, e.g. "PUBG Mobile")
   apps update                           rebuild the list now (cron does it every hour)
 
+  policy list | show NAME               web-filter policies (who is in them, what they block)
+  policy set NAME < file                create / change a policy (directives: webfilter/policies/README.txt)
+  policy del NAME                       delete an unused policy
+  policy build                          rebuild the router rules (+ VPN server list); cron does it every hour
+  policy sync                           URL + key for the router auto-sync script (dashboard → Blocking)
+  vpn [--days 7] [-u USER]              VPN attempts: who, when, which VPN, blocked or not
+  vpn users | servers | domains         per user / the automatic VPN server and name lists
+  vpn scan                              read the DNS + router logs now (cron: every hour)
+  vpn update                            add the public VPN-provider + Tor lists (then weekly)
+  vpn ignore NAME|IP                    not a VPN (e.g. your office VPN): never list or block it
+
 CDN detective
   cdn HOSTNAME|IP [--json]             which app/site is behind it (name, DNS evidence, IP owner, context)
   cdn unknown [DAYS]                   heaviest traffic that has no site name yet
@@ -1252,6 +1421,8 @@ case ${1:-help} in
     cdn)     shift; cmd_cdn "$@" ;;
     ports)   shift; cmd_ports "$@" ;;
     apps)    shift; cmd_apps "$@" ;;
+    policy)  shift; cmd_policy "$@" ;;
+    vpn)     shift; cmd_vpn "$@" ;;
     syslog-sync) syslog_sync ;;
     online)  cmd_online ;;
     log)     shift; cmd_log "$@" ;;

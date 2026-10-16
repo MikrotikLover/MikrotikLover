@@ -598,6 +598,124 @@
         "claude.ai",
         "anthropic.com"
       ]
+    },
+    {
+      "app": "NordVPN",
+      "site": "nordvpn.com",
+      "category": "vpn",
+      "domains": [
+        "nordvpn.com",
+        "nordcdn.com",
+        "nordvpn.net"
+      ]
+    },
+    {
+      "app": "ExpressVPN",
+      "site": "expressvpn.com",
+      "category": "vpn",
+      "domains": [
+        "expressvpn.com"
+      ]
+    },
+    {
+      "app": "Proton VPN",
+      "site": "protonvpn.com",
+      "category": "vpn",
+      "domains": [
+        "protonvpn.com",
+        "protonvpn.ch"
+      ]
+    },
+    {
+      "app": "Surfshark",
+      "site": "surfshark.com",
+      "category": "vpn",
+      "domains": [
+        "surfshark.com"
+      ]
+    },
+    {
+      "app": "Psiphon",
+      "site": "psiphon.ca",
+      "category": "vpn",
+      "domains": [
+        "psiphon.ca",
+        "psiphon3.com"
+      ]
+    },
+    {
+      "app": "Hotspot Shield",
+      "site": "hotspotshield.com",
+      "category": "vpn",
+      "domains": [
+        "hotspotshield.com",
+        "hsselite.com"
+      ]
+    },
+    {
+      "app": "TunnelBear",
+      "site": "tunnelbear.com",
+      "category": "vpn",
+      "domains": [
+        "tunnelbear.com"
+      ]
+    },
+    {
+      "app": "Hola VPN",
+      "site": "hola.org",
+      "category": "vpn",
+      "domains": [
+        "hola.org"
+      ]
+    },
+    {
+      "app": "Windscribe",
+      "site": "windscribe.com",
+      "category": "vpn",
+      "domains": [
+        "windscribe.com"
+      ]
+    },
+    {
+      "app": "CyberGhost",
+      "site": "cyberghostvpn.com",
+      "category": "vpn",
+      "domains": [
+        "cyberghostvpn.com"
+      ]
+    },
+    {
+      "app": "Cloudflare WARP",
+      "site": "cloudflareclient.com",
+      "category": "vpn",
+      "domains": [
+        "cloudflareclient.com",
+        "cloudflarewarp.com"
+      ]
+    },
+    {
+      "app": "Urban VPN",
+      "site": "urban-vpn.com",
+      "category": "vpn",
+      "domains": [
+        "urban-vpn.com"
+      ]
+    },
+    {
+      "app": "Betternet",
+      "site": "betternet.co",
+      "category": "vpn",
+      "domains": [
+        "betternet.co"
+      ]
+    },
+    {
+      "app": "Tor",
+      "site": "torproject.org",
+      "category": "vpn",
+      "domains": [
+        "torproject.org"
+      ]
     }
   ],
   "generic_cdns": {

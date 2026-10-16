@@ -7,7 +7,7 @@
 #   static IP / subnet : /ip firewall address-list add list=allow-only-whatsapp address=192.168.88.50
 #   by MAC (DHCP)      : /ip dhcp-server lease make-static [find mac-address=AA:BB:CC:DD:EE:FF]
 #                        /ip dhcp-server lease set [find mac-address=AA:BB:CC:DD:EE:FF] address-lists=allow-only-whatsapp
-#   hotspot (RADIUS)   : radius-admin group add whatsapp-only --address-list allow-only-whatsapp
+#   hotspot (RADIUS)   : radius-admin user policy ali whatsapp-only   (policy file with: allow-only whatsapp)
 #   WPA-Enterprise     : radius-admin group add whatsapp-only --vlan 50  + add that VLAN's subnet to the list
 # IPv6 must be off for these devices (the lists are IPv4): no IPv6 address/RA on their network.
 # Remove again: /ip firewall filter remove [find comment~"^allowonly:whatsapp"]; /ip firewall address-list remove [find comment~"^allowonly:whatsapp"]
@@ -54,7 +54,6 @@ add list=whatsapp-servers address=mmg.whatsapp.net comment="allowonly:whatsapp"
 add list=whatsapp-servers address=pps.whatsapp.net comment="allowonly:whatsapp"
 add list=whatsapp-servers address=static.whatsapp.net comment="allowonly:whatsapp"
 add list=whatsapp-servers address=media.whatsapp.net comment="allowonly:whatsapp"
-
 # Phone/PC support: Wi-Fi "internet available" checks (HTTP only) and push notifications
 remove [find comment="allowonly:support"]
 add list=allowonly-checks address=connectivitycheck.gstatic.com comment="allowonly:support"
@@ -89,6 +88,7 @@ add chain=forward src-address-list=allow-only-whatsapp dst-address-list=whatsapp
 add chain=forward src-address-list=allow-only-whatsapp dst-address-list=allowonly-checks protocol=tcp dst-port=80 action=accept comment="allowonly:whatsapp connectivity check"
 add chain=forward src-address-list=allow-only-whatsapp dst-address-list=allowonly-gpush protocol=tcp dst-port=5228-5230 action=accept comment="allowonly:whatsapp Android push"
 add chain=forward src-address-list=allow-only-whatsapp dst-address=17.0.0.0/8 protocol=tcp dst-port=5223 action=accept comment="allowonly:whatsapp Apple push"
+add chain=forward src-address-list=allow-only-whatsapp connection-state=new action=log log-prefix="WF-allowonly" limit=20/1m,10:packet comment="allowonly:whatsapp blocked (log)"
 add chain=forward src-address-list=allow-only-whatsapp protocol=tcp action=reject reject-with=tcp-reset comment="allowonly:whatsapp block rest"
 add chain=forward src-address-list=allow-only-whatsapp action=reject reject-with=icmp-admin-prohibited comment="allowonly:whatsapp block rest"
 # Above every other forward rule (fasttrack included), in this order.

@@ -201,15 +201,28 @@ cat > /etc/cron.d/mikrotiklover <<'EOF'
 # MikrotikLover RADIUS (install.sh)
 */5 * * * * root /usr/local/sbin/radius-admin enforce >/dev/null 2>&1
 17 4 * * 1 root /usr/local/sbin/radius-admin cdn update >/dev/null 2>&1
-7 * * * * root /usr/local/sbin/radius-admin cdn learn >/dev/null 2>&1; /usr/local/sbin/radius-admin apps update >/dev/null 2>&1
+7 * * * * root /usr/local/sbin/radius-admin cdn learn >/dev/null 2>&1; /usr/local/sbin/radius-admin apps update >/dev/null 2>&1; /usr/local/sbin/radius-admin vpn scan >/dev/null 2>&1; /usr/local/sbin/radius-admin policy build >/dev/null 2>&1
+27 4 * * 2 root [ -f /var/lib/mikrotiklover/vpn-public.txt ] && /usr/local/sbin/radius-admin vpn update >/dev/null 2>&1
 EOF
 chmod 644 /etc/cron.d/mikrotiklover
 command -v cron >/dev/null || apt-get install -y -qq cron >/dev/null 2>&1 || warn "cron missing: run 'radius-admin enforce' every 5 minutes yourself"
 install -d -m 755 /usr/local/lib/mikrotiklover
 install -m 644 "$SCRIPT_DIR/tools/mlreport.py" /usr/local/lib/mikrotiklover/mlreport.py
 install -m 644 "$SCRIPT_DIR/tools/flowcollector.py" /usr/local/lib/mikrotiklover/flowcollector.py
-install -m 644 "$SCRIPT_DIR/tools/cdnmap.py" "$SCRIPT_DIR/tools/cdnlearn.py" "$SCRIPT_DIR/tools/cdn-apps.json" "$SCRIPT_DIR/tools/ports.py" "$SCRIPT_DIR/tools/appinv.py" /usr/local/lib/mikrotiklover/
+install -m 644 "$SCRIPT_DIR/tools/cdnmap.py" "$SCRIPT_DIR/tools/cdnlearn.py" "$SCRIPT_DIR/tools/cdn-apps.json" "$SCRIPT_DIR/tools/ports.py" "$SCRIPT_DIR/tools/appinv.py" "$SCRIPT_DIR/tools/vpn.py" /usr/local/lib/mikrotiklover/
 install -d -m 755 /var/lib/mikrotiklover
+# Web-filter builder (router rules from policies, app lists and the VPN lists) — radius-admin policy build
+install -d -m 755 /usr/local/lib/mikrotiklover/webfilter/categories /usr/local/lib/mikrotiklover/webfilter/allowonly
+install -m 755 "$SCRIPT_DIR/webfilter/build.sh" /usr/local/lib/mikrotiklover/webfilter/build.sh
+install -m 644 "$SCRIPT_DIR"/webfilter/*.in "$SCRIPT_DIR/webfilter/keywords.txt" /usr/local/lib/mikrotiklover/webfilter/
+install -m 644 "$SCRIPT_DIR"/webfilter/categories/*.txt /usr/local/lib/mikrotiklover/webfilter/categories/
+install -m 644 "$SCRIPT_DIR"/webfilter/allowonly/*.txt /usr/local/lib/mikrotiklover/webfilter/allowonly/
+# Policies are edited on the server (dashboard → Blocking): install the examples only once
+install -d -m 755 /var/lib/mikrotiklover/policies /var/lib/mikrotiklover/router
+for f in "$SCRIPT_DIR"/webfilter/policies/*.txt; do
+    [ -e "/var/lib/mikrotiklover/policies/$(basename "$f")" ] || install -m 644 "$f" /var/lib/mikrotiklover/policies/
+done
+install -m 644 "$SCRIPT_DIR/webfilter/policies/README.txt" /var/lib/mikrotiklover/policies/README.txt
 [ -s /var/lib/mikrotiklover/asn.json ] || python3 -I /usr/local/lib/mikrotiklover/cdnmap.py update >/dev/null 2>&1 \
     || warn "Could not download the CDN detective IP lists (no internet?) — run later: radius-admin cdn update"
 rm -f /usr/local/lib/mikrotiklover/wf-report.py
@@ -307,13 +320,12 @@ EOF
     chgrp mlweb "$WEB_DIR/web.conf" "$WEB_DIR/my.cnf"
 
     # application + the policy list it offers
-    install -d -m 755 /usr/local/lib/mikrotiklover/web/static /usr/local/lib/mikrotiklover/policies
+    install -d -m 755 /usr/local/lib/mikrotiklover/web/static
     install -m 644 "$SCRIPT_DIR/web/app.py" /usr/local/lib/mikrotiklover/web/app.py
+    install -m 644 "$SCRIPT_DIR/mikrotik/autosync.rsc" /usr/local/lib/mikrotiklover/web/autosync.rsc   # router auto-sync template
     install -m 644 "$SCRIPT_DIR"/web/static/* /usr/local/lib/mikrotiklover/web/static/
     install -m 644 "$CERT_DIR/ca.der" /usr/local/lib/mikrotiklover/web/static/ca.der    # public CA for the connect guide
     install -m 644 "$CERT_DIR/ca.pem" /usr/local/lib/mikrotiklover/web/static/ca.pem
-    rm -f /usr/local/lib/mikrotiklover/policies/*.txt
-    install -m 644 "$SCRIPT_DIR"/webfilter/policies/*.txt /usr/local/lib/mikrotiklover/policies/
 
     # the dashboard may run radius-admin as root — and nothing else
     echo 'mlweb ALL=(root) NOPASSWD: /usr/local/sbin/radius-admin' > /etc/sudoers.d/.mikrotiklover-web.tmp
@@ -345,12 +357,14 @@ EOF
         echo '        proxy_set_header Host $host;'
         echo '        proxy_set_header X-Forwarded-For $remote_addr;'
         echo "        proxy_set_header X-Forwarded-Proto https;"
+        echo '        proxy_set_header X-Forwarded-Port $server_port;'
         echo "    }"
         echo "    location / {"
         echo "        proxy_pass http://127.0.0.1:8099;"
         echo '        proxy_set_header Host $host;'
         echo '        proxy_set_header X-Forwarded-For $remote_addr;'
         echo "        proxy_set_header X-Forwarded-Proto https;"
+        echo '        proxy_set_header X-Forwarded-Port $server_port;'
         echo "        proxy_read_timeout 150s;"
         echo "    }"
         echo "}"
@@ -400,6 +414,9 @@ EOF
     fi
     WEB_URL="https://$(hostname -I 2>/dev/null | awk '{print $1}'):$WEB_PORT"
 fi
+
+# router rules from the policies (+ VPN list) for the routers' auto-sync (radius-admin policy sync)
+/usr/local/sbin/radius-admin policy build >/dev/null || warn "Router rules not built — run: radius-admin policy build"
 
 # ---------------------------------------------------------------- start
 log "Checking configuration"

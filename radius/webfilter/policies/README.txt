@@ -1,11 +1,21 @@
 Web-filter POLICIES — one file per policy (name = file name, a-z 0-9 -).
 A device/user/group/IP range joins a policy by being in address list "policy-<name>".
-Run ../build.sh after editing; import ../../mikrotik/webfilter-policies.rsc on the router.
+On the server the policies live in /var/lib/mikrotiklover/policies and are edited in the dashboard
+(Blocking) or with "radius-admin policy set NAME < file"; the routers get them by auto-sync
+(mikrotik/autosync.rsc). In this repository: run ../build.sh, import ../../mikrotik/webfilter-policies.rsc.
 
-Directives (one per line):
-  block CATEGORY [time=...]   block a category from ../categories/ (social, video-streaming, gaming,
-                              vpn-proxy, torrent-piracy, messaging, custom) or "keywords"
+First line: "# description". Directives (one per line):
+  block CATEGORY [time=...]   block a category from ../categories/ (social, social-video, video-streaming,
+                              gaming, vpn-proxy, torrent-piracy, messaging, custom) or "keywords"
                               time= uses RouterOS syntax, e.g. time=9h-17h,mon,tue,wed,thu,fri
+  block-app APP [time=...]    block one app with every domain the CDN detective knows for it, the ones
+                              learned on your network included (radius-admin cdn apps), e.g. block-app PUBG Mobile
+  block-vpn [time=...]        VPN apps/websites (by name, and any name with "vpn"), the VPN servers seen on
+                              your network (address list vpn-servers, kept up to date by the server) and the
+                              VPN protocols (OpenVPN, WireGuard, WARP, IPsec, L2TP, PPTP, SoftEther, Tor).
+                              Every try is logged (WF-vpn) — radius-admin vpn / dashboard → VPN watch
+  allow-only PROFILE          only this profile works (../allowonly/PROFILE.txt, e.g. whatsapp),
+                              everything else is refused
   block-all [time=...]        no internet at all (during time= if given)
   dns router|family|adguard-family|cleanbrowsing-family|cleanbrowsing-adult
                               which DNS the members use (default: router = all router-wide filters)

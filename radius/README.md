@@ -341,6 +341,8 @@ sudo radius-admin traffic now                       # LIVE: pichle 1 minute — 
 
 ### Sirf WhatsApp (baqi sab band) — `allow-only-whatsapp.rsc`
 
+> **Asaan tareeqa (section 5h):** Dashboard → **Blocking** → "Give a policy to a user" → `whatsapp-only` → **Apply**. Router auto-sync hone par neeche ke kisi command ki zaroorat nahi parti. Neeche wala tareeqa un devices ke liye hai jo RADIUS se login nahi karte (MAC/IP/subnet).
+
 Kisi user/device ko sirf WhatsApp dena ho (chat, voice/video call, photo/video, voice note, status, WhatsApp Web) aur **YouTube, Facebook, Instagram, TikTok, browser — sab band**:
 
 1. Router par `webfilter-base.rsc` aur phir `allow-only-whatsapp.rsc` import karein.
@@ -371,7 +373,12 @@ Wapas normal karna: address list se entry hata dein (ya lease se `address-lists`
 
 ### VPN apps ko rokna — `webfilter-vpn-protocols.rsc`
 
-`webfilter-vpn-proxy.rsc` VPN ki **websites** band karti hai; ye script install shuda VPN apps ke **connections** rokti hai: OpenVPN, WireGuard, PPTP, L2TP, IPsec, Tor. `web-filter-exempt` (IT/manager) par asar nahi. Office ka IPsec VPN use hota ho to IPsec wale 2 rules hata dein. Jo VPN port 443 par HTTPS jaisa ban kar chalti hai (Psiphon) woh is se nahi rukti — aise users ke liye allow-only profile behtar hai.
+> **Per user / group (behtar):** policy mein `block-vpn`, ya tayyar policy `no-vpn` (section 5h). Is se VPN apps aur websites, network par dekhe gaye VPN servers (yeh list khud barhti hai), aur VPN protocols sab band ho jate hain. Har koshish **VPN watch** mein dikhti hai.
+
+`webfilter-vpn-proxy.rsc` VPN ki **websites** band karti hai. Yeh script **sab** users ke liye install shuda VPN apps ke **connections** rokti hai: OpenVPN, WireGuard, Cloudflare WARP, PPTP, L2TP, IPsec aur Tor. Har koshish log hoti hai (prefix `WF-vpn`), is liye `radius-admin vpn` mein nazar aati hai.
+- `web-filter-exempt` (IT/manager) par is ka asar nahi hota.
+- Office ka IPsec VPN use hota ho to IPsec wale rules hata dein.
+- Jo VPN port 443 par HTTPS ban kar chalti hai (Psiphon) woh sirf port band karne se nahi rukti. Usay `block-vpn` policy ki server list aur naam pakadte hain, ya allow-only profile lagayein.
 
 ### Time ke hisaab se blocking (sirf office hours)
 
@@ -560,6 +567,87 @@ sudo radius-admin apps update               # abhi update karein (cron har ghant
 > - Router par DNS logging on honi chahiye: `radius-admin dnslog on` aur `dns-logging.rsc`.
 > - Data (MB/GB) ke liye traffic collector bhi chahiye.
 > - Jo device DNS bypass kare, us ki apps is list mein nahi aatin. Misaal: exempt list wala device, ya family-DNS wali policy.
+
+## 5h. Blocking dashboard se — user ko apps/websites band karna, WhatsApp-only, VPN
+
+**Dashboard → Blocking** par 3 qadam hain:
+
+1. **Policy banayein:** "+ New policy" dabayein. Is mein yeh sab chun sakte hain:
+   - categories tick karein (social, sirf videos, YouTube/Netflix, games, messaging, torrent, adult words);
+   - **single apps** dhoond kar tick karein (PUBG Mobile, TikTok, Snapchat...). App ke tamam domains band hote hain, network par khud seekhe gaye domains bhi;
+   - **Block VPN**;
+   - waqt: "Always", ya "Only at these times" (misaal 09:00 → 17:00, Mon–Sat);
+   - mode **WhatsApp ONLY**: sirf WhatsApp chalta hai, baqi sab band;
+   - mode **No internet**.
+
+   Neeche "Policy file" mein wohi dikhta hai jo server save karta hai.
+2. **User ya group ko dein:** "Give a policy to a user" mein naam likhein, policy chunein aur **Apply** dabayein. Poore group ke liye "Give a policy to a whole group" istemal karein. Doosra tareeqa: Users → user → *Own web-filter policy*. User ek dafa disconnect hota hai aur agle login par nayi policy lag jati hai.
+3. **Router auto-sync (sirf ek dafa):** "Router auto-sync" mein server ka IP likhein, **⬇ Download router script** dabayein, file router par upload karein aur `/import mikrotiklover-autosync.rsc` chalayein (`mikrotik/autosync.rsc`).
+   - Router har 15 minute mein server se poochta hai ke kuch badla hai ya nahi. Badla ho to policies, app lists aur VPN server list khud import kar leta hai.
+   - Pehle `webfilter-base.rsc` ek dafa haath se import hona chahiye.
+   - Router par server ka naam (certificate wala) `/ip dns static` se server IP par point karta hai, aur server ka CA ek dafa import hota hai. Yeh dono kaam script khud karti hai.
+
+**Tayyar policies:**
+
+| Policy | Kya hota hai |
+|---|---|
+| `no-video` / `no-video-day` | Facebook/YouTube/TikTok videos band (din mein ya hamesha) |
+| `no-tiktok-pubg` | Single apps ki misaal: TikTok + PUBG |
+| `no-vpn` | VPN band, baqi sab chalta hai |
+| `whatsapp-only` | Sirf WhatsApp |
+| `students` | Social, video, games, VPN, torrent, adult words band; family DNS |
+| `staff` | Office time mein social/video band |
+| `guests` | Torrent, VPN, adult band |
+| `no-internet` | Internet band |
+| `night-off` | Raat 12 se 6 tak internet band |
+
+CLI:
+```bash
+sudo radius-admin policy list                         # policies, kya band, kaun use kar raha
+printf '# Kids\nblock-app TikTok\nblock social-video\nblock-vpn\n' | sudo radius-admin policy set kids
+sudo radius-admin user policy ali kids                # ek user
+sudo radius-admin group add class-9 --policy kids     # poora group
+sudo radius-admin policy sync                         # router auto-sync ka URL + key
+```
+Policy file ke sab directives `webfilter/policies/README.txt` mein hain (`block`, `block-app`, `block-vpn`, `allow-only`, `block-all`, `dns`, `strict-ech`, `time=`).
+
+### VPN watch — VPN server list khud banti hai, aur pata chalta hai kaun VPN chalane ki koshish kar raha hai
+
+Har ghante server teen jagah se VPN ki nishaniyan dhoondta hai (`tools/vpn.py`):
+
+| Kahan se | Kya pakra jata hai |
+|---|---|
+| DNS log | VPN app ya website ka naam: catalog ki VPN apps (NordVPN, Psiphon, Proton, Hotspot Shield, WARP...), `vpn-proxy` list, ya jis naam mein **"vpn"** ho (Turbo VPN, Thunder VPN, waghera). Jo IP woh naam deta hai, woh **VPN server list** mein chala jata hai |
+| Router log | Router ne VPN connection roka (`WF-vpn`): kis user ne, kis server/port par |
+| Traffic flows | VPN protocol (OpenVPN 1194, WireGuard 51820, WARP 2408, IPsec, L2TP, PPTP/GRE, Tor), ya pehle se maloom VPN server se connection (port 443 par chhupi "stealth" VPN bhi) |
+
+- **VPN server list** (`ml_vpn_server`) aur **VPN names** (`ml_vpn_domain`) khud barhti hain. Har ghante router ki address list `vpn-servers` aur `wf-vpn` chain mein pahunch jati hain (auto-sync).
+- Shared CDN (Cloudflare, Akamai, Google...) ke IP list mein **kabhi nahi** daale jate. Jo IP aam websites bhi deta ho, woh bhi nahi.
+- **Public lists (ikhtiyari):** `sudo radius-admin vpn update` chalane se VPN providers ki public list (X4BNet) aur Tor exit nodes bhi list mein aa jate hain. Phir yeh hafte mein ek dafa khud update hoti hain.
+- **Office VPN:** `sudo radius-admin vpn ignore vpn.mycompany.com`, ya dashboard par **Not a VPN**. Phir yeh kabhi list ya block nahi hota.
+
+```bash
+sudo radius-admin vpn                 # 7 din: kab, kaun user, device, kaunsi VPN, kya, BLOCKED / CONNECTED?
+sudo radius-admin vpn users           # har user: kaunsi VPN, kitni koshishen, blocked ya nahi
+sudo radius-admin vpn servers         # khud bani VPN server list
+sudo radius-admin vpn domains         # VPN names
+sudo radius-admin vpn -u ali --days 30
+```
+
+**Dashboard → VPN watch** mein yeh tabs hain:
+- **Who tried:** user, kaunsi VPN, kitni koshishen. Natija *blocked*, *seen*, ya *maybe connected* hota hai. *Maybe connected* ka matlab hai VPN ne data chalaya, yani us user par abhi block policy nahi hai.
+- **All attempts:** har koshish, DNS / router blocked / traffic ke badge ke saath.
+- **VPN servers** aur **VPN names:** khud bani lists. Har row par "Not a VPN" button hai.
+- **How to block:** block karne ke qadam.
+
+**Tests:**
+- `tests/test-vpn.py`: 22 cases. In mein VPN app, "vpn" naam, ignore list, CDN IP ka list mein na aana, router block, OpenVPN/WireGuard/GRE aur stealth 443 shamil hain.
+- `tests/simulate-policies.py`: 63 cases. In mein `no-vpn`, `whatsapp-only` aur single apps bhi hain.
+- `tests/ui-dashboard.mjs`: dashboard mein policy banana, user ko dena, WhatsApp-only, router script download aur VPN watch pages.
+
+> **Hadd (limits):**
+> - Jo VPN apna server naam chhupaye aur naye IPs par port 443 par chale (Psiphon jaisi), woh pehli dafa pakri nahi jati. Jaise hi us ka koi naam ya IP list mein aata hai, woh bhi rukti hai. Aise users ke liye `whatsapp-only` jaisa allow-only profile sab se pakka hai.
+> - Asal MikroTik par auto-sync script abhi test nahi hui. Pehle ek router par chala kar `/log print where message~"ml-sync"` dekhein.
 
 ## 5f. PPPoE users (ISP style)
 

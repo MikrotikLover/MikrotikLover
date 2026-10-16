@@ -1,15 +1,31 @@
 #!/usr/bin/env python3
-"""Simulate mikrotik/webfilter-policies.rsc (jump/return chains, time=, SNI) on sample traffic."""
-import re, sys, fnmatch, os
+"""Simulate mikrotik/webfilter-policies.rsc (jump/return chains, time=, SNI, address lists) on sample traffic."""
+import ipaddress, re, sys, fnmatch, os
 
 RSC = os.path.join(os.path.dirname(__file__), "..", "mikrotik", "webfilter-policies.rsc")
-chains, nat, menu = {}, [], None
+chains, nat, lists, menu = {}, [], {}, None
 for line in open(RSC):
     s = line.strip()
     if s.startswith("/"): menu = s
     if not s.startswith("add "): continue
     r = {k: v.strip('"') for k, v in re.findall(r'([a-z-]+)=("[^"]*"|\S+)', s)}
-    (nat.append(r) if menu == "/ip firewall nat" else chains.setdefault(r["chain"], []).append(r))
+    if menu == "/ip firewall nat": nat.append(r)
+    elif menu == "/ip firewall address-list": lists.setdefault(r["list"], []).append(r["address"])
+    elif menu == "/ip firewall filter": chains.setdefault(r["chain"], []).append(r)
+
+# filled by the server's router sync on a real router; a sample entry here
+lists.setdefault("vpn-servers", []).append("203.0.113.50")
+FAKE_DNS = {"g.whatsapp.net": "57.144.110.32", "connectivitycheck.gstatic.com": "142.250.181.3"}
+
+def in_list(ip, name):
+    for a in lists.get(name, []):
+        a = FAKE_DNS.get(a, a)
+        if ip and re.match(r"^[\d./]+$", a) and ipaddress.ip_address(ip) in ipaddress.ip_network(a, strict=False):
+            return True
+    return False
+
+def port_ok(spec, p):
+    return any(int(a) <= p <= int(b or a) for a, _, b in (x.partition("-") for x in spec.split(",")))
 
 DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 def secs(t):
@@ -23,10 +39,11 @@ def run(chain, f):
     for r in chains.get(chain, []):
         if "src-address-list" in r and r["src-address-list"] != f["list"]: continue
         if "protocol" in r and r["protocol"] != f["proto"]: continue
-        if "dst-port" in r and int(r["dst-port"]) != f["port"]: continue
+        if "dst-port" in r and not (f["port"] and port_ok(r["dst-port"], f["port"])): continue
+        if "dst-address-list" in r and not in_list(f.get("dst"), r["dst-address-list"]): continue
+        if "dst-address" in r and not (f.get("dst") and ipaddress.ip_address(f["dst"]) in ipaddress.ip_network(r["dst-address"])): continue
         if "time" in r and not time_ok(r["time"], f["hour"], f["day"]): continue
         if "tls-host" in r and not (f.get("sni") and fnmatch.fnmatch(f["sni"], r["tls-host"])): continue
-        if "connection-state" in r: continue          # log-only rules
         a = r["action"]
         if a == "jump":
             v = run(r["jump-target"], f)
@@ -41,8 +58,8 @@ def dns(lst):
         if r["src-address-list"] == lst: return r["to-addresses"]
     return "router"
 
-def F(lst, sni=None, proto="tcp", port=443, hour=11, day="tue"):
-    return dict(list=lst, sni=sni, proto=proto, port=port, hour=hour, day=day)
+def F(lst, sni=None, proto="tcp", port=443, hour=11, day="tue", dst="198.51.100.1"):
+    return dict(list=lst, sni=sni, proto=proto, port=port, hour=hour, day=day, dst=dst)
 
 CASES = [
     ("students: facebook",                 F("policy-students", "www.facebook.com"),        "reject"),
@@ -82,6 +99,33 @@ CASES = [
     ("no-video-day: youtube at 11:00",     F("policy-no-video-day", "rr1---sn-x.googlevideo.com"), "reject"),
     ("no-video-day: youtube at 22:00",     F("policy-no-video-day", "rr1---sn-x.googlevideo.com", hour=22), "allow"),
     ("no-video-day: QUIC at 22:00",        F("policy-no-video-day", None, "udp", hour=22),   "allow"),
+    # no-vpn: names, keyword, servers list, protocols; normal traffic untouched
+    ("no-vpn: nordvpn.com website",        F("policy-no-vpn", "nordvpn.com"),                "reject"),
+    ("no-vpn: psiphon app (block list)",   F("policy-no-vpn", "www.psiphon3.com"),           "reject"),
+    ("no-vpn: unknown 'turbovpn' name",    F("policy-no-vpn", "api.turbovpn-app.net"),       "reject"),
+    ("no-vpn: Cloudflare WARP app",        F("policy-no-vpn", "engage.cloudflareclient.com"),"reject"),
+    ("no-vpn: OpenVPN udp/1194",           F("policy-no-vpn", None, "udp", 1194),            "drop"),
+    ("no-vpn: WireGuard udp/51820",        F("policy-no-vpn", None, "udp", 51820),           "drop"),
+    ("no-vpn: WARP udp/2408",              F("policy-no-vpn", None, "udp", 2408),            "drop"),
+    ("no-vpn: PPTP tcp/1723",              F("policy-no-vpn", None, "tcp", 1723),            "reject"),
+    ("no-vpn: PPTP GRE",                   F("policy-no-vpn", None, "gre", 0),               "drop"),
+    ("no-vpn: IPsec ESP",                  F("policy-no-vpn", None, "ipsec-esp", 0),         "drop"),
+    ("no-vpn: known VPN server, tcp/443",  F("policy-no-vpn", None, "tcp", 443, dst="203.0.113.50"), "reject"),
+    ("no-vpn: known VPN server, udp/8443", F("policy-no-vpn", None, "udp", 8443, dst="203.0.113.50"), "drop"),
+    ("no-vpn: google",                     F("policy-no-vpn", "www.google.com"),             "allow"),
+    ("no-vpn: whatsapp call udp/3478",     F("policy-no-vpn", None, "udp", 3478),            "allow"),
+    ("normal user: OpenVPN",               F("lan", None, "udp", 1194),                      "allow"),
+    ("students: VPN website",              F("policy-students", "www.expressvpn.com"),       "reject"),
+    # whatsapp-only (allow-only profile inside a policy)
+    ("whatsapp-only: chat to Meta",        F("policy-whatsapp-only", None, "tcp", 5222, dst="157.240.1.53"), "accept"),
+    ("whatsapp-only: call STUN to Meta",   F("policy-whatsapp-only", None, "udp", 3478, dst="157.240.9.1"),  "accept"),
+    ("whatsapp-only: facebook on Meta",    F("policy-whatsapp-only", "www.facebook.com", dst="157.240.1.35"), "reject"),
+    ("whatsapp-only: youtube",             F("policy-whatsapp-only", "www.youtube.com", dst="142.250.181.14"), "reject"),
+    ("whatsapp-only: any UDP elsewhere",   F("policy-whatsapp-only", None, "udp", 3478, dst="8.8.8.8"), "reject"),
+    # single apps
+    ("no-tiktok-pubg: tiktok",             F("policy-no-tiktok-pubg", "v16.tiktokcdn.com"),  "reject"),
+    ("no-tiktok-pubg: pubg",               F("policy-no-tiktok-pubg", "api.pubgmobile.com"), "reject"),
+    ("no-tiktok-pubg: youtube",            F("policy-no-tiktok-pubg", "www.youtube.com"),    "allow"),
 ]
 fail = 0
 for desc, f, exp in CASES:

@@ -17,6 +17,7 @@ from collections import OrderedDict
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mlreport import base_domain, is_generic_cdn  # noqa: E402  (same directory)
 import ports  # noqa: E402
+import vpn  # noqa: E402
 
 CONF = "/etc/mikrotiklover-radius/radius.conf"
 DNS_LOG = os.environ.get("MLREPORT_LOGDIR", "/var/log/mikrotik") + "/dns.log"
@@ -324,6 +325,27 @@ class Store:
             self.db = None
             raise
 
+    def vpn_servers(self):
+        """ip -> kind of every known VPN server (tools/vpn.py, earlier flows)."""
+        with self.conn().cursor() as c:
+            c.execute("SELECT ip, kind FROM ml_vpn_server")
+            return {ip: k for ip, k in c.fetchall()}
+
+    def write_vpn(self, rows):
+        """rows: (bucket, client, user, what, kind, remote, flows, bytes) — VPN connections seen in flows."""
+        ev = ("INSERT INTO ml_vpn_event (bucket, client_ip, username, source, what, kind, hits, bytes, first_seen, last_seen) "
+              "VALUES (%s,%s,%s,'flow',%s,%s,%s,%s,NOW(),NOW()) ON DUPLICATE KEY UPDATE username=VALUES(username), "
+              "hits=hits+VALUES(hits), bytes=bytes+VALUES(bytes), last_seen=NOW()")
+        srv = ("INSERT INTO ml_vpn_server (ip, kind, why, first_seen, last_seen) VALUES (%s,%s,%s,NOW(),NOW()) "
+               "ON DUPLICATE KEY UPDATE last_seen=NOW()")
+        try:
+            with self.conn().cursor() as c:
+                c.executemany(ev, [(b, cl, u, w, k, n, by) for b, cl, u, w, k, r, n, by in rows])
+                c.executemany(srv, [(r, k, f"traffic: {w}") for b, cl, u, w, k, r, n, by in rows])
+        except self.pymysql.MySQLError:
+            self.db = None
+            raise
+
     def write(self, rows, keep_days):
         sql = ("INSERT INTO traffic_site (bucket, client_ip, username, site, bytes_down, bytes_up, flows) "
                "VALUES (%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE username=VALUES(username), "
@@ -365,7 +387,12 @@ def main():
     os.makedirs(os.path.dirname(NOW_FILE), exist_ok=True)
     print(f"traffic collector listening on udp/{port}, LAN {','.join(lan)}", flush=True)
 
-    agg, pagg, last_flush, rejected = {}, {}, time.time(), 0
+    agg, pagg, vagg, last_flush, rejected = {}, {}, {}, time.time(), 0
+    try:
+        vpn_servers = store.vpn_servers()
+    except Exception as e:
+        print(f"warning: VPN server list: {e}", file=sys.stderr)
+        vpn_servers = {}
     while True:
         now = time.time()
         try:
@@ -386,6 +413,12 @@ def main():
                     pa = pagg.setdefault((client, site, int(proto or 0), int(pport), pdir), [0, 0, 0])
                     pa[0 if direction == "down" else 1] += nbytes
                     pa[2] += 1
+                    vk = vpn.flow_kind(proto, pdir, pport, remote, vpn_servers)
+                    if vk:
+                        what = f"{remote} {ports.proto_name(proto)}/{pport}" if pport else f"{remote} {ports.proto_name(proto)}"
+                        va = vagg.setdefault((client, what, vk, remote), [0, 0])
+                        va[0] += 1
+                        va[1] += nbytes
             else:
                 rejected += 1
         except socket.timeout:
@@ -413,6 +446,10 @@ def main():
                 if prows:
                     store.write_ports(prows, keep_days)
                 pagg = {}
+                if vagg:
+                    store.write_vpn([(bucket, c, users.get(c, ""), w, k, r, v[0], v[1]) for (c, w, k, r), v in vagg.items()])
+                vagg = {}
+                vpn_servers = store.vpn_servers()
             except Exception as e:  # keep the counters and retry on the next flush
                 print(f"warning: database write failed, retrying: {e}", file=sys.stderr, flush=True)
             tmp = NOW_FILE + ".tmp"

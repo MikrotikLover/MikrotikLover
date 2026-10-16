@@ -1,5 +1,5 @@
 # Guests: everything except torrents, VPNs and adult content
 block torrent-piracy
-block vpn-proxy
+block-vpn
 block keywords
 dns family

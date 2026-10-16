@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 # Generates the RouterOS web-filter scripts in ../mikrotik/ from categories/*.txt,
-# keywords.txt and allowonly/*.txt
+# keywords.txt, allowonly/*.txt and policies/*.txt
 #   ./build.sh                 build
 #   ./build.sh --update-meta   refresh allowonly/meta-ipv4.txt (Meta/WhatsApp networks) first
+# Environment (radius-admin policy build on the server sets these):
+#   WF_OUT=DIR        where the .rsc files go (default ../mikrotik)
+#   POLICY_DIR=DIR    the policies (default ./policies; the dashboard edits /var/lib/mikrotiklover/policies)
+#   VPN_DOMAINS=FILE  VPN names learned on this network (tools/vpn.py), for "block-vpn"
+#   CDNMAP=FILE       tools/cdnmap.py — app domain lists for "block-app"
 set -euo pipefail
 cd "$(dirname "$0")"
-OUT=../mikrotik
+OUT=${WF_OUT:-../mikrotik}
+POLICY_DIR=${POLICY_DIR:-policies}
+CDNMAP=${CDNMAP:-$( [ -f ../tools/cdnmap.py ] && echo ../tools/cdnmap.py || echo ../cdnmap.py )}
 
 if [ "${1:-}" = --update-meta ]; then
     tmp=$(mktemp)
@@ -124,11 +131,9 @@ join() { local IFS='|'; echo "$*"; }
 echo "build.sh: keywords — ${#kw_any[@]} anywhere, ${#kw_start[@]} at start" >&2
 
 # ---------------------------------------------------------------- allow-only profiles (e.g. WhatsApp only)
-for prof in allowonly/*.txt; do
-    p=$(basename "$prof" .txt)
-    [ "$p" = meta-ipv4 ] && continue
-    [[ $p =~ ^[a-z0-9-]+$ ]] || { echo "build.sh: bad profile name $p" >&2; exit 1; }
-    L="allow-only-$p" A="$p-servers" C="allowonly:$p"
+ao_parse() { # ao_parse PROFILE -> globals nets hosts deny quic
+    local prof="allowonly/$1.txt" line key val
+    [ -f "$prof" ] || { echo "build.sh: unknown allow-only profile '$1'" >&2; exit 1; }
     nets=() hosts=() deny=() quic=0
     while IFS= read -r line || [ -n "$line" ]; do
         line=${line%%#*}; read -r key val _ <<<"$line" || true
@@ -143,6 +148,45 @@ for prof in allowonly/*.txt; do
             *) echo "build.sh: unknown directive '$key' in $prof" >&2; exit 1 ;;
         esac
     done < "$prof"
+}
+
+ao_lists() { # ao_lists PROFILE COMMENT -> address lists the profile allows
+    local p=$1 C=$2 n h
+    echo "/ip firewall address-list"
+    echo "remove [find comment~\"^$C\"]"
+    for n in "${nets[@]}"; do echo "add list=$p-servers address=$n comment=\"$C\""; done
+    for h in "${hosts[@]}"; do echo "add list=$p-servers address=$h comment=\"$C\""; done
+    echo "# Phone/PC support: Wi-Fi \"internet available\" checks (HTTP only) and push notifications"
+    echo "remove [find comment=\"allowonly:support\"]"
+    for h in connectivitycheck.gstatic.com connectivitycheck.android.com clients3.google.com captive.apple.com www.msftconnecttest.com; do
+        echo "add list=allowonly-checks address=$h comment=\"allowonly:support\""
+    done
+    for h in mtalk.google.com alt1-mtalk.google.com alt2-mtalk.google.com alt3-mtalk.google.com alt4-mtalk.google.com alt5-mtalk.google.com alt6-mtalk.google.com alt7-mtalk.google.com alt8-mtalk.google.com; do
+        echo "add list=allowonly-gpush address=$h comment=\"allowonly:support\""
+    done
+}
+
+ao_rules() { # ao_rules PROFILE CHAIN MATCH COMMENT -> filter rules (MATCH e.g. " src-address-list=X", or "")
+    local p=$1 ch=$2 M=$3 C=$4 w
+    for w in "${deny[@]}"; do
+        echo "add chain=$ch$M protocol=tcp dst-port=443 tls-host=\"*$w*\" action=reject reject-with=tcp-reset comment=\"$C deny $w\""
+    done
+    [ "$quic" = 0 ] || echo "add chain=$ch$M dst-address-list=$p-servers protocol=udp dst-port=443 action=drop comment=\"$C block QUIC\""
+    echo "add chain=$ch$M dst-address-list=$p-servers action=accept comment=\"$C allow\""
+    echo "add chain=$ch$M dst-address-list=allowonly-checks protocol=tcp dst-port=80 action=accept comment=\"$C connectivity check\""
+    echo "add chain=$ch$M dst-address-list=allowonly-gpush protocol=tcp dst-port=5228-5230 action=accept comment=\"$C Android push\""
+    echo "add chain=$ch$M dst-address=17.0.0.0/8 protocol=tcp dst-port=5223 action=accept comment=\"$C Apple push\""
+    echo "add chain=$ch$M connection-state=new action=log log-prefix=\"WF-allowonly\" limit=20/1m,10:packet comment=\"$C blocked (log)\""
+    echo "add chain=$ch$M protocol=tcp action=reject reject-with=tcp-reset comment=\"$C block rest\""
+    echo "add chain=$ch$M action=reject reject-with=icmp-admin-prohibited comment=\"$C block rest\""
+}
+
+for prof in allowonly/*.txt; do
+    p=$(basename "$prof" .txt)
+    [ "$p" = meta-ipv4 ] && continue
+    [[ $p =~ ^[a-z0-9-]+$ ]] || { echo "build.sh: bad profile name $p" >&2; exit 1; }
+    L="allow-only-$p" C="allowonly:$p"
+    ao_parse "$p"
     {
         echo "# MikrotikLover — ALLOW-ONLY profile: $p (needs webfilter-base.rsc)"
         sed -n 's/^# \?//; 1,2p' "$prof" | sed 's/^/# /'
@@ -152,60 +196,67 @@ for prof in allowonly/*.txt; do
         echo "#   static IP / subnet : /ip firewall address-list add list=$L address=192.168.88.50"
         echo "#   by MAC (DHCP)      : /ip dhcp-server lease make-static [find mac-address=AA:BB:CC:DD:EE:FF]"
         echo "#                        /ip dhcp-server lease set [find mac-address=AA:BB:CC:DD:EE:FF] address-lists=$L"
-        echo "#   hotspot (RADIUS)   : radius-admin group add $p-only --address-list $L"
+        echo "#   hotspot (RADIUS)   : radius-admin user policy ali $p-only   (policy file with: allow-only $p)"
         echo "#   WPA-Enterprise     : radius-admin group add $p-only --vlan 50  + add that VLAN's subnet to the list"
         echo "# IPv6 must be off for these devices (the lists are IPv4): no IPv6 address/RA on their network."
         echo "# Remove again: /ip firewall filter remove [find comment~\"^$C\"]; /ip firewall address-list remove [find comment~\"^$C\"]"
         echo
-        echo "/ip firewall address-list"
-        echo "remove [find comment~\"^$C\"]"
-        for n in "${nets[@]}"; do echo "add list=$A address=$n comment=\"$C\""; done
-        for h in "${hosts[@]}"; do echo "add list=$A address=$h comment=\"$C\""; done
-        echo
-        echo "# Phone/PC support: Wi-Fi \"internet available\" checks (HTTP only) and push notifications"
-        echo "remove [find comment=\"allowonly:support\"]"
-        for h in connectivitycheck.gstatic.com connectivitycheck.android.com clients3.google.com captive.apple.com www.msftconnecttest.com; do
-            echo "add list=allowonly-checks address=$h comment=\"allowonly:support\""
-        done
-        for h in mtalk.google.com alt1-mtalk.google.com alt2-mtalk.google.com alt3-mtalk.google.com alt4-mtalk.google.com alt5-mtalk.google.com alt6-mtalk.google.com alt7-mtalk.google.com alt8-mtalk.google.com; do
-            echo "add list=allowonly-gpush address=$h comment=\"allowonly:support\""
-        done
+        ao_lists "$p" "$C"
         echo
         echo "/ip firewall filter"
         echo "remove [find comment~\"^$C\"]"
-        for w in "${deny[@]}"; do
-            echo "add chain=forward src-address-list=$L protocol=tcp dst-port=443 tls-host=\"*$w*\" action=reject reject-with=tcp-reset comment=\"$C deny $w\""
-        done
-        [ "$quic" = 0 ] || echo "add chain=forward src-address-list=$L dst-address-list=$A protocol=udp dst-port=443 action=drop comment=\"$C block QUIC\""
-        echo "add chain=forward src-address-list=$L dst-address-list=$A action=accept comment=\"$C allow\""
-        echo "add chain=forward src-address-list=$L dst-address-list=allowonly-checks protocol=tcp dst-port=80 action=accept comment=\"$C connectivity check\""
-        echo "add chain=forward src-address-list=$L dst-address-list=allowonly-gpush protocol=tcp dst-port=5228-5230 action=accept comment=\"$C Android push\""
-        echo "add chain=forward src-address-list=$L dst-address=17.0.0.0/8 protocol=tcp dst-port=5223 action=accept comment=\"$C Apple push\""
-        echo "add chain=forward src-address-list=$L protocol=tcp action=reject reject-with=tcp-reset comment=\"$C block rest\""
-        echo "add chain=forward src-address-list=$L action=reject reject-with=icmp-admin-prohibited comment=\"$C block rest\""
+        ao_rules "$p" forward " src-address-list=$L" "$C"
         echo "# Above every other forward rule (fasttrack included), in this order."
         echo "move [find comment~\"^$C\"] destination=0"
     } > "$OUT/allow-only-$p.rsc"
     echo "build.sh: allow-only $p — ${#nets[@]} networks, ${#hosts[@]} hosts, ${#deny[@]} denied names" >&2
 done
 
+# ---------------------------------------------------------------- VPN chain (policy directive "block-vpn")
+VPN_UDP=1194,1197,1198,51820,51821,2408,500,4500,1701,5555
+VPN_TCP=1194,1197,1198,1723,5555,9001,9030,9050,9150
+vpn_names() { # every VPN name to check in HTTPS (SNI); names containing "vpn" are caught by one keyword rule
+    { domains categories/vpn-proxy.txt
+      python3 -I "$CDNMAP" domains --category vpn 2>/dev/null || true
+      [ -z "${VPN_DOMAINS:-}" ] || [ ! -f "$VPN_DOMAINS" ] || domains "$VPN_DOMAINS"
+    } | grep -v vpn | sort -u
+}
+vpn_chain() {
+    echo "# VPN websites/apps by name (block list + catalog + names learned on this network), any name with \"vpn\""
+    { vpn_names | while IFS= read -r d; do printf '%s\n' "$d" "*.$d"; done; echo "*vpn*"; } | sni_rules wf-vpn WF-vpn
+    echo "# VPN servers seen on this network + public VPN/Tor lists (address list vpn-servers, kept up to date by the server)"
+    echo "add chain=wf-vpn dst-address-list=vpn-servers connection-state=new action=log log-prefix=\"WF-vpn\" limit=20/1m,10:packet comment=\"wfchain:wf-vpn\""
+    echo "add chain=wf-vpn dst-address-list=vpn-servers protocol=tcp action=reject reject-with=tcp-reset comment=\"wfchain:wf-vpn\""
+    echo "add chain=wf-vpn dst-address-list=vpn-servers action=drop comment=\"wfchain:wf-vpn\""
+    echo "# VPN protocols: OpenVPN, WireGuard, Cloudflare WARP, IPsec, L2TP, PPTP, SoftEther, Tor"
+    echo "add chain=wf-vpn protocol=udp dst-port=$VPN_UDP action=log log-prefix=\"WF-vpn\" limit=20/1m,10:packet comment=\"wfchain:wf-vpn\""
+    echo "add chain=wf-vpn protocol=udp dst-port=$VPN_UDP action=drop comment=\"wfchain:wf-vpn\""
+    echo "add chain=wf-vpn protocol=tcp dst-port=$VPN_TCP tcp-flags=syn action=log log-prefix=\"WF-vpn\" limit=20/1m,10:packet comment=\"wfchain:wf-vpn\""
+    echo "add chain=wf-vpn protocol=tcp dst-port=$VPN_TCP action=reject reject-with=tcp-reset comment=\"wfchain:wf-vpn\""
+    for pr in gre ipsec-esp ipsec-ah; do
+        echo "add chain=wf-vpn protocol=$pr action=log log-prefix=\"WF-vpn\" limit=20/1m,10:packet comment=\"wfchain:wf-vpn\""
+        echo "add chain=wf-vpn protocol=$pr action=drop comment=\"wfchain:wf-vpn\""
+    done
+}
+
 # ---------------------------------------------------------------- per user / group / range POLICIES
 declare -A DNS_IP=( [family]=1.1.1.3 [adguard-family]=94.140.14.15 [cleanbrowsing-family]=185.228.168.168 [cleanbrowsing-adult]=185.228.168.10 )
-used_cats=()
+used_cats=() used_apps=() used_ao=()
 pol_out=$(mktemp)
-for pf in policies/*.txt; do
+policy_files() { for f in "$POLICY_DIR"/*.txt; do [ -f "$f" ] && [ "$(basename "$f")" != README.txt ] && echo "$f"; done; }
+app_slug() { local s=${1,,}; s=${s//[^a-z0-9]/-}; while [[ $s == *--* ]]; do s=${s//--/-}; done; s=${s#-}; echo "${s%-}"; }
+for pf in $(policy_files); do
     p=$(basename "$pf" .txt)
-    [ "$p" = README ] && continue
     [[ $p =~ ^[a-z0-9-]{1,40}$ ]] || { echo "build.sh: bad policy name $p" >&2; exit 1; }
     L="policy-$p" C="wfpolicy:$p"
-    any=0 ech=0 dns=router untimed=0 qtimes=()
+    any=0 ech=0 dns=router untimed=0 qtimes=() ao=""
     {
         echo "# --- policy $p: $(head -1 "$pf" | sed 's/^# *//')"
         while IFS= read -r line || [ -n "$line" ]; do
             line=${line%%#*}; read -r key val extra _ <<<"$line" || true
             [ -n "${key:-}" ] || continue
             t=""
-            for x in ${val:-} ${extra:-}; do
+            for x in $line; do
                 if [[ $x =~ ^time=([0-9a-z,:-]+)$ ]]; then t=" time=${BASH_REMATCH[1]}"; fi
             done
             case $key in
@@ -215,6 +266,23 @@ for pf in policies/*.txt; do
                     used_cats+=("$val"); any=1
                     if [ -z "$t" ]; then untimed=1; else qtimes+=("$t"); fi
                     echo "add chain=forward src-address-list=$L protocol=tcp dst-port=443 action=jump jump-target=wf-$val$t comment=\"$C $val\"" ;;
+                block-app)
+                    # block-app PUBG Mobile [time=...]   (an app of the CDN detective catalog, learned domains included)
+                    name=$(sed -E 's/^[[:space:]]*block-app[[:space:]]+//; s/[[:space:]]+time=[^[:space:]]+//; s/[[:space:]]+$//' <<<"$line")
+                    [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9\ .\&+()\'/-]{0,39}$ ]] || { echo "build.sh: bad app name '$name' in $pf" >&2; exit 1; }
+                    python3 -I "$CDNMAP" domains "$name" >/dev/null || { echo "build.sh: unknown app '$name' in $pf" >&2; exit 1; }
+                    slug=$(app_slug "$name")
+                    used_apps+=("$name"); any=1
+                    if [ -z "$t" ]; then untimed=1; else qtimes+=("$t"); fi
+                    echo "add chain=forward src-address-list=$L protocol=tcp action=jump jump-target=wf-app-$slug$t comment=\"$C app $slug\"" ;;
+                block-vpn)
+                    [[ -z $val || $val == time=* ]] || { echo "build.sh: bad block-vpn in $pf" >&2; exit 1; }
+                    used_cats+=(vpn-all); any=1
+                    if [ -z "$t" ]; then untimed=1; else qtimes+=("$t"); fi
+                    echo "add chain=forward src-address-list=$L action=jump jump-target=wf-vpn$t comment=\"$C vpn\"" ;;
+                allow-only)
+                    [[ $val =~ ^[a-z0-9-]+$ && -f allowonly/$val.txt && $val != meta-ipv4 ]] || { echo "build.sh: unknown allow-only profile '$val' in $pf" >&2; exit 1; }
+                    ao=$val; used_ao+=("$val") ;;
                 block-all)
                     [[ -z $val || $val == time=* ]] || { echo "build.sh: bad block-all in $pf" >&2; exit 1; }
                     echo "add chain=forward src-address-list=$L connection-state=new action=log log-prefix=\"WF-noinet\" limit=20/1m,10:packet$t comment=\"$C no internet (log)\""
@@ -239,6 +307,8 @@ for pf in policies/*.txt; do
                 echo "add chain=forward src-address-list=$L protocol=udp dst-port=443 action=drop$qt comment=\"$C no QUIC\""
             done
         fi
+        # allow-only last: everything not blocked above and not in the profile is refused
+        [ -z "$ao" ] || echo "add chain=forward src-address-list=$L action=jump jump-target=ao-$ao comment=\"$C allow only $ao\""
         if [ "$dns" != router ]; then
             echo "/ip firewall nat"
             echo "add chain=dstnat src-address-list=$L protocol=udp dst-port=53 action=dst-nat to-addresses=${DNS_IP[$dns]} comment=\"$C dns $dns\""
@@ -258,7 +328,7 @@ sni_rules() { # sni_rules CHAIN PREFIX < patterns
 
 {
     echo "# MikrotikLover web filter — POLICIES per single user / group / IP range (needs webfilter-base.rsc)"
-    echo "# Generated by radius/webfilter/build.sh from webfilter/policies/*.txt — edit those, not this file."
+    echo "# Generated by radius/webfilter/build.sh from the policy files — edit those (or the dashboard → Blocking), not this file."
     echo "#"
     echo "# A device is in a policy when its IP is in address list \"policy-<name>\":"
     echo "#   single device (MAC) : /ip dhcp-server lease set [find mac-address=AA:BB:CC:DD:EE:FF] address-lists=policy-students"
@@ -266,7 +336,7 @@ sni_rules() { # sni_rules CHAIN PREFIX < patterns
     echo "#   subnet / VLAN       : /ip firewall address-list add list=policy-staff address=192.168.20.0/24"
     echo "#   hotspot user        : radius-admin user policy ali students"
     echo "#   hotspot group       : radius-admin group add class-9 --policy students"
-    echo "# Policies: $(for f in policies/*.txt; do b=$(basename "$f" .txt); [ "$b" = README ] || printf '%s ' "$b"; done)"
+    echo "# Policies: $(for f in $(policy_files); do printf '%s ' "$(basename "$f" .txt)"; done)"
     echo "# Checks the HTTPS site name (SNI), so it works per device even when DNS answers are cached."
     echo
     echo "/ip firewall filter"
@@ -274,17 +344,39 @@ sni_rules() { # sni_rules CHAIN PREFIX < patterns
     echo "remove [find comment~\"^wfchain:\"]"
     echo "/ip firewall nat"
     echo "remove [find comment~\"^wfpolicy:\"]"
+    for a in $(printf '%s\n' "${used_ao[@]}" | sort -u); do
+        echo
+        echo "# ---- allow-only profile $a (address lists)"
+        ao_parse "$a"
+        ao_lists "$a" "wfchain:ao-$a"
+    done
     echo "/ip firewall filter"
     echo
     echo "# ---- category chains (shared by all policies)"
     for c in $(printf '%s\n' "${used_cats[@]}" | sort -u); do
-        if [ "$c" = keywords ]; then
+        if [ "$c" = vpn-all ]; then
+            vpn_chain
+            echo "add chain=wf-vpn action=return comment=\"wfchain:wf-vpn\""
+            continue
+        elif [ "$c" = keywords ]; then
             { for k in "${kw_any[@]}"; do echo "*$k*"; done
               for k in "${kw_start[@]}"; do printf '%s\n' "$k*" "*.$k*" "*-$k*"; done; } | sni_rules wf-keywords WF-keywords
         else
             domains "categories/$c.txt" | while IFS= read -r d; do if [[ $d == *'*'* ]]; then echo "$d"; else printf '%s\n' "$d" "*.$d"; fi; done | sni_rules "wf-$c" "WF-$c"
         fi
         echo "add chain=wf-$c action=return comment=\"wfchain:wf-$c\""
+    done
+    printf '%s\n' "${used_apps[@]}" | sort -u | while IFS= read -r a; do
+        [ -n "$a" ] || continue
+        slug=$(app_slug "$a")
+        echo "# app: $a"
+        python3 -I "$CDNMAP" domains "$a" | while IFS= read -r d; do printf '%s\n' "$d" "*.$d"; done | sni_rules "wf-app-$slug" "WF-app-$slug"
+        echo "add chain=wf-app-$slug action=return comment=\"wfchain:wf-app-$slug\""
+    done
+    for a in $(printf '%s\n' "${used_ao[@]}" | sort -u); do
+        echo "# allow-only profile $a"
+        ao_parse "$a"
+        ao_rules "$a" "ao-$a" "" "wfchain:ao-$a"
     done
     echo
     echo "# ---- policies"

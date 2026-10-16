@@ -250,6 +250,52 @@ try {
     ok("apps on network: list, who uses an app, category filter");
   } else console.log("     (no app inventory on this server — skipped)");
 
+  // blocking: make a policy in the editor, give it to a user, WhatsApp only, router script, delete
+  await go(page, "#/blocking", "Blocking");
+  await page.getByRole("button", { name: "+ New policy" }).click();
+  const ed = page.locator("dialog[open]");
+  await ed.locator("input[name=name]").fill("ui-kids");
+  await ed.locator("label.check", { hasText: /^social-video/ }).click();
+  await ed.locator("label.check", { hasText: /^Block VPN/ }).click();
+  await ed.locator("input[type=search]").fill("pubg");
+  await ed.locator("label.chip", { hasText: "PUBG Mobile" }).click();
+  await ed.locator("label.field", { hasText: /^When/ }).locator("select").first().selectOption("time");
+  const policyText = await ed.locator("pre.code-box").textContent();
+  for (const want of ["block social-video time=9h-17h,mon,tue,wed,thu,fri,sat", "block-app PUBG Mobile time=9h-17h", "block-vpn time=9h-17h"])
+    if (!policyText.includes(want)) throw new Error(`policy text misses "${want}":\n${policyText}`);
+  await shot(page, "40-policy-editor");
+  await clickToast(page, dlgButton(page, "Save policy"));
+  const kidsCard = page.locator(".policy-card", { has: page.locator("h2 span", { hasText: /^ui-kids$/ }) });
+  await kidsCard.waitFor({ timeout: 30000 });
+  await page.locator("input[list=bl-users]").fill("ui-user");
+  await page.locator("#bl-upol").selectOption("ui-kids");
+  await clickToast(page, page.locator(".card", { hasText: "Give a policy to a user" }).getByRole("button", { name: "Apply" }));
+  await kidsCard.locator("text=Used by: ui-user").waitFor({ timeout: 30000 });
+  ok("blocking: policy made in the editor (category + app + VPN + time) and given to a user");
+  await page.locator("input[list=bl-users]").fill("ui-user");
+  await page.locator("#bl-upol").selectOption("whatsapp-only");
+  await clickToast(page, page.locator(".card", { hasText: "Give a policy to a user" }).getByRole("button", { name: "Apply" }));
+  await page.locator(".policy-card", { has: page.locator("h2 span", { hasText: /^whatsapp-only$/ }) }).locator("text=Used by: ui-user").waitFor({ timeout: 30000 });
+  ok("blocking: WhatsApp-only given to a user");
+  await page.locator("input[placeholder^='server IP']").fill("192.168.88.10");
+  const [dl] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "⬇ Download router script" }).click()]);
+  const syncRsc = require("fs").readFileSync(await dl.path(), "utf8");
+  if (!syncRsc.includes("/api/public/router") || syncRsc.includes("PUT-THE-KEY-HERE") || !syncRsc.includes("address=192.168.88.10"))
+    throw new Error("router auto-sync script not filled in");
+  ok("router auto-sync script downloaded with server, IP and key");
+  await kidsCard.getByRole("button", { name: "Delete" }).click();
+  await clickToast(page, dlgButton(page, "Confirm"));
+  await kidsCard.waitFor({ state: "detached", timeout: 30000 });
+  ok("unused policy deleted");
+
+  // VPN watch
+  for (const tab of ["users", "attempts", "servers", "names", "howto"]) {
+    await go(page, `#/vpn/${tab}`, "VPN watch");
+    await page.locator(".tile").first().waitFor({ timeout: 15000 });
+  }
+  await shot(page, "41-vpn-watch");
+  ok("VPN watch: who tried, attempts, server + name lists, how to block");
+
   // business settings
   await go(page, "#/settings", "Settings");
   await page.fill("input[name=brand]", "Lover Net WiFi");

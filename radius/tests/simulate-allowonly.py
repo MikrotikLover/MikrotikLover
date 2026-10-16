@@ -40,6 +40,7 @@ def verdict(src_listed, proto, dst, dport, sni=None):
         if "dst-address-list" in r and not in_list(dst, r["dst-address-list"]): continue
         if "dst-address" in r and ipaddress.ip_address(dst) not in ipaddress.ip_network(r["dst-address"]): continue
         if "tls-host" in r and not (sni and fnmatch.fnmatch(sni, r["tls-host"])): continue
+        if r["action"] in ("log", "passthrough"): continue
         return r["action"]
     return "(other rules)"
 

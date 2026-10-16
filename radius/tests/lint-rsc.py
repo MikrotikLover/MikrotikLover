@@ -11,7 +11,7 @@ import re, sys, glob, os
 FW = {"chain", "in-interface-list", "src-address-list", "dst-address-list", "src-address",
       "dst-address", "protocol", "dst-port", "action", "to-addresses", "to-ports",
       "reject-with", "comment", "tls-host", "place-before", "disabled", "jump-target", "time",
-      "log", "log-prefix", "connection-state", "limit"}
+      "log", "log-prefix", "connection-state", "limit", "tcp-flags"}
 PROPS = {
     "/radius": {"address", "secret", "service", "timeout", "comment", "src-address"},
     "/radius incoming": {"accept"},
@@ -43,14 +43,18 @@ PROPS = {
     "/system logging action": {"name", "target", "remote", "remote-port"},
     "/system logging": {"topics", "action", "prefix"},
     "/ip hotspot profile": {"use-radius", "radius-accounting", "radius-interim-update", "login-by", "mac-auth-mode"},
+    "/system script": {"name", "policy", "source", "comment", "dont-require-permissions"},
+    "/system scheduler": {"name", "interval", "start-time", "on-event", "policy", "comment"},
 }
+# one-shot commands (not a menu + add/set): their arguments are not checked
+COMMANDS = ("/tool fetch", "/certificate import", "/import", "/system script run")
 VERBS = {"add", "set", "remove", "move", "disable", "enable", ":foreach", ":if", "}"}
 
 def strip_quoted(s):
     return re.sub(r'"(?:\\.|[^"\\])*"', 'Q', s)
 
 def lint(path):
-    errs, menu, depth, cont = [], None, 0, ""
+    errs, menu, depth, cont, script_depth = [], None, 0, "", 0
     for n, raw in enumerate(open(path, encoding="utf-8"), 1):
         line = raw.rstrip("\n")
         if line.rstrip().endswith("\\") and not line.lstrip().startswith("#"):
@@ -59,6 +63,15 @@ def lint(path):
         line, cont = cont + line, ""
         s = line.strip()
         if not s or s.startswith("#"):
+            continue
+        if script_depth:                      # inside source={ ... }: RouterOS script, not menu commands
+            bare = strip_quoted(s)
+            script_depth += bare.count("{") - bare.count("}")
+            depth += bare.count("{") - bare.count("}")
+            continue
+        if s.startswith(COMMANDS) or s.startswith((":delay", ":if", ":do", ":log", ":local", ":global")):
+            bare = strip_quoted(s)
+            depth += bare.count("{") - bare.count("}")
             continue
         if strip_quoted(s).count('"'):
             errs.append(f"{n}: unbalanced quote")
@@ -84,6 +97,8 @@ def lint(path):
         if menu is None:
             errs.append(f"{n}: command before any menu")
             continue
+        if verb in ("add", "set") and "source={" in s:
+            script_depth = bare.count("{") - bare.count("}")
         if verb in ("add", "set"):
             for prop in re.findall(r'(?:^|\s)([a-z0-9-]+)=', re.sub(r"\[[^\]]*\]", "", bare)):
                 if prop not in PROPS.get(menu, set()):

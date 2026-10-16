@@ -12,7 +12,7 @@ Security model
   JSON-only POST bodies, strict CSP. Roles: admin (changes) and viewer (read only).
 """
 import hmac, ipaddress, json, os, re, secrets, subprocess, sys, threading, time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from functools import wraps
 
 import pymysql
@@ -26,7 +26,9 @@ import mlreport  # noqa: E402
 CONF_FILE = os.environ.get("MLWEB_CONF", "/etc/mikrotiklover-radius-web/web.conf")
 MYCNF = os.environ.get("MLWEB_MYCNF", "/etc/mikrotiklover-radius-web/my.cnf")
 RADIUS_ADMIN = os.environ.get("MLWEB_RADIUS_ADMIN", "/usr/local/sbin/radius-admin")
-POLICY_DIR = os.environ.get("MLWEB_POLICIES", "/usr/local/lib/mikrotiklover/policies")
+POLICY_DIR = os.environ.get("MLWEB_POLICIES", "/var/lib/mikrotiklover/policies")
+ROUTER_DIR = os.environ.get("MLWEB_ROUTER", "/var/lib/mikrotiklover/router")
+WF_DIR = os.environ.get("MLWEB_WEBFILTER", "/usr/local/lib/mikrotiklover/webfilter")
 
 NAME_RE = re.compile(r"^[A-Za-z0-9._@+-]{1,64}$")
 POLICY_RE = re.compile(r"^[a-z0-9-]{1,40}$")
@@ -1178,6 +1180,209 @@ def app_users():
                 FROM ml_app_day d WHERE d.site=%s AND d.day >= CURDATE() - INTERVAL %s DAY
                 GROUP BY d.client_ip ORDER BY lookups DESC LIMIT 500""", (site, days, site, days))
     return jsonify(rows=jsonable(rows))
+
+
+# ------------------------------------------------------------------ blocking: policies, router sync
+CATEGORY_INFO = {
+    "social": "Social media — Facebook, Instagram, TikTok, Snapchat, X, Likee, Snack Video ...",
+    "social-video": "Only VIDEOS in Facebook/Instagram, YouTube and TikTok (chat + photos keep working)",
+    "video-streaming": "YouTube (whole), Netflix, Prime, Disney+, Hotstar, Tamasha, Tapmad ...",
+    "gaming": "PUBG, Free Fire, Roblox, Minecraft, Steam, Epic, Clash of Clans, online games ...",
+    "messaging": "WhatsApp, Telegram, Signal, Viber, imo, Discord",
+    "torrent-piracy": "Torrent sites and trackers",
+    "keywords": "Adult words in site names (sex, xxx, porn ...)",
+    "vpn-proxy": "VPN / proxy websites only (use \"Block VPN\" for apps, servers and protocols too)",
+    "custom": "Your own list (webfilter/categories/custom.txt)",
+}
+
+
+def parse_policy(text):
+    """policy file -> {description, rules: [{kind, value, time}]} (what the dashboard editor shows)."""
+    lines = text.splitlines()
+    desc = lines[0].lstrip("# ").strip() if lines and lines[0].startswith("#") else ""
+    rules = []
+    for line in lines:
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        m = re.search(r"\s+time=(\S+)", line)
+        t = m.group(1) if m else ""
+        line = re.sub(r"\s+time=\S+", "", line)
+        key, _, val = line.partition(" ")
+        rules.append({"kind": key, "value": val.strip(), "time": t})
+    return {"description": desc, "rules": rules}
+
+
+def policy_members():
+    users, groups = {}, {}
+    for r in q("SELECT username, value FROM radreply WHERE attribute='Mikrotik-Address-List' AND value LIKE 'policy-%%'"):
+        users.setdefault(r["value"][7:], []).append(r["username"])
+    for r in q("SELECT groupname, value FROM radgroupreply WHERE attribute='Mikrotik-Address-List' AND value LIKE 'policy-%%'"):
+        groups.setdefault(r["value"][7:], []).append(r["groupname"])
+    return users, groups
+
+
+def router_info():
+    info = {"version": "", "built": "", "url": "", "has_key": False}
+    try:
+        info["version"] = open(os.path.join(ROUTER_DIR, "version")).read().strip()
+        info["built"] = datetime.fromtimestamp(os.path.getmtime(os.path.join(ROUTER_DIR, "sync.rsc"))).strftime("%Y-%m-%d %H:%M")
+        info["vpn_servers"] = sum(1 for l in open(os.path.join(ROUTER_DIR, "vpn-servers.rsc")) if l.startswith("add list=vpn-servers"))
+    except OSError:
+        pass
+    info["has_key"] = os.path.exists(os.path.join(ROUTER_DIR, "key"))
+    dom = (q1("SELECT v FROM ml_setting WHERE k='radius_domain'") or {}).get("v") or "radius.local"
+    info["host"] = dom
+    info["port"] = web_port()
+    info["url"] = f"https://{dom}:{info['port']}/api/public/router"
+    return info
+
+
+def web_port():
+    p = request.headers.get("X-Forwarded-Port", "") or CONF.get("WEB_PORT", "8443")
+    return p if re.match(r"^\d{1,5}$", p) else "8443"
+
+
+@app.get("/api/blocking")
+@login_required()
+def blocking():
+    import cdnmap
+    users, groups = policy_members()
+    pols = []
+    for f in sorted(os.listdir(POLICY_DIR)) if os.path.isdir(POLICY_DIR) else []:
+        if not f.endswith(".txt") or f == "README.txt":
+            continue
+        text = open(os.path.join(POLICY_DIR, f), encoding="utf-8", errors="replace").read()
+        name = f[:-4]
+        pols.append({"name": name, "text": text, **parse_policy(text), "users": sorted(users.get(name, [])),
+                     "groups": sorted(groups.get(name, []))})
+    cats = []
+    for c, d in CATEGORY_INFO.items():
+        if c == "keywords" or os.path.exists(os.path.join(WF_DIR, "categories", c + ".txt")):
+            cats.append({"name": c, "description": d})
+    apps = sorted(({"app": a["app"], "category": a["category"] or "other", "discovered": bool(a.get("discovered"))}
+                   for a in cdnmap.catalog().apps().values()), key=lambda a: (a["category"], a["app"].lower()))
+    allow_only = sorted(f[:-4] for f in os.listdir(os.path.join(WF_DIR, "allowonly"))
+                        if f.endswith(".txt") and f != "meta-ipv4.txt") if os.path.isdir(os.path.join(WF_DIR, "allowonly")) else []
+    return jsonify(policies=pols, categories=cats, apps=apps, allow_only=allow_only, router=router_info())
+
+
+@app.post("/api/policies")
+@login_required("admin")
+def policy_save():
+    data = body()
+    name = field(data, "name", POLICY_RE, required=True)
+    text = str(data.get("text", ""))
+    if len(text) > 20000 or not text.strip() or re.search(r"[^\x20-\x7e\n\t -￿]", text):
+        abort(400, "invalid policy text")
+    return result(*radius_admin(["policy", "set", name], stdin=text.replace("\r", "") + "\n", action=f"policy set {name}"))
+
+
+@app.delete("/api/policies/<name>")
+@login_required("admin")
+def policy_delete(name):
+    if not POLICY_RE.match(name):
+        abort(400, "invalid name")
+    return result(*radius_admin(["policy", "del", name]))
+
+
+@app.post("/api/router/build")
+@login_required("admin")
+def router_build():
+    return result(*radius_admin(["policy", "build"]))
+
+
+def router_key():
+    try:
+        return open(os.path.join(ROUTER_DIR, "key")).read().strip()
+    except OSError:
+        return ""
+
+
+@app.get("/api/router/autosync.rsc")
+@login_required("admin")
+def router_autosync():
+    """mikrotik/autosync.rsc with this server's name, address, port and key filled in."""
+    key = router_key()
+    if not key:
+        abort(409, "build the router rules first")
+    info = router_info()
+    host = request.host.rsplit(":", 1)[0].strip("[]")
+    port = info["port"]
+    server_ip = request.args.get("ip", "") or (host if re.match(r"^\d+\.\d+\.\d+\.\d+$", host) else "")
+    if not re.match(r"^\d+\.\d+\.\d+\.\d+$", server_ip):
+        abort(400, "give the server's IP address as the router sees it (?ip=...)")
+    tpl = open(os.path.join(HERE, "autosync.rsc"), encoding="utf-8").read()
+    text = (tpl.replace("radius.example.lan", info["host"]).replace("192.168.88.10", server_ip)
+               .replace(":8443", f":{port}").replace("PUT-THE-KEY-HERE", key))
+    audit("router autosync script downloaded", "ok")
+    return app.response_class(text, mimetype="text/plain",
+                              headers={"Content-Disposition": 'attachment; filename="mikrotiklover-autosync.rsc"'})
+
+
+def _router_file(name):
+    key = request.args.get("key", "")
+    if not key or not hmac.compare_digest(key, router_key()):
+        abort(403)
+    try:
+        return open(os.path.join(ROUTER_DIR, name), encoding="utf-8").read()
+    except OSError:
+        abort(404)
+
+
+@app.get("/api/public/router/version")
+def router_version():
+    return app.response_class(_router_file("version").strip(), mimetype="text/plain")
+
+
+@app.get("/api/public/router/sync.rsc")
+def router_sync():
+    return app.response_class(_router_file("sync.rsc"), mimetype="text/plain")
+
+
+# ------------------------------------------------------------------ VPN watch
+@app.get("/api/vpn")
+@login_required()
+def vpn_report():
+    a = report_args()
+    days = int(max(a.days, 1))
+    w, args = ["bucket >= NOW() - INTERVAL %s DAY"], [days]
+    if a.user:
+        w.append("username=%s"); args.append(a.user)
+    w = " AND ".join(w)
+    attempts = q(f"""SELECT MAX(last_seen) AS last, MIN(first_seen) AS first, NULLIF(username,'') AS username, client_ip, kind, what,
+                            GROUP_CONCAT(DISTINCT source ORDER BY source) AS sources, SUM(hits) AS tries, SUM(bytes) AS bytes,
+                            SUM(source='blocked') > 0 AS blocked
+                     FROM ml_vpn_event WHERE {w} GROUP BY client_ip, username, kind, what ORDER BY MAX(last_seen) DESC LIMIT %s""",
+                 args + [a.top])
+    users = q(f"""SELECT COALESCE(NULLIF(username,''),'') AS username, GROUP_CONCAT(DISTINCT client_ip) AS devices,
+                         GROUP_CONCAT(DISTINCT kind ORDER BY kind SEPARATOR ', ') AS vpns, SUM(hits) AS tries,
+                         SUM(source='blocked') > 0 AS blocked, SUM(source='flow' AND bytes > 200000) > 0 AS connected,
+                         MIN(first_seen) AS first, MAX(last_seen) AS last
+                  FROM ml_vpn_event WHERE {w} GROUP BY COALESCE(NULLIF(username,''),client_ip) ORDER BY SUM(hits) DESC LIMIT 500""", args)
+    servers = q("SELECT ip, kind, why, first_seen, last_seen FROM ml_vpn_server ORDER BY last_seen DESC LIMIT 500")
+    domains = q("SELECT domain, kind, why, first_seen, last_seen FROM ml_vpn_domain ORDER BY last_seen DESC LIMIT 500")
+    totals = q1(f"""SELECT COUNT(DISTINCT COALESCE(NULLIF(username,''),client_ip)) AS users, COALESCE(SUM(hits),0) AS tries,
+                           COALESCE(SUM(IF(source='blocked',hits,0)),0) AS blocked FROM ml_vpn_event WHERE {w}""", args)
+    totals.update(q1("SELECT (SELECT COUNT(*) FROM ml_vpn_server) AS servers, (SELECT COUNT(*) FROM ml_vpn_domain) AS domains"))
+    return jsonify(attempts=jsonable(attempts), users=jsonable(users), servers=jsonable(servers), domains=jsonable(domains),
+                   totals=jsonable([totals])[0])
+
+
+@app.post("/api/vpn/ignore")
+@login_required("admin")
+def vpn_ignore():
+    name = field(body(), "name", re.compile(r"^[a-z0-9.-]{1,253}$"), required=True)
+    return result(*radius_admin(["vpn", "ignore", name]))
+
+
+@app.post("/api/vpn/scan")
+@login_required("admin")
+def vpn_scan():
+    ok, out = radius_admin(["vpn", "scan"])
+    if ok:
+        radius_admin(["policy", "build"])
+    return result(ok, out)
 
 
 # ------------------------------------------------------------------ system / admins / audit

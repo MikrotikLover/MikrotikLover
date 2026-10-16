@@ -167,3 +167,35 @@ CREATE TABLE IF NOT EXISTS ml_app_day (
   KEY idx_site (site, day),
   KEY idx_user (username, day)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- VPN watch (tools/vpn.py hourly + traffic collector): who tried a VPN, and the automatic VPN lists
+CREATE TABLE IF NOT EXISTS ml_vpn_event (
+  bucket DATETIME NOT NULL,
+  client_ip VARCHAR(45) NOT NULL,
+  username VARCHAR(64) NOT NULL DEFAULT '',
+  source ENUM('dns','blocked','flow') NOT NULL,
+  what VARCHAR(253) NOT NULL,
+  kind VARCHAR(64) NOT NULL DEFAULT '',
+  hits INT UNSIGNED NOT NULL DEFAULT 0,
+  bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  first_seen DATETIME NOT NULL,
+  last_seen DATETIME NOT NULL,
+  PRIMARY KEY (bucket, client_ip, source, what),
+  KEY idx_user (username, bucket)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS ml_vpn_server (
+  ip VARCHAR(45) NOT NULL PRIMARY KEY,
+  kind VARCHAR(64) NOT NULL DEFAULT '',
+  why VARCHAR(128) NOT NULL DEFAULT '',
+  first_seen DATETIME NOT NULL,
+  last_seen DATETIME NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS ml_vpn_domain (
+  domain VARCHAR(253) NOT NULL PRIMARY KEY,
+  kind VARCHAR(64) NOT NULL DEFAULT '',
+  why VARCHAR(64) NOT NULL DEFAULT '',
+  first_seen DATETIME NOT NULL,
+  last_seen DATETIME NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

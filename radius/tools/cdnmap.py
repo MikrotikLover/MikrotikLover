@@ -385,6 +385,18 @@ def update(out=ASN_DB):
 def main():
     if len(sys.argv) >= 2 and sys.argv[1] == "update":
         return update()
+    if len(sys.argv) == 3 and sys.argv[1] == "domains" or len(sys.argv) == 4 and sys.argv[1:3] == ["domains", "--category"]:
+        # domains APP | domains --category CAT  -> every known domain, one per line (for webfilter/build.sh)
+        want = sys.argv[-1].lower()
+        apps = catalog().apps()
+        out = set()
+        for a in apps.values():
+            if (a["category"].lower() == want) if len(sys.argv) == 4 else (want in (a["app"].lower(), a["site"].lower())):
+                out.update(r["domain"] for r in a["domains"] if re.match(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", r["domain"]))
+        if not out and len(sys.argv) == 3:
+            raise SystemExit(f"unknown app {sys.argv[2]!r}")
+        print("\n".join(sorted(out)))
+        return
     if len(sys.argv) >= 3 and sys.argv[1] == "lookup":
         try:
             r = lookup(sys.argv[2])
