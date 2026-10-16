@@ -18,11 +18,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mlreport import base_domain, is_generic_cdn  # noqa: E402  (same directory)
 import ports  # noqa: E402
 import vpn  # noqa: E402
+import sentinel  # noqa: E402
 
 CONF = "/etc/mikrotiklover-radius/radius.conf"
 DNS_LOG = os.environ.get("MLREPORT_LOGDIR", "/var/log/mikrotik") + "/dns.log"
 NOW_FILE = "/run/mikrotiklover/traffic-now.json"
 FLUSH_EVERY = int(os.environ.get("MLR_FLUSH", 60))
+IPV4_SITE = re.compile(r"^[0-9.]+$")
 
 # IPFIX / NetFlow v9 information elements we use
 IE_BYTES, IE_BYTES_TOTAL, IE_PKTS, IE_PROTO = 1, 85, 2, 4
@@ -311,6 +313,8 @@ class Store:
                 "ON DUPLICATE KEY UPDATE last_seen=NOW(), bytes=bytes+VALUES(bytes), flows=flows+VALUES(flows)")
         profile = {}
         for b, c, u, site, proto, port, d, down, up, fl in rows:
+            if IPV4_SITE.match(site):       # no name = not an app (scans and floods would fill the profile)
+                continue
             k = (site, proto, port, d)
             v = profile.setdefault(k, [0, 0])
             v[0] += down + up
@@ -346,6 +350,18 @@ class Store:
             self.db = None
             raise
 
+    def write_security(self, events):
+        """Events from sentinel.FlowWatch (virus / attack / ddos seen in the flows)."""
+        rows = [sentinel.row_values(k, e) for k, e in events.rows()]
+        if not rows:
+            return
+        try:
+            with self.conn().cursor() as c:
+                c.execute(sentinel.UPSERT.format(",".join(rows)))
+        except self.pymysql.MySQLError:
+            self.db = None
+            raise
+
     def write(self, rows, keep_days):
         sql = ("INSERT INTO traffic_site (bucket, client_ip, username, site, bytes_down, bytes_up, flows) "
                "VALUES (%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE username=VALUES(username), "
@@ -367,6 +383,7 @@ def main():
     keep_days = int(conf.get("TRAFFIC_DAYS", 90))
     store = Store(conf)
     decoder, cls, dedupe, names = Decoder(), Classifier(lan), Dedupe(), DnsNames()
+    watch, threats_loaded = sentinel.FlowWatch(lan, conf=conf), time.time()
     tail = Tail(DNS_LOG)
     allowed = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"]
     try:
@@ -401,6 +418,7 @@ def main():
                 for line in tail.lines():
                     names.feed(line, now)
                 for rec in decoder.decode(data, addr):
+                    watch.feed(rec)
                     r = cls.classify(rec)
                     if not r or not dedupe.first(r[4], now):
                         continue
@@ -439,6 +457,7 @@ def main():
                         "rows": [{"ip": c, "user": users.get(c, ""), "site": s, "down": v[0], "up": v[1]}
                                  for (c, s), v in agg.items()]}
             prows = [(bucket, c, users.get(c, ""), s, pr, po, d, v[0], v[1], v[2]) for (c, s, pr, po, d), v in pagg.items()]
+            sec_events = watch.evaluate(now, interval, users)
             try:
                 if rows:
                     store.write(rows, keep_days)
@@ -450,8 +469,11 @@ def main():
                     store.write_vpn([(bucket, c, users.get(c, ""), w, k, r, v[0], v[1]) for (c, w, k, r), v in vagg.items()])
                 vagg = {}
                 vpn_servers = store.vpn_servers()
+                store.write_security(sec_events)
             except Exception as e:  # keep the counters and retry on the next flush
                 print(f"warning: database write failed, retrying: {e}", file=sys.stderr, flush=True)
+            if now - threats_loaded > 3600:          # threat lists are refreshed weekly by radius-admin update
+                watch.threats, threats_loaded = sentinel.Threats(), now
             tmp = NOW_FILE + ".tmp"
             with open(tmp, "w") as fh:
                 json.dump(snapshot, fh)

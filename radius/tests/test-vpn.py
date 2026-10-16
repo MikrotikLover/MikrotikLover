@@ -32,6 +32,8 @@ look(T0 + 20, bilal, "vpn.mycompany.com", ["192.0.2.50"])                  # ign
 look(T0 + 21, bilal, "www.google.com", ["142.250.1.1"])                    # normal
 look(T0 + 22, bilal, "shared.example.net", ["198.51.100.10"])              # non-VPN name on a "VPN" IP? -> not a server
 look(T0 + 30, ali, "cdn.vpnapp.io", ["151.101.1.1"], ["vpnapp.global.fastly.net"])   # VPN name via a shared CDN
+look(T0 + 35, bilal, "www.freeproxy-unblock.site", ["203.0.113.90"])   # web proxy site
+look(T0 + 36, bilal, "www.croxyproxy.com", ["203.0.113.91"])           # proxy site from the block list
 wf = [f"{iso(T0 + 40)} 192.168.88.1 firewall,info: WF-vpn forward: in:bridge out:ether1, connection-state:new src-mac aa:bb:cc:00:00:12, proto UDP, {sara}:40000->203.0.113.70:51820, len 148",
       f"{iso(T0 + 41)} 192.168.88.1 firewall,info: WF-social forward: in:bridge out:ether1, src-mac aa:bb:cc:00:00:12, proto TCP (SYN), {sara}:40001->157.240.1.35:443, len 60"]
 
@@ -61,7 +63,11 @@ check("blocked attempt shows port/protocol + known server kind", blk and blk[0][
 check("WF-social line is not a VPN attempt", not any(k[3].startswith("157.240.1.35") for k in events))
 check("VPN names list", {"api.nordvpn.com", "api.superfast-vpn-free.xyz", "www.psiphon3.com"} <= set(domains), domains)
 
+check("web proxy site found by its name", any(k[3] == "www.freeproxy-unblock.site" and e[0].startswith("Web proxy") for k, e in events.items()), events)
+check("proxy site from the block list found", any(k[3] == "www.croxyproxy.com" for k in events))
 srv = {"203.0.113.70": "superfast-vpn-free.xyz"}
+check("flow: proxy set on the phone (tcp/3128)", vpn.flow_kind(6, "out", 3128, "1.2.3.4", srv) == "HTTP proxy")
+check("flow: SOCKS proxy (tcp/1080)", vpn.flow_kind(6, "out", 1080, "1.2.3.4", srv) == "SOCKS proxy")
 check("flow: OpenVPN udp/1194 out", vpn.flow_kind(17, "out", 1194, "1.2.3.4", srv) == "OpenVPN")
 check("flow: WireGuard", vpn.flow_kind(17, "out", 51820, "1.2.3.4", srv) == "WireGuard")
 check("flow: GRE (PPTP)", vpn.flow_kind(47, "out", 0, "1.2.3.4", srv) == "PPTP VPN (GRE)")

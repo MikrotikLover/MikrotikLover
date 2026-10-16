@@ -19,6 +19,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "cdn-apps.json")
 STATE = os.environ.get("MLCDN_STATE", "/var/lib/mikrotiklover")
 LOCAL = os.path.join(STATE, "cdn-apps.local.json")
+REMOTE = os.path.join(STATE, "cdn-apps.update.json")      # newer catalog downloaded by "catalog-update"
+CATALOG_URL = os.environ.get("CATALOG_URL", "https://raw.githubusercontent.com/mikrotiklover/mikrotiklover/main/radius/tools/cdn-apps.json")
 LEARNED = os.path.join(STATE, "cdn-apps.learned.json")
 ASN_DB = os.path.join(STATE, "asn.json")
 DNS_LOG = os.environ.get("MLREPORT_LOGDIR", "/var/log/mikrotik") + "/dns.log"
@@ -41,17 +43,18 @@ class Catalog:
         self.asn = {}
         self.asn_sites = {}
         self.sources = {}       # domain -> builtin | local | learned
-        for path in (DATA, LOCAL):
+        for path in (DATA, REMOTE, LOCAL):
             try:
                 data = json.load(open(path, encoding="utf-8"))
             except (OSError, ValueError):
                 continue
             local = path == LOCAL
+            newer = path != DATA          # the downloaded update and your own file win over the built-in list
             for e in data.get("apps", []):
                 entry = {"app": e["app"], "site": e.get("site") or e["domains"][0], "category": e.get("category", ""),
                          "note": e.get("note", ""), "generic": False}
                 for d in e.get("domains", []):
-                    if local or d.lower() not in self.suffix:
+                    if newer or d.lower() not in self.suffix:
                         self.suffix[d.lower()] = entry
                         self.sources[d.lower()] = "local" if local else "builtin"
             for owner, doms in data.get("generic_cdns", {}).items():
@@ -174,7 +177,7 @@ _CATALOG, _STAMP = None, None
 
 def _stamp():
     out = []
-    for p in (DATA, LOCAL, LEARNED, ASN_DB):
+    for p in (DATA, REMOTE, LOCAL, LEARNED, ASN_DB):
         try:
             out.append(os.path.getmtime(p))
         except OSError:
@@ -353,6 +356,35 @@ def rsc_for(app):
 
 
 # ---------------------------------------------------------------- ASN lists
+def catalog_update(url=CATALOG_URL, out=REMOTE):
+    """Download a newer app catalog (same format as cdn-apps.json); kept only if it is valid."""
+    if not url:
+        print("no CATALOG_URL set")
+        return
+    req = urllib.request.Request(url, headers={"User-Agent": "MikrotikLover-RADIUS"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = json.loads(r.read(5_000_000).decode("utf-8"))
+    except (OSError, ValueError) as e:
+        raise SystemExit(f"catalog update failed: {e}")
+    apps = data.get("apps") if isinstance(data, dict) else None
+    dom_re = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
+    if not isinstance(apps, list) or len(apps) < 10 or not all(
+            isinstance(a, dict) and isinstance(a.get("app"), str) and isinstance(a.get("domains"), list)
+            and all(isinstance(d, str) and dom_re.match(d.lower()) for d in a["domains"]) for a in apps):
+        raise SystemExit("catalog update: the downloaded file is not a valid app catalog; keeping the current one")
+    builtin = json.load(open(DATA, encoding="utf-8"))
+    if data == builtin:
+        print(f"app catalog: up to date ({len(apps)} entries)")
+        return
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    tmp = out + ".tmp"
+    json.dump(data, open(tmp, "w"), indent=1)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, out)
+    print(f"app catalog updated: {len(apps)} entries ({len({a['app'] for a in apps})} apps)")
+
+
 def update(out=ASN_DB):
     cat = Catalog()
     owners, failed = {}, []
@@ -385,6 +417,8 @@ def update(out=ASN_DB):
 def main():
     if len(sys.argv) >= 2 and sys.argv[1] == "update":
         return update()
+    if len(sys.argv) >= 2 and sys.argv[1] == "catalog-update":
+        return catalog_update(sys.argv[2] if len(sys.argv) > 2 else CATALOG_URL)
     if len(sys.argv) == 3 and sys.argv[1] == "domains" or len(sys.argv) == 4 and sys.argv[1:3] == ["domains", "--category"]:
         # domains APP | domains --category CAT  -> every known domain, one per line (for webfilter/build.sh)
         want = sys.argv[-1].lower()

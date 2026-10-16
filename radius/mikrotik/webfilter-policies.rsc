@@ -400,11 +400,11 @@ add chain=wf-vpn protocol=tcp tls-host="*vpn*" action=reject reject-with=tcp-res
 add chain=wf-vpn dst-address-list=vpn-servers connection-state=new action=log log-prefix="WF-vpn" limit=20/1m,10:packet comment="wfchain:wf-vpn"
 add chain=wf-vpn dst-address-list=vpn-servers protocol=tcp action=reject reject-with=tcp-reset comment="wfchain:wf-vpn"
 add chain=wf-vpn dst-address-list=vpn-servers action=drop comment="wfchain:wf-vpn"
-# VPN protocols: OpenVPN, WireGuard, Cloudflare WARP, IPsec, L2TP, PPTP, SoftEther, Tor
+# VPN protocols: OpenVPN, WireGuard, Cloudflare WARP, IPsec, L2TP, PPTP, SoftEther, Tor; proxies 3128, 8118, SOCKS 1080
 add chain=wf-vpn protocol=udp dst-port=1194,1197,1198,51820,51821,2408,500,4500,1701,5555 action=log log-prefix="WF-vpn" limit=20/1m,10:packet comment="wfchain:wf-vpn"
 add chain=wf-vpn protocol=udp dst-port=1194,1197,1198,51820,51821,2408,500,4500,1701,5555 action=drop comment="wfchain:wf-vpn"
-add chain=wf-vpn protocol=tcp dst-port=1194,1197,1198,1723,5555,9001,9030,9050,9150 tcp-flags=syn action=log log-prefix="WF-vpn" limit=20/1m,10:packet comment="wfchain:wf-vpn"
-add chain=wf-vpn protocol=tcp dst-port=1194,1197,1198,1723,5555,9001,9030,9050,9150 action=reject reject-with=tcp-reset comment="wfchain:wf-vpn"
+add chain=wf-vpn protocol=tcp dst-port=1194,1197,1198,1723,5555,9001,9030,9050,9150,3128,3129,8118,1080 tcp-flags=syn action=log log-prefix="WF-vpn" limit=20/1m,10:packet comment="wfchain:wf-vpn"
+add chain=wf-vpn protocol=tcp dst-port=1194,1197,1198,1723,5555,9001,9030,9050,9150,3128,3129,8118,1080 action=reject reject-with=tcp-reset comment="wfchain:wf-vpn"
 add chain=wf-vpn protocol=gre action=log log-prefix="WF-vpn" limit=20/1m,10:packet comment="wfchain:wf-vpn"
 add chain=wf-vpn protocol=gre action=drop comment="wfchain:wf-vpn"
 add chain=wf-vpn protocol=ipsec-esp action=log log-prefix="WF-vpn" limit=20/1m,10:packet comment="wfchain:wf-vpn"

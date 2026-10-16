@@ -270,12 +270,12 @@ try {
   await page.locator("input[list=bl-users]").fill("ui-user");
   await page.locator("#bl-upol").selectOption("ui-kids");
   await clickToast(page, page.locator(".card", { hasText: "Give a policy to a user" }).getByRole("button", { name: "Apply" }));
-  await kidsCard.locator("text=Used by: ui-user").waitFor({ timeout: 30000 });
+  await kidsCard.locator("div.muted", { hasText: /Used by:.*ui-user/ }).waitFor({ timeout: 30000 });
   ok("blocking: policy made in the editor (category + app + VPN + time) and given to a user");
   await page.locator("input[list=bl-users]").fill("ui-user");
   await page.locator("#bl-upol").selectOption("whatsapp-only");
   await clickToast(page, page.locator(".card", { hasText: "Give a policy to a user" }).getByRole("button", { name: "Apply" }));
-  await page.locator(".policy-card", { has: page.locator("h2 span", { hasText: /^whatsapp-only$/ }) }).locator("text=Used by: ui-user").waitFor({ timeout: 30000 });
+  await page.locator(".policy-card", { has: page.locator("h2 span", { hasText: /^whatsapp-only$/ }) }).locator("div.muted", { hasText: /Used by:.*ui-user/ }).waitFor({ timeout: 30000 });
   ok("blocking: WhatsApp-only given to a user");
   await page.locator("input[placeholder^='server IP']").fill("192.168.88.10");
   const [dl] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "⬇ Download router script" }).click()]);
@@ -290,11 +290,36 @@ try {
 
   // VPN watch
   for (const tab of ["users", "attempts", "servers", "names", "howto"]) {
-    await go(page, `#/vpn/${tab}`, "VPN watch");
+    await go(page, `#/vpn/${tab}`, "VPN & proxy watch");
     await page.locator(".tile").first().waitFor({ timeout: 15000 });
   }
   await shot(page, "41-vpn-watch");
   ok("VPN watch: who tried, attempts, server + name lists, how to block");
+
+  // security detective, website names, blocking logs
+  for (const tab of ["all", "virus", "attack", "ddos", "setup"]) {
+    await go(page, `#/security/${tab}`, "Security");
+    await page.locator(".tile").first().waitFor({ timeout: 15000 });
+  }
+  await shot(page, "42-security");
+  ok("security: all alerts, virus, hacker attacks, DDoS, protection & lists");
+  await go(page, "#/domains", "Website names");
+  await page.locator(".tile").first().waitFor({ timeout: 15000 });
+  const firstDomain = page.locator(".card table tbody tr a").first();
+  if (await firstDomain.count()) {
+    await firstDomain.click();
+    await page.locator("dialog[open] table").waitFor({ timeout: 15000 });
+    await dlgButton(page, "Close").click();
+  }
+  ok("website names: domains + subdomain list");
+  await go(page, "#/blocking/logs", "Blocking");
+  await page.locator("h2", { hasText: "Who is blocked by which policy" }).waitFor({ timeout: 30000 });
+  ok("blocking logs: policy per user");
+  await go(page, "#/settings", "Settings");
+  await page.locator("h2", { hasText: "Backups" }).waitFor({ timeout: 15000 });
+  await clickToast(page, page.getByRole("button", { name: "Backup now" }));
+  await page.locator("h2", { hasText: "Automatic updates" }).waitFor({ timeout: 30000 });
+  ok("settings: backup made from the dashboard, automatic updates listed");
 
   // business settings
   await go(page, "#/settings", "Settings");

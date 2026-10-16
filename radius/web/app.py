@@ -29,6 +29,8 @@ RADIUS_ADMIN = os.environ.get("MLWEB_RADIUS_ADMIN", "/usr/local/sbin/radius-admi
 POLICY_DIR = os.environ.get("MLWEB_POLICIES", "/var/lib/mikrotiklover/policies")
 ROUTER_DIR = os.environ.get("MLWEB_ROUTER", "/var/lib/mikrotiklover/router")
 WF_DIR = os.environ.get("MLWEB_WEBFILTER", "/usr/local/lib/mikrotiklover/webfilter")
+BACKUP_DIR = os.environ.get("MLWEB_BACKUPS", "/var/backups/mikrotiklover")
+STATE_DIR = os.environ.get("MLWEB_STATE", "/var/lib/mikrotiklover")
 
 NAME_RE = re.compile(r"^[A-Za-z0-9._@+-]{1,64}$")
 POLICY_RE = re.compile(r"^[a-z0-9-]{1,40}$")
@@ -111,11 +113,11 @@ def audit(action, result, admin=None):
         print(f"audit failed: {e}", file=sys.stderr)
 
 
-def radius_admin(args, stdin=None, action=None):
+def radius_admin(args, stdin=None, action=None, timeout=120):
     """Run radius-admin; returns (ok, message). Audited (without secrets)."""
     cmd = ([] if os.geteuid() == 0 else ["sudo", "-n"]) + [RADIUS_ADMIN] + args
     try:
-        p = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=120)
+        p = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=timeout)
         ok, out = p.returncode == 0, ANSI_RE.sub("", (p.stdout + p.stderr)).strip()
     except subprocess.TimeoutExpired:
         ok, out = False, "radius-admin timed out"
@@ -688,9 +690,17 @@ def history():
 @app.get("/api/blocked")
 @login_required()
 def blocked():
-    rows = mlreport.blocked_rows(report_args(), sessions())
-    return jsonify(rows=[dict(zip(("time", "user", "ip", "mac", "category", "destination", "router"), r))
-                         for r in reversed(rows)])
+    """Blocked attempts with the policy that blocked them, why, and the site name."""
+    a = report_args()
+    a.policy = request.args.get("policy", "")
+    if a.policy and not re.match(r"^[a-z0-9 ().-]{1,40}$", a.policy):
+        abort(400, "invalid policy")
+    policies = {r["username"]: r["list"] for r in q(mlreport.POLICY_SQL)}
+    rows = mlreport.blocked_detail(a, sessions(), policies)
+    for r in rows:
+        r["category"] = r["rule"]
+    summary = [dict(zip(("policy", "user", "reason", "count"), x)) for x in mlreport.blocked_summary(rows)]
+    return jsonify(rows=list(reversed(rows)), summary=summary[:200])
 
 
 @app.get("/api/live")
@@ -1122,8 +1132,8 @@ def ports_report():
                        SUM(flows) AS flows, MIN(bucket) AS first, MAX(bucket) AS last
                      FROM traffic_port WHERE {w} AND direction='in' GROUP BY client_ip, proto, port ORDER BY SUM(bytes_down+bytes_up) DESC LIMIT %s""", args + [a.top])
     elif by == "profile":
-        rows = q("SELECT site, proto, port, direction, bytes, flows, first_seen, last_seen FROM ml_app_port"
-                 + (" WHERE site=%s" if site else "") + " ORDER BY site, bytes DESC LIMIT 2000", [site] if site else None)
+        rows = q("SELECT site, proto, port, direction, bytes, flows, first_seen, last_seen FROM ml_app_port WHERE site NOT REGEXP '^[0-9.]+$'"
+                 + (" AND site=%s" if site else "") + " ORDER BY site, bytes DESC LIMIT 2000", [site] if site else None)
     else:
         abort(400, "by: port | app | device | in | profile")
     out = jsonable(rows)
@@ -1383,6 +1393,160 @@ def vpn_scan():
     if ok:
         radius_admin(["policy", "build"])
     return result(ok, out)
+
+
+# ------------------------------------------------------------------ website names (domains + subdomains)
+@app.get("/api/domains")
+@login_required()
+def domains_list():
+    a = report_args()
+    search = request.args.get("search", "").strip().lower()
+    if search and not re.match(r"^[a-z0-9.-]{1,100}$", search):
+        abort(400, "search: letters, digits, . -")
+    days = int(max(a.days, 1))
+    w, args = ["last_seen >= NOW() - INTERVAL %s DAY"], [days]
+    if search:
+        w.append("host LIKE %s"); args.append(f"%{search}%")
+    rows = q(f"""SELECT base, MAX(NULLIF(app,'')) AS app, COUNT(*) AS subdomains, MIN(first_seen) AS first_seen, MAX(last_seen) AS last_seen
+                 FROM ml_domain WHERE {' AND '.join(w)} GROUP BY base ORDER BY COUNT(*) DESC, MAX(last_seen) DESC LIMIT %s""", args + [a.top])
+    totals = q1("SELECT COUNT(*) AS hosts, COUNT(DISTINCT base) AS bases, MIN(first_seen) AS since FROM ml_domain")
+    new = q1("SELECT COUNT(*) AS n FROM ml_domain WHERE first_seen >= NOW() - INTERVAL 1 DAY")
+    return jsonify(rows=jsonable(rows), totals={**jsonable([totals])[0], "new_today": new["n"]})
+
+
+@app.get("/api/domains/tree")
+@login_required()
+def domains_tree():
+    base = request.args.get("base", "").lower()
+    if not re.match(r"^[a-z0-9.-]{3,253}$", base):
+        abort(400, "invalid domain")
+    rows = q("""SELECT d.host, d.app, d.first_seen, d.last_seen, d.ips, COALESCE(SUM(x.lookups),0) AS lookups, COALESCE(MAX(x.devices),0) AS devices
+                FROM ml_domain d LEFT JOIN ml_domain_day x ON x.host=d.host WHERE d.base=%s GROUP BY d.host ORDER BY lookups DESC LIMIT 2000""", (base,))
+    return jsonify(rows=jsonable(rows))
+
+
+@app.get("/api/domains.csv")
+@login_required()
+def domains_csv():
+    import csv, io
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["host", "domain", "app", "first_seen", "last_seen", "ips"])
+    for r in q("SELECT host, base, app, first_seen, last_seen, ips FROM ml_domain ORDER BY base, host"):
+        w.writerow([r["host"], r["base"], r["app"], r["first_seen"], r["last_seen"], r["ips"]])
+    return app.response_class(buf.getvalue(), mimetype="text/csv",
+                              headers={"Content-Disposition": 'attachment; filename="website-names.csv"'})
+
+
+# ------------------------------------------------------------------ security detective
+def _count_lines(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return sum(1 for _ in fh)
+    except OSError:
+        return 0
+
+
+def updates_status():
+    out = []
+    try:
+        for line in open(os.path.join(STATE_DIR, "updates.txt"), encoding="utf-8"):
+            f = line.rstrip("\n").split("\t")
+            if len(f) == 3:
+                out.append({"name": f[0], "when": f[1], "result": f[2]})
+    except OSError:
+        pass
+    return out
+
+
+@app.get("/api/security")
+@login_required()
+def security():
+    a = report_args()
+    days = int(max(a.days, 1))
+    cat = request.args.get("category", "")
+    if cat and cat not in ("virus", "attack", "ddos"):
+        abort(400, "category: virus | attack | ddos")
+    w, args = ["last_seen >= NOW() - INTERVAL %s DAY"], [days]
+    if cat:
+        w.append("category=%s"); args.append(cat)
+    if request.args.get("high") == "1":
+        w.append("severity='high'")
+    w = " AND ".join(w)
+    events = q(f"""SELECT id, category, type, severity, source, src_ip, dst_ip, username, detail, hits, first_seen, last_seen
+                   FROM ml_security_event WHERE {w} ORDER BY last_seen DESC LIMIT %s""", args + [min(a.n, 1000)])
+    counts = q("""SELECT category, COUNT(*) AS events, COALESCE(SUM(severity='high'),0) AS high FROM ml_security_event
+                  WHERE last_seen >= NOW() - INTERVAL %s DAY GROUP BY category""", (days,))
+    types = q(f"""SELECT category, type, COUNT(*) AS events, SUM(hits) AS hits, COUNT(DISTINCT NULLIF(src_ip,'')) AS sources, MAX(last_seen) AS last
+                  FROM ml_security_event WHERE {w} GROUP BY category, type ORDER BY events DESC LIMIT 100""", args)
+    devices = q(f"""SELECT src_ip, MAX(NULLIF(username,'')) AS username, GROUP_CONCAT(DISTINCT type ORDER BY type SEPARATOR ', ') AS types,
+                           SUM(hits) AS hits, MAX(last_seen) AS last FROM ml_security_event WHERE {w} AND category='virus'
+                    GROUP BY src_ip ORDER BY MAX(last_seen) DESC LIMIT 200""", args)
+    setting = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k IN ('security_autoblock')")}
+    lists = {"threat_names": _count_lines(os.path.join(STATE_DIR, "threat-domains.txt")),
+             "threat_networks": _count_lines(os.path.join(STATE_DIR, "threat-ips.txt")),
+             "autoblock": setting.get("security_autoblock") == "1",
+             "dns_block": os.path.exists("/etc/mikrotiklover-radius/dnsmasq-threats.conf")}
+    try:
+        lists["updated"] = datetime.fromtimestamp(os.path.getmtime(os.path.join(STATE_DIR, "threat-domains.txt"))).strftime("%Y-%m-%d %H:%M")
+    except OSError:
+        lists["updated"] = ""
+    return jsonify(events=jsonable(events), counts={c["category"]: jsonable([c])[0] for c in counts}, types=jsonable(types),
+                   devices=jsonable(devices), lists=lists)
+
+
+@app.post("/api/security/<action>")
+@login_required("admin")
+def security_action(action):
+    data = body()
+    if action == "scan":
+        return result(*radius_admin(["security", "scan"], timeout=300))
+    if action == "update":
+        return result(*radius_admin(["security", "update"], timeout=600))
+    if action in ("autoblock", "dns-block"):
+        return result(*radius_admin(["security", action, "on" if data.get("on") else "off"], timeout=300))
+    abort(404)
+
+
+# ------------------------------------------------------------------ backups + automatic updates
+BACKUP_RE = re.compile(r"^mikrotiklover-[a-z]+-[A-Za-z0-9.-]+-\d{8}-\d{6}\.tar\.gz(\.enc)?$")
+
+
+@app.get("/api/backups")
+@login_required("admin")
+def backups():
+    rows = []
+    try:
+        for f in os.listdir(BACKUP_DIR):
+            if BACKUP_RE.match(f):
+                st = os.stat(os.path.join(BACKUP_DIR, f))
+                rows.append({"name": f, "size": st.st_size, "time": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                             "encrypted": f.endswith(".enc"), "auto": "-auto-" in f})
+    except OSError:
+        pass
+    rows.sort(key=lambda r: r["time"], reverse=True)
+    return jsonify(backups=rows, dir=BACKUP_DIR, updates=updates_status())
+
+
+@app.post("/api/backups")
+@login_required("admin")
+def backup_now():
+    return result(*radius_admin(["backup"], timeout=600))
+
+
+@app.get("/api/backups/<name>")
+@login_required("admin")
+def backup_download(name):
+    if not BACKUP_RE.match(name):
+        abort(400, "invalid name")
+    audit(f"backup download {name}", "ok")
+    return send_from_directory(BACKUP_DIR, name, as_attachment=True)
+
+
+@app.post("/api/updates")
+@login_required("admin")
+def run_updates():
+    return result(*radius_admin(["update"], timeout=900))
 
 
 # ------------------------------------------------------------------ system / admins / audit

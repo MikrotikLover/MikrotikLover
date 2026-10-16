@@ -64,4 +64,16 @@ sql = appinv.sql(apps, days, d1)
 check("SQL: re-runs replace the days read (no double count)", f"DELETE FROM ml_app_day WHERE day >= '{d1}';" in sql)
 check("SQL: first_seen never moves later", "first_seen=LEAST(first_seen" in sql)
 check("SQL escaping", appinv.esc("it's\\x") == "'it\\'s\\\\x'")
+hosts, per_day = appinv.domains(recs, cdnmap.catalog())
+check("every website name saved, subdomains too", {"www.facebook.com", "video.xx.fbcdn.net", "rr3---sn-x.googlevideo.com",
+      "some-unknown-blog.org", "d1234.cloudfront.net"} <= set(hosts), sorted(hosts))
+check("subdomain keeps its domain + app", hosts["video.xx.fbcdn.net"]["base"] == "fbcdn.net" and hosts["video.xx.fbcdn.net"]["app"] == "Facebook",
+      hosts.get("video.xx.fbcdn.net"))
+check("unknown site saved without app", hosts["some-unknown-blog.org"]["app"] == "")
+check("IPs of the answer saved", hosts["www.facebook.com"]["ips"] == ["203.0.113.9"], hosts["www.facebook.com"])
+check("CNAME target saved with the asked name (instagram via redirect)", hosts["trk.example-redirect.net"]["app"] == "Instagram")
+check("per day: lookups + devices", per_day[(d1, "g.whatsapp.net")] == [2, {ali, bilal}], per_day.get((d1, "g.whatsapp.net")))
+dsql = appinv.domain_sql(hosts, per_day, d1)
+check("domain SQL: days re-read are replaced, first_seen never later",
+      f"DELETE FROM ml_domain_day WHERE day >= '{d1}';" in dsql and "first_seen=LEAST(first_seen" in dsql)
 sys.exit(1 if fail else 0)

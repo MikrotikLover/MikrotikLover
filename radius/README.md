@@ -12,6 +12,8 @@ FreeRADIUS 3.2 + MariaDB par bana hua RADIUS server, MikroTik Wi-Fi ke liye:
 
 > Ye RADIUS server **Linux VPS ya local Ubuntu machine** par chalta hai (UDP 1812/1813). Hostinger shared hosting par nahi chal sakta.
 
+> 📘 **Poori installation aur configuration guide (shuru se aakhir tak, tarteeb ke saath): [`docs/INSTALL.md`](docs/INSTALL.md)**
+
 ## 1. Install (Ubuntu 22.04/24.04, Debian 12)
 
 ```bash
@@ -747,6 +749,74 @@ sudo radius-admin cdn app-drop zingclips.in
 {"apps": [{"app": "My Bank", "site": "mybank.pk", "category": "finance", "domains": ["mybank-cdn.net"]}]}
 ```
 
+## 5i. Website names — har domain aur subdomain ka record
+
+Har ghante DNS log se **har website ka naam**, domain aur subdomain dono, database mein save hota hai (`ml_domain`, hamesha ke liye). Har naam ke saath yeh bhi save hota hai:
+- pehli aur aakhri dafa kab dekha;
+- kis app ka hai;
+- aakhri IP addresses;
+- har din kitni lookups hui aur kitne devices ne kholi (`ml_domain_day`, 180 din).
+```bash
+sudo radius-admin domains                      # domains, kitne subdomains, first/last seen
+sudo radius-admin domains bank                 # search
+sudo radius-admin domains tree youtube.com     # youtube.com ke saare subdomains, lookups, IPs
+sudo radius-admin domains export > names.csv
+```
+Dashboard → **Website names**: search karein, domain par click kar ke us ke subdomains dekhein, ya **CSV** download karein.
+
+## 5j. VPN & proxy watch — proxy bhi pakri jati hai
+
+VPN watch (section 5h) ab **proxy** bhi pakarta hai:
+- Phone ya browser mein lagi proxy: HTTP proxy 3128/8118, SOCKS 1080.
+- Web proxy websites: `vpn-proxy` list, aur jis naam mein "proxy", "unblock" ya "bypass" ho.
+
+`block-vpn` policy proxy ports aur proxy naam bhi band karti hai. Har koshish **VPN & proxy watch** page aur `radius-admin vpn` mein dikhti hai.
+
+## 5k. Security detective — virus, hacker attack, DDoS (type ke saath)
+
+| Qism | Kya pakra jata hai |
+|---|---|
+| **Virus** (infected device) | Malware, phishing ya crypto-mining websites ki lookup (threat lists). DGA malware: bohot saare random naam jo exist nahi karte. Botnet server se baat. Spam bot (bohot saare mail servers). Internet scan (Mirai/Telnet, WannaCry/SMB, RDP, ADB...). LAN scan. Kisi ko flood karna (DDoS bot). Mining ports |
+| **Hacker attack** | Port scan, network sweep. Password guessing on SSH, RDP, Winbox, API, Telnet, FTP, SMB, SIP; router login par; Wi-Fi/hotspot user par; dashboard par. Known attacker networks |
+| **DDoS** | **Type ke saath:** SYN flood, UDP flood, ICMP flood, HTTP/HTTPS flood, aur **amplification/reflection**: DNS, NTP, SSDP, memcached, CLDAP, SNMP, Chargen, WS-Discovery... Bohot saare sources hon to DDoS, kam hon to DoS |
+
+Kahan se pata chalta hai:
+- **Traffic Flow:** har minute check hota hai, collector ke andar.
+- **DNS log:** har ghante.
+- **Router logs:** login failures, aur `security.rsc` ke WF-scan / WF-brute / WF-synflood / WF-threat hits.
+- **Database:** RADIUS rejects aur dashboard ki login failures.
+
+```bash
+sudo radius-admin security                     # 7 din ke alerts: kab, qism, severity, kya, source/user, target
+sudo radius-admin security --type ddos --high
+sudo radius-admin security summary             # har type ki ginti
+sudo radius-admin security update              # threat lists abhi (warna har hafte)
+sudo radius-admin security autoblock on        # high attackers -> router list ml-attackers (1 din)
+sudo radius-admin security dns-block on        # malware/phishing/mining names par 0.0.0.0 (DNS logger)
+```
+
+- **Router par:** `security.rsc` import karein. Is mein port-scan, password-guessing aur SYN-flood lists, threat lists (`ml-threats`) aur attackers (`ml-attackers`) dono taraf band, aur sab hits server ko log hote hain. Saath mein `webfilter-logging.rsc` ab router ki login failures bhi bhejti hai.
+- **Dashboard → Security:** tabs All alerts, Virus (infected devices), Hacker attacks, DDoS attacks, Protection & lists. Protection & lists mein autoblock aur DNS-block ke switch hain.
+- **Thresholds:** `radius.conf` mein `SEC_SCAN_PORTS=25`, `SEC_FLOOD_FLOWS=3000` waghera se badle ja sakte hain (`tools/sentinel.py` mein list hai).
+- **Tests:** `tests/test-sentinel.py` 29 cases check karta hai. Asal collector par SYN flood, NTP amplification, port scan, spam bot aur threat IP bhi bheje gaye, aur sab sahi type ke saath pakre gaye.
+
+> **Hadd:**
+> - Yeh detection hai, antivirus nahi. Infected device ko saaf device par khud karna hoga.
+> - Flow data router ke "active timeout" ke hisaab se aata hai, is liye bahut chhote attacks ka andaza kam lagta hai.
+> - Bade DDoS ko ISP ke level par rokna parta hai; router sirf apne aap ko bacha sakta hai.
+
+## 5l. Blocking logs — kaunsi policy kis user ko kya block kar rahi hai
+
+Dashboard → **Blocking → Blocking logs** (aur Reports → Blocked) par yeh dikhta hai:
+- **Summary:** policy → user → kis cheez ne block kiya → kitni dafa.
+- **Har koshish:** waqt, user/IP, **policy**, **kis ne block kiya** (category, app, VPN/proxy, allow-only, no internet, adult word, security), **website ka naam** (DNS log se) aur destination.
+```bash
+sudo radius-admin blocked --days 1             # time, user, ip, policy, blocked by, site, destination
+sudo radius-admin blocked --summary            # policy / user / blocked by / times
+sudo radius-admin blocked --policy kids
+```
+Policy user ki **abhi wali** policy hoti hai: apni policy, warna group ki. Jo devices RADIUS se login nahi karte, un ke liye "router list" likha aata hai.
+
 ## 6. Monitoring aur testing
 
 ```bash
@@ -774,6 +844,36 @@ sudo systemctl stop freeradius && sudo freeradius -X    # har request ka poora d
 ## 7. Maintenance
 
 - **Certificate renew** (825 din baad, ya domain badalna ho): `sudo RENEW_CERT=1 ./install.sh` — CA wohi rehta hai, devices ko kuch nahi karna.
-- **Backup**: `sudo mysqldump radius > radius-$(date +%F).sql` + `/etc/mikrotiklover-radius/` + `/etc/freeradius/3.0/certs/mikrotiklover/`.
+- **Backup / restore**: section 7b. Har raat khud backup hota hai; `sudo radius-admin backup` / `restore`.
 - **Purana accounting data saaf**: `DELETE FROM radacct WHERE acctstoptime < NOW() - INTERVAL 180 DAY;`
 - Installer jo packaged files badalta hai unki original copy `*.mikrotiklover.orig` naam se save hoti hai.
+
+## 7b. Complete backup aur restore
+
+```bash
+sudo radius-admin backup                       # abhi (database + settings + certificates + FreeRADIUS + policies + lists)
+printf 'Pass12345\n' | sudo radius-admin backup --encrypt     # AES-256, password ke saath
+sudo radius-admin backup --with-logs           # router / DNS logs bhi
+sudo radius-admin backups                      # list
+sudo radius-admin restore FILE                 # sab wapas (pehle maujooda haalat ki safety copy banti hai)
+```
+- Har raat 02:43 par khud backup hota hai (`/var/backups/mikrotiklover`, aakhri 14 rakhe jate hain).
+- Dashboard → **Settings → Backups** mein list, **Backup now** aur **Download** hain.
+- Restore sirf server par CLI se hota hai, taa ke ghalti se sab kuch na badal jaye.
+- Naye server par le jana ho to `docs/INSTALL.md` section 9 dekhein: wahan install kar ke restore karein, database passwords khud theek ho jate hain.
+- **Tested:** encrypted backup banaya, user aur policy badle, galat password par restore ruk gaya, aur sahi password se sab wapas aa gaya (login OK).
+
+## 7c. Automatic updates (har hafte, khud)
+
+`sudo radius-admin update` (cron: Tuesday raat) yeh sab update karta hai:
+
+| Kya | Kahan se |
+|---|---|
+| App catalog (apps aur un ke domains) | `CATALOG_URL` (default: is repository ki `cdn-apps.json`) → `/var/lib/mikrotiklover/cdn-apps.update.json` |
+| IP owner lists (ASN) | ipverse |
+| Khud dhoondi gayi nayi apps ke naam | un ki website ka title |
+| Threat lists | URLhaus, ThreatFox, Blackbook, Phishing Army, NoCoin, Feodo, Spamhaus DROP, FireHOL |
+| Public VPN / Tor lists | X4BNet, Tor project (agar `radius-admin vpn update` ek dafa chalaya ho) |
+| Router rules | auto-sync ke liye |
+
+Har ghante yeh kaam bhi khud chalte hain: app domains seekhna, nayi apps dhoondna, app inventory, website names, VPN watch aur security scan. Har kaam ka aakhri run aur nateeja Dashboard → **Settings → Automatic updates** mein dikhta hai.

@@ -200,16 +200,18 @@ install -m 750 "$SCRIPT_DIR/radius-admin" /usr/local/sbin/radius-admin
 cat > /etc/cron.d/mikrotiklover <<'EOF'
 # MikrotikLover RADIUS (install.sh)
 */5 * * * * root /usr/local/sbin/radius-admin enforce >/dev/null 2>&1
-17 4 * * 1 root /usr/local/sbin/radius-admin cdn update >/dev/null 2>&1
-7 * * * * root /usr/local/sbin/radius-admin cdn learn >/dev/null 2>&1; /usr/local/sbin/radius-admin apps update >/dev/null 2>&1; /usr/local/sbin/radius-admin vpn scan >/dev/null 2>&1; /usr/local/sbin/radius-admin policy build >/dev/null 2>&1
-27 4 * * 2 root [ -f /var/lib/mikrotiklover/vpn-public.txt ] && /usr/local/sbin/radius-admin vpn update >/dev/null 2>&1
+7 * * * * root /usr/local/sbin/radius-admin cdn learn >/dev/null 2>&1; /usr/local/sbin/radius-admin apps update >/dev/null 2>&1; /usr/local/sbin/radius-admin vpn scan >/dev/null 2>&1; /usr/local/sbin/radius-admin security scan >/dev/null 2>&1; /usr/local/sbin/radius-admin policy build >/dev/null 2>&1
+# weekly: app catalog, IP owners, new app names, threat lists, VPN lists, router rules
+17 4 * * 2 root /usr/local/sbin/radius-admin update >/dev/null 2>&1
+# nightly complete backup (newest 14 kept in /var/backups/mikrotiklover)
+43 2 * * * root /usr/local/sbin/radius-admin backup --auto --quiet >/dev/null 2>&1
 EOF
 chmod 644 /etc/cron.d/mikrotiklover
 command -v cron >/dev/null || apt-get install -y -qq cron >/dev/null 2>&1 || warn "cron missing: run 'radius-admin enforce' every 5 minutes yourself"
 install -d -m 755 /usr/local/lib/mikrotiklover
 install -m 644 "$SCRIPT_DIR/tools/mlreport.py" /usr/local/lib/mikrotiklover/mlreport.py
 install -m 644 "$SCRIPT_DIR/tools/flowcollector.py" /usr/local/lib/mikrotiklover/flowcollector.py
-install -m 644 "$SCRIPT_DIR/tools/cdnmap.py" "$SCRIPT_DIR/tools/cdnlearn.py" "$SCRIPT_DIR/tools/cdn-apps.json" "$SCRIPT_DIR/tools/ports.py" "$SCRIPT_DIR/tools/appinv.py" "$SCRIPT_DIR/tools/vpn.py" /usr/local/lib/mikrotiklover/
+install -m 644 "$SCRIPT_DIR/tools/cdnmap.py" "$SCRIPT_DIR/tools/cdnlearn.py" "$SCRIPT_DIR/tools/cdn-apps.json" "$SCRIPT_DIR/tools/ports.py" "$SCRIPT_DIR/tools/appinv.py" "$SCRIPT_DIR/tools/vpn.py" "$SCRIPT_DIR/tools/sentinel.py" /usr/local/lib/mikrotiklover/
 install -d -m 755 /var/lib/mikrotiklover
 # Web-filter builder (router rules from policies, app lists and the VPN lists) — radius-admin policy build
 install -d -m 755 /usr/local/lib/mikrotiklover/webfilter/categories /usr/local/lib/mikrotiklover/webfilter/allowonly
@@ -233,7 +235,7 @@ log "Configuring rsyslog for router web-filter logs (UDP 514)"
 if id syslog >/dev/null 2>&1; then install -d -m 750 -o syslog -g adm /var/log/mikrotik
 else install -d -m 750 -o root -g adm /var/log/mikrotik; fi
 cat > /etc/logrotate.d/mikrotiklover-webfilter <<'EOF'
-/var/log/mikrotik/webfilter.log {
+/var/log/mikrotik/webfilter.log /var/log/mikrotik/router.log {
     weekly
     rotate 8
     compress
@@ -415,6 +417,11 @@ EOF
     WEB_URL="https://$(hostname -I 2>/dev/null | awk '{print $1}'):$WEB_PORT"
 fi
 
+# threat lists for the security detective (first time; then weekly by "radius-admin update")
+[ -s /var/lib/mikrotiklover/threat-domains.txt ] || python3 -I /usr/local/lib/mikrotiklover/sentinel.py update >/dev/null 2>&1 \
+    || warn "Could not download the threat lists (no internet?) — run later: radius-admin security update"
+install -d -m 750 /var/backups/mikrotiklover
+chgrp mlweb /var/backups/mikrotiklover 2>/dev/null || true
 # router rules from the policies (+ VPN list) for the routers' auto-sync (radius-admin policy sync)
 /usr/local/sbin/radius-admin policy build >/dev/null || warn "Router rules not built — run: radius-admin policy build"
 

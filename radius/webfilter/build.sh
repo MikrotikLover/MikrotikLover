@@ -214,7 +214,7 @@ done
 
 # ---------------------------------------------------------------- VPN chain (policy directive "block-vpn")
 VPN_UDP=1194,1197,1198,51820,51821,2408,500,4500,1701,5555
-VPN_TCP=1194,1197,1198,1723,5555,9001,9030,9050,9150
+VPN_TCP=1194,1197,1198,1723,5555,9001,9030,9050,9150,3128,3129,8118,1080
 vpn_names() { # every VPN name to check in HTTPS (SNI); names containing "vpn" are caught by one keyword rule
     { domains categories/vpn-proxy.txt
       python3 -I "$CDNMAP" domains --category vpn 2>/dev/null || true
@@ -228,7 +228,7 @@ vpn_chain() {
     echo "add chain=wf-vpn dst-address-list=vpn-servers connection-state=new action=log log-prefix=\"WF-vpn\" limit=20/1m,10:packet comment=\"wfchain:wf-vpn\""
     echo "add chain=wf-vpn dst-address-list=vpn-servers protocol=tcp action=reject reject-with=tcp-reset comment=\"wfchain:wf-vpn\""
     echo "add chain=wf-vpn dst-address-list=vpn-servers action=drop comment=\"wfchain:wf-vpn\""
-    echo "# VPN protocols: OpenVPN, WireGuard, Cloudflare WARP, IPsec, L2TP, PPTP, SoftEther, Tor"
+    echo "# VPN protocols: OpenVPN, WireGuard, Cloudflare WARP, IPsec, L2TP, PPTP, SoftEther, Tor; proxies 3128, 8118, SOCKS 1080"
     echo "add chain=wf-vpn protocol=udp dst-port=$VPN_UDP action=log log-prefix=\"WF-vpn\" limit=20/1m,10:packet comment=\"wfchain:wf-vpn\""
     echo "add chain=wf-vpn protocol=udp dst-port=$VPN_UDP action=drop comment=\"wfchain:wf-vpn\""
     echo "add chain=wf-vpn protocol=tcp dst-port=$VPN_TCP tcp-flags=syn action=log log-prefix=\"WF-vpn\" limit=20/1m,10:packet comment=\"wfchain:wf-vpn\""

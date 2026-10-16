@@ -42,6 +42,8 @@ const ICONS = {
   print: "M6 9V3h12v6M6 18H4v-7h16v7h-2M7 14h10v7H7z",
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14m10 3-5.2-5.2",
   block: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M5.6 5.6l12.8 12.8",
+  shield: "M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6zM12 8v5m0 3h.01",
+  globe: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M3 12h18M12 3c2.5 2.5 3.8 5.5 3.8 9s-1.3 6.5-3.8 9c-2.5-2.5-3.8-5.5-3.8-9s1.3-6.5 3.8-9",
   vpn: "M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6zM9 12l2 2 4-4",
   apps: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
   ports: "M7 7h10v10H7zM3 9h4M3 15h4M17 9h4M17 15h4M9 3v4M15 3v4M9 17v4M15 17v4",
@@ -205,7 +207,7 @@ const NAV = [
   ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
   ["data", "Data usage", "data"], ["apps", "Apps on network", "apps"], ["ports", "Ports & protocols", "ports"], "-",
-  ["blocking", "Blocking", "block"], ["vpn", "VPN watch", "vpn"], "-", ["settings", "Settings", "settings"],
+  ["blocking", "Blocking", "block"], ["vpn", "VPN & proxy watch", "vpn"], ["security", "Security", "shield"], ["domains", "Website names", "globe"], "-", ["settings", "Settings", "settings"],
 ];
 
 function shell(title, content, actions) {
@@ -585,7 +587,8 @@ ROUTES.reports = async (tab = "sites") => {
     } else if (tab === "blocked") {
       const { rows } = await api("GET", `/api/blocked?${qs}&n=500`);
       holder.replaceChildren(table([{ label: "Time", key: "time" }, { label: "User", key: "user" }, { label: "IP", key: "ip" },
-        { label: "Category", render: (r) => badge(r.category, "bad") }, { label: "Destination", key: "destination" }, { label: "Router", key: "router" }], rows, "No blocked attempts found."));
+        { label: "Policy", render: (r) => badge(r.policy, "info") }, { label: "Blocked by", render: (r) => badge(r.reason, "bad") },
+        { label: "Site", render: (r) => r.site || "—", wrap: true }, { label: "Destination", key: "destination" }], rows, "No blocked attempts found."));
     } else {
       const { log } = await api("GET", `/api/auth-log?n=300&user=${encodeURIComponent(user.value.trim())}`);
       holder.replaceChildren(table([{ label: "When", render: (l) => String(l.authdate).slice(0, 19) }, { label: "User", key: "username" },
@@ -673,7 +676,20 @@ ROUTES.settings = async () => {
     h("div", { class: "full muted" }, "Users' connect guide: ", h("a", { href: "/connect", target: "_blank", rel: "noopener" }, `${location.origin}/connect`), ` · RADIUS domain: ${bs.radius_domain || "—"}`),
     isAdmin() ? h("div", {}, h("button", { class: "primary", type: "submit" }, "Save")) : null);
   parts.push(card("Business & branding", null, bf));
+  const wide = [];
   if (isAdmin()) {
+    const bk = await api("GET", "/api/backups");
+    wide.push(card("Backups", `${bk.backups.length} in ${bk.dir}`,
+      h("div", { class: "muted" }, "A backup has everything: users, plans, vouchers, sales, reports, routers, certificates, FreeRADIUS, policies, learned lists and dashboard accounts. One is made every night (newest 14 kept). Download them and keep a copy OFF this server. Restore on the server: sudo radius-admin restore FILE"),
+      table([{ label: "Backup", render: (b) => h("span", {}, b.name, b.encrypted ? " 🔒" : "") }, { label: "Kind", render: (b) => badge(b.auto ? "nightly" : "manual", b.auto ? "info" : "ok") },
+        { label: "Size", num: true, render: (b) => bytes(b.size) }, { label: "Made", key: "time" },
+        { label: "", render: (b) => h("a", { class: "btn small", href: `/api/backups/${encodeURIComponent(b.name)}` }, "⬇ Download") }], bk.backups, "No backup yet."),
+      h("div", { class: "toolbar" }, h("button", { class: "primary", onclick: async (e) => { e.target.disabled = true; await act(api("POST", "/api/backups")); route(); } }, "Backup now"))));
+    wide.push(card("Automatic updates", "every week (Tuesday night) + hourly lists",
+      h("div", { class: "muted" }, "App catalog, IP owner lists, names of newly found apps, threat lists (virus / attacks), VPN lists and the router rules update themselves. Hourly: app inventory, website names, VPN watch, security scan, learned app domains."),
+      table([{ label: "Job", key: "name" }, { label: "Last run", key: "when" },
+        { label: "Result", render: (u) => badge(u.result.slice(0, 80), u.result.startsWith("ok") ? "ok" : "bad"), wrap: true }], bk.updates, "Not run yet."),
+      h("div", { class: "toolbar" }, h("button", { onclick: async (e) => { e.target.disabled = true; e.target.textContent = "Updating … (a few minutes)"; await act(api("POST", "/api/updates")); route(); } }, "Run all updates now"))));
     const [{ admins }, { audit }] = await Promise.all([api("GET", "/api/admins"), api("GET", "/api/audit")]);
     const addAdmin = (a) => {
       const f = h("form", { class: "form", onsubmit: (e) => e.preventDefault() },
@@ -698,7 +714,7 @@ ROUTES.settings = async () => {
       { label: "When", render: (a) => String(a.at).slice(0, 19) }, { label: "Admin", key: "admin" }, { label: "IP", key: "ip" },
       { label: "Action", key: "action", wrap: true }, { label: "Result", render: (a) => a.result === "ok" ? badge("ok", "ok") : badge(a.result, "bad") }], audit)));
   }
-  shell("Settings", h("div", { class: "grid g-2" }, parts));
+  shell("Settings", h("div", { class: "stack" }, h("div", { class: "grid g-2" }, parts), wide));
 };
 
 // ------------------------------------------------------------------ start
@@ -1121,7 +1137,8 @@ function policyEditor(meta, pol) {
   return { form, text, name: () => name.value.trim() };
 }
 
-ROUTES.blocking = async () => {
+ROUTES.blocking = async (tab = "policies") => {
+  if (tab === "logs") return blockingLogs();
   const [meta, ul] = await Promise.all([api("GET", "/api/blocking"), api("GET", "/api/users")]);
   const r = meta.router;
   const openEditor = (pol) => {
@@ -1150,7 +1167,7 @@ ROUTES.blocking = async () => {
 #   Files → upload mikrotiklover-autosync.rsc   →   Terminal:  /import mikrotiklover-autosync.rsc
 # Server: ${r.url}   version ${r.version || "—"}   built ${r.built || "—"}`);
   const ipIn = h("input", { placeholder: "server IP as the router sees it", value: /^\d+\.\d+\.\d+\.\d+$/.test(location.hostname) ? location.hostname : "" });
-  shell("Blocking", h("div", { class: "stack" },
+  shell("Blocking", h("div", { class: "stack" }, blockingTabs("policies"),
     card("How to block apps or websites for a user", null, h("div", { class: "steps" },
       h("div", {}, h("span", {}, h("b", {}, "Make a policy"), " — tick categories, single apps (TikTok, PUBG …), Block VPN, or choose WhatsApp ONLY. Ready-made ones are below.")),
       h("div", {}, h("span", {}, h("b", {}, "Give it to a user or a group"), " — box below, or Users → user → Own web-filter policy. The user is disconnected once and gets it at the next login.")),
@@ -1212,10 +1229,118 @@ ROUTES.vpn = async (tab = "users") => {
       h("div", {}, h("span", {}, h("b", {}, "Watch this page"), " — every try is listed here: who, which VPN, and whether the router blocked it. \"maybe connected\" = a VPN connection moved data (no blocking policy on that user yet).")));
     holder.replaceChildren(tiles, h("div", { class: "card" }, body));
   };
-  shell("VPN watch", h("div", { class: "stack" },
+  shell("VPN & proxy watch", h("div", { class: "stack" },
     h("div", { class: "tabs" }, tabs.map(([k, l]) => h("a", { href: `#/vpn/${k}`, class: k === tab ? "active" : "" }, l))),
     card(null, null, h("div", { class: "toolbar" }, days, user, h("button", { class: "primary", onclick: () => load().catch((e) => toast(e.message, true)) }, "Show"),
       isAdmin() ? h("button", { onclick: async () => { await act(api("POST", "/api/vpn/scan")); load(); } }, "Scan logs now") : null)),
+    holder));
+  await load();
+};
+
+// ------------------------------------------------------------------ blocking logs: which policy blocked which user, and what
+const blockingTabs = (tab) => h("div", { class: "tabs" }, [["policies", "Policies"], ["logs", "Blocking logs"]]
+  .map(([k, l]) => h("a", { href: `#/blocking/${k}`, class: k === tab ? "active" : "" }, l)));
+async function blockingLogs() {
+  const days = h("select", {}, [["1", "Today"], ["7", "7 days"], ["30", "30 days"]].map(([v, l]) => h("option", { value: v }, l)));
+  const user = h("input", { type: "search", placeholder: "User" }), policy = h("input", { type: "search", placeholder: "Policy" });
+  const holder = h("div", { class: "stack" });
+  const load = async () => {
+    const d = await api("GET", `/api/blocked?${new URLSearchParams({ days: days.value, user: user.value.trim(), policy: policy.value.trim(), n: 1000 })}`);
+    holder.replaceChildren(
+      card("Who is blocked by which policy", `${d.summary.length} rows`, table([{ label: "Policy", render: (r) => badge(r.policy, "info") },
+        { label: "User", render: (r) => r.user !== "-" ? h("a", { href: `#/users/${encodeURIComponent(r.user)}` }, r.user) : h("span", { class: "muted" }, "(no login)") },
+        { label: "Blocked by", render: (r) => badge(r.reason, "bad") }, { label: "Times", key: "count", num: true }], d.summary, "Nothing blocked in this period.")),
+      card("Every blocked attempt", "newest first", table([{ label: "Time", render: (r) => r.time.slice(5) },
+        { label: "User", render: (r) => h("span", {}, r.user !== "-" ? r.user : h("span", { class: "muted" }, "(no login)"), h("div", { class: "muted" }, r.ip)) },
+        { label: "Policy", render: (r) => badge(r.policy, "info") }, { label: "Blocked by", render: (r) => badge(r.reason, "bad") },
+        { label: "Site", render: (r) => r.site ? h("code", {}, r.site) : h("span", { class: "muted" }, "—"), wrap: true }, { label: "Destination", key: "destination" }], d.rows, "Nothing blocked in this period.")));
+  };
+  shell("Blocking", h("div", { class: "stack" }, blockingTabs("logs"),
+    h("div", { class: "note" }, "Every block the router logged, with the user's policy (own policy, else the group's), what blocked it (category, app, VPN, allow-only …) and the site name the device asked for. Needs webfilter-logging.rsc on the router."),
+    card(null, null, h("div", { class: "toolbar" }, days, user, policy, h("button", { class: "primary", onclick: () => load().catch((e) => toast(e.message, true)) }, "Show"))),
+    holder));
+  await load();
+}
+
+// ------------------------------------------------------------------ security detective: virus, hacker attacks, DDoS
+ROUTES.security = async (tab = "all") => {
+  const tabs = [["all", "All alerts"], ["virus", "Virus (infected devices)"], ["attack", "Hacker attacks"], ["ddos", "DDoS attacks"], ["setup", "Protection & lists"]];
+  const days = h("select", {}, [["1", "Today"], ["7", "7 days"], ["30", "30 days"], ["90", "90 days"]].map(([v, l]) => h("option", { value: v, selected: v === "7" }, l)));
+  const high = h("label", { class: "chip" }, h("input", { type: "checkbox" }), "only high");
+  const holder = h("div", { class: "stack" });
+  const sev = (s) => badge(s, s === "high" ? "bad" : s === "medium" ? "warn" : "info");
+  const catBadge = (c) => badge({ virus: "VIRUS", attack: "ATTACK", ddos: "DDoS" }[c] || c, c === "virus" ? "warn" : "bad");
+  const who = (r) => r.src_ip ? h("span", {}, r.username ? h("a", { href: `#/users/${encodeURIComponent(r.username)}` }, r.username) : null,
+    h("div", { class: r.username ? "muted" : "" }, h("code", {}, r.src_ip))) : r.username ? h("span", {}, r.username) : "—";
+  const load = async () => {
+    const d = await api("GET", `/api/security?${new URLSearchParams({ days: days.value, category: ["virus", "attack", "ddos"].includes(tab) ? tab : "", high: high.querySelector("input").checked ? "1" : "", n: 500 })}`);
+    const c = (k) => d.counts[k] || { events: 0, high: 0 };
+    const tiles = h("div", { class: "grid g-tiles" },
+      tile("Virus alerts", num(c("virus").events), `${num(c("virus").high)} high · infected devices`),
+      tile("Hacker attacks", num(c("attack").events), `${num(c("attack").high)} high · scans, password guessing`),
+      tile("DDoS attacks", num(c("ddos").events), `${num(c("ddos").high)} high · floods by type`),
+      tile("Threat lists", num(d.lists.threat_names), `names + ${num(d.lists.threat_networks)} networks · ${d.lists.updated || "not downloaded"}`));
+    if (tab === "setup") {
+      const toggle = (label, help, on, action) => h("label", { class: "check" + (on ? " on" : "") }, h("input", { type: "checkbox", checked: on, disabled: !isAdmin(),
+        onchange: async (e) => { await act(api("POST", `/api/security/${action}`, { on: e.target.checked })); load(); } }), h("div", {}, h("b", {}, label), h("span", {}, help)));
+      holder.replaceChildren(tiles, card("Protection", null, h("div", { class: "checks" },
+        toggle("Block attackers on the router automatically", "Outside addresses with a high-severity attack or DDoS in the last 24 h go to the router's ml-attackers list (auto-sync) and are dropped for a day. Needs mikrotik/security.rsc.", d.lists.autoblock, "autoblock"),
+        toggle("Block malware / phishing / mining names (DNS)", "The DNS logger answers 0.0.0.0 for names on the threat lists. The device still shows up here as infected.", d.lists.dns_block, "dns-block")),
+        isAdmin() ? h("div", { class: "toolbar" }, h("button", { onclick: async () => { await act(api("POST", "/api/security/update")); load(); } }, "Update threat lists now"),
+          h("button", { onclick: async () => { await act(api("POST", "/api/security/scan")); load(); } }, "Scan logs now")) : null),
+        card("What is checked", null, h("div", { class: "steps" },
+          h("div", {}, h("span", {}, h("b", {}, "Virus"), " — malware, phishing and crypto-mining names (URLhaus, ThreatFox, Blackbook, Phishing Army, NoCoin), random names that do not exist (DGA malware), botnet servers (Feodo), spam to many mail servers, scanning the internet (Mirai, WannaCry …) or the LAN, a device flooding someone (DDoS bot).")),
+          h("div", {}, h("span", {}, h("b", {}, "Hacker attacks"), " — port scans, network sweeps, password guessing on SSH / RDP / Winbox / API / Telnet / FTP, on the router login, on Wi-Fi / hotspot users and on this dashboard, known attacker networks (Spamhaus DROP, FireHOL).")),
+          h("div", {}, h("span", {}, h("b", {}, "DDoS"), " — by type: SYN flood, UDP flood, ICMP flood, HTTP flood, and reflection / amplification by service (DNS, NTP, SSDP, memcached, CLDAP, SNMP, WS-Discovery …). Many sources = DDoS, few = DoS.")),
+          h("div", {}, h("span", {}, h("b", {}, "Router"), " — import mikrotik/security.rsc (port-scan, password-guessing and SYN-flood lists + threat lists) and webfilter-logging.rsc (sends the hits and login failures here). Traffic Flow (traffic-flow.rsc) feeds the flow checks.")))));
+      return;
+    }
+    const parts = [tiles];
+    if (tab === "virus" && d.devices.length) parts.push(card("Infected devices", `${d.devices.length}`, table([{ label: "Device", render: (r) => who(r) },
+      { label: "Signs", key: "types", wrap: true }, { label: "Hits", key: "hits", num: true }, { label: "Last", render: (r) => String(r.last).slice(5, 16) }], d.devices)));
+    if (tab !== "all" && d.types.length) parts.push(card("By type", null, table([{ label: "Type", key: "type", wrap: true }, { label: "Alerts", key: "events", num: true },
+      tab === "ddos" ? null : { label: "Attackers / devices", key: "sources", num: true }, { label: "Hits", key: "hits", num: true },
+      { label: "Last", render: (r) => String(r.last).slice(5, 16) }].filter(Boolean), d.types)));
+    parts.push(card("Alerts", "newest first", table([{ label: "Last", render: (r) => String(r.last_seen).slice(5, 16) }, { label: "", render: (r) => catBadge(r.category) },
+      { label: "Severity", render: (r) => sev(r.severity) }, { label: "What", render: (r) => h("span", {}, h("b", {}, r.type), h("div", { class: "muted" }, r.detail)), wrap: true },
+      { label: "Source", render: who }, { label: "Target", render: (r) => r.dst_ip ? h("code", {}, r.dst_ip) : "—" }, { label: "Hits", key: "hits", num: true }],
+      d.events, "No alerts in this period — good.")));
+    holder.replaceChildren(...parts);
+  };
+  high.querySelector("input").addEventListener("change", () => load());
+  shell("Security", h("div", { class: "stack" },
+    h("div", { class: "tabs" }, tabs.map(([k, l]) => h("a", { href: `#/security/${k}`, class: k === tab ? "active" : "" }, l))),
+    tab === "setup" ? null : card(null, null, h("div", { class: "toolbar" }, days, high, h("button", { class: "primary", onclick: () => load().catch((e) => toast(e.message, true)) }, "Show"))),
+    holder));
+  await load();
+};
+
+// ------------------------------------------------------------------ website names: every domain and subdomain ever seen
+ROUTES.domains = async () => {
+  const search = h("input", { type: "search", placeholder: "Search: youtube, .pk, bank …" });
+  const days = h("select", {}, [["1", "Seen today"], ["7", "7 days"], ["30", "30 days"], ["3650", "All time"]].map(([v, l]) => h("option", { value: v, selected: v === "30" }, l)));
+  const holder = h("div", { class: "stack" });
+  const tree = async (base) => {
+    const d = await api("GET", `/api/domains/tree?base=${encodeURIComponent(base)}`);
+    dialog(`${base} — ${d.rows.length} names`, table([{ label: "Name", render: (r) => h("span", {}, h("code", {}, r.host), r.app ? h("div", { class: "muted" }, r.app) : null), wrap: true },
+      { label: "Lookups", key: "lookups", num: true }, { label: "Devices / day", key: "devices", num: true },
+      { label: "First / last seen", render: (r) => h("span", {}, String(r.first_seen).slice(0, 16), h("div", { class: "muted" }, String(r.last_seen).slice(0, 16))) },
+      { label: "IPs", render: (r) => h("code", {}, r.ips || "—"), wrap: true }], d.rows), [{ label: "Close" }]);
+  };
+  const load = async () => {
+    const d = await api("GET", `/api/domains?${new URLSearchParams({ search: search.value.trim().toLowerCase(), days: days.value, top: 500 })}`);
+    holder.replaceChildren(h("div", { class: "grid g-tiles" }, tile("Website names saved", num(d.totals.hosts), "domains + subdomains, kept for good"),
+      tile("Domains", num(d.totals.bases)), tile("New in the last 24 h", num(d.totals.new_today)), tile("Recording since", String(d.totals.since || "—").slice(0, 10))),
+      h("div", { class: "card" }, table([{ label: "Domain", render: (r) => h("a", { href: "#", onclick: (e) => { e.preventDefault(); tree(r.base).catch((x) => toast(x.message, true)); } }, r.base) },
+        { label: "App", render: (r) => r.app || h("span", { class: "muted" }, "—") }, { label: "Names (subdomains)", key: "subdomains", num: true },
+        { label: "First seen", render: (r) => String(r.first_seen).slice(0, 16) }, { label: "Last seen", render: (r) => String(r.last_seen).slice(0, 16) }],
+        d.rows, "Nothing yet — the list fills itself every hour from the DNS log (radius-admin dnslog on).")));
+  };
+  search.addEventListener("keydown", (e) => { if (e.key === "Enter") load(); });
+  shell("Website names", h("div", { class: "stack" },
+    h("div", { class: "note" }, "Every domain and subdomain any device looked up, saved with first / last seen, lookups, devices per day, app and IP addresses. Click a domain to see all its subdomains."),
+    card(null, null, h("div", { class: "toolbar" }, search, days, h("button", { class: "primary", onclick: () => load().catch((e) => toast(e.message, true)) }, "Show"),
+      h("a", { class: "btn", href: "/api/domains.csv" }, "⬇ CSV (all)"))),
     holder));
   await load();
 };

@@ -205,6 +205,21 @@ def main():
         for a, d, v in rows:
             print(f"{a:<22} {d:<34} score {v['score']:<4} devices {v['devices']:<3} {v['why']}  (first {v['first_seen']})")
         print(f"{len(rows)} learned domain(s); rejected: {', '.join(data.get('rejected', [])) or '-'}")
+    elif cmd == "titles":
+        # weekly: discovered apps still named after their domain get their website's name (and category)
+        data = load()
+        n = 0
+        for aid, a in data.get("apps", {}).items():
+            if a.get("renamed") or a.get("name_from") == "website":
+                continue
+            title = fetch_title(a.get("site") or aid)
+            if title:
+                a.update(app=title, name_from="website", title=title,
+                         category=guess_category(f"{title} {' '.join(a.get('domains', []))}"))
+                n += 1
+                print(f"  {aid}: {title} [{a['category']}]")
+        save(data)
+        print(f"{n} app name(s) updated from their websites")
     elif cmd in ("apps", "rename", "merge", "drop"):
         _discovery_cli(cmd, args[1:])
     elif cmd in ("reject", "unreject") and len(args) == 2:

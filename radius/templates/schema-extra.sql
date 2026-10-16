@@ -199,3 +199,44 @@ CREATE TABLE IF NOT EXISTS ml_vpn_domain (
   first_seen DATETIME NOT NULL,
   last_seen DATETIME NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Every website name (domain + subdomain) ever looked up (tools/appinv.py, hourly). Kept for good.
+CREATE TABLE IF NOT EXISTS ml_domain (
+  host VARCHAR(253) NOT NULL PRIMARY KEY,
+  base VARCHAR(253) NOT NULL,
+  app VARCHAR(64) NOT NULL DEFAULT '',
+  first_seen DATETIME NOT NULL,
+  last_seen DATETIME NOT NULL,
+  ips VARCHAR(255) NOT NULL DEFAULT '',
+  KEY idx_base (base),
+  KEY idx_last (last_seen)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS ml_domain_day (
+  day DATE NOT NULL,
+  host VARCHAR(253) NOT NULL,
+  lookups INT UNSIGNED NOT NULL DEFAULT 0,
+  devices INT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, host),
+  KEY idx_host (host, day)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Security detective (tools/sentinel.py + traffic collector): virus / hacker attack / DDoS events
+CREATE TABLE IF NOT EXISTS ml_security_event (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  day DATE NOT NULL,
+  category ENUM('virus','attack','ddos') NOT NULL,
+  type VARCHAR(64) NOT NULL,
+  severity ENUM('low','medium','high') NOT NULL DEFAULT 'medium',
+  source ENUM('flow','dns','log') NOT NULL,
+  src_ip VARCHAR(45) NOT NULL DEFAULT '',
+  dst_ip VARCHAR(45) NOT NULL DEFAULT '',
+  username VARCHAR(64) NOT NULL DEFAULT '',
+  detail VARCHAR(255) NOT NULL DEFAULT '',
+  hits INT UNSIGNED NOT NULL DEFAULT 0,
+  first_seen DATETIME NOT NULL,
+  last_seen DATETIME NOT NULL,
+  UNIQUE KEY uq_event (day, category, type, source, src_ip, dst_ip),
+  KEY idx_last (last_seen),
+  KEY idx_src (src_ip)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

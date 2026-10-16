@@ -231,8 +231,85 @@ def blocked_rows(a, s):
     return rows[-a.n:]
 
 
+SECURITY_TAGS = {"threat", "scan", "brute", "synflood"}
+POLICY_SQL = ("SELECT u.username, COALESCE((SELECT r.value FROM radreply r WHERE r.username=u.username AND r.attribute='Mikrotik-Address-List' LIMIT 1), "
+              "(SELECT gr.value FROM radusergroup g JOIN radgroupreply gr ON gr.groupname=g.groupname AND gr.attribute='Mikrotik-Address-List' "
+              "WHERE g.username=u.username ORDER BY g.priority LIMIT 1), '') AS list FROM (SELECT DISTINCT username FROM radcheck) u")
+
+
+def block_reason(tag):
+    """Log prefix WF-<tag> -> what blocked it, in words."""
+    if tag.startswith("app-"):
+        return f"app {tag[4:]}"
+    return {"vpn": "VPN / proxy", "allowonly": "not allowed (allow-only)", "noinet": "no internet", "keywords": "adult word in the name",
+            "threat": "threat list (security)", "scan": "port scan (security)", "brute": "password guessing (security)",
+            "synflood": "SYN flood (security)", "vpn-proxy": "VPN / proxy website"}.get(tag, f"category {tag}")
+
+
+def user_policies(cnf, db):
+    """username -> policy name (own, else the group's)."""
+    try:
+        out = subprocess.run(["mysql", f"--defaults-extra-file={cnf}", "-N", "-B", db, "-e", POLICY_SQL],
+                             capture_output=True, text=True, timeout=30, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    return {f[0]: f[1] for f in (l.split("\t") for l in out.splitlines()) if len(f) == 2}
+
+
+def dns_names(since):
+    """(client, ip) -> the name that client looked up for that ip; and ip -> any name (for blocked HTTPS)."""
+    import cdnlearn
+    by_client, by_ip = {}, {}
+    for r in cdnlearn.parse(l for l in read_lines(DNS_LOG) if (ts_of(l.split(" ", 1)[0]) or 0) >= since - 3600):
+        for ip in r["ips"]:
+            by_client[(r["client"], ip)] = r["qname"]
+            by_ip[ip] = r["qname"]
+    return by_client, by_ip
+
+
+def blocked_detail(a, s, policies):
+    """Blocked attempts with the POLICY that blocked them, why, and the site name. Newest last."""
+    since = time.time() - a.days * 86400
+    by_client, by_ip = dns_names(since)
+    out = []
+    for line in read_lines(WF_LOG):
+        m = WF_RE.search(line)
+        if not m:
+            continue
+        t, router, tag, mac, src, dst, port = m.groups()
+        ts = ts_of(t)
+        if ts is None or ts < since:
+            continue
+        user = s.who(src, ts, mac or "")
+        if not match(user, src, a):
+            continue
+        lst = policies.get(user, "") if user != "-" else ""
+        policy = "security.rsc (everyone)" if tag in SECURITY_TAGS else lst[7:] if lst.startswith("policy-") else lst or "router list"
+        if getattr(a, "policy", "") and policy != a.policy:
+            continue
+        out.append({"time": t[:19].replace("T", " "), "user": user, "ip": src, "mac": (mac or "-").upper().replace(":", "-"),
+                    "policy": policy, "rule": tag, "reason": block_reason(tag),
+                    "site": by_client.get((src, dst)) or by_ip.get(dst) or "", "destination": f"{dst}:{port}" if port else dst,
+                    "router": router})
+    return out[-a.n:]
+
+
+def blocked_summary(rows):
+    """[(policy, user, reason, count)] most first."""
+    c = {}
+    for r in rows:
+        k = (r["policy"], r["user"], r["reason"])
+        c[k] = c.get(k, 0) + 1
+    return sorted(((p, u, why, n) for (p, u, why), n in c.items()), key=lambda x: -x[3])
+
+
 def cmd_blocked(a, s):
-    table(blocked_rows(a, s), ("time", "user", "ip", "mac", "category", "destination", "router"))
+    rows = blocked_detail(a, s, user_policies(a.cnf, a.db))
+    if getattr(a, "summary", False):
+        table(blocked_summary(rows), ("policy", "user", "blocked", "times"))
+        return
+    table([(r["time"], r["user"], r["ip"], r["policy"], r["reason"], r["site"] or "-", r["destination"]) for r in rows],
+          ("time", "user", "ip", "policy", "blocked by", "site", "destination"))
 
 
 def live_events(path, lines, s, last):
@@ -344,6 +421,9 @@ def main():
         sp.add_argument("--days", type=float, default=1 if name != "sites" else 7)
         sp.add_argument("--top", type=int, default=30)
         sp.add_argument("n", nargs="?", type=int, default=50)
+        if name == "blocked":
+            sp.add_argument("--policy", default="")
+            sp.add_argument("--summary", action="store_true")
     a = p.parse_args()
     s = Sessions(a.cnf, a.db, max(a.days, 1))
     s.refresh(force=True)

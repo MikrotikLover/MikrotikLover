@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""VPN watch: who tries to use a VPN, and an automatic, growing list of VPN servers and VPN domains.
+"""VPN + proxy watch: who tries to use a VPN or a proxy, and an automatic, growing list of VPN/proxy
+servers and names.
 
 Evidence, from three places:
   DNS log        a VPN website / app name was looked up (catalog apps of category "vpn", the vpn-proxy
@@ -32,9 +33,12 @@ PORTS = {
     (17, 2408): "Cloudflare WARP", (17, 500): "IPsec VPN", (17, 4500): "IPsec VPN", (17, 1701): "L2TP VPN",
     (6, 1723): "PPTP VPN", (6, 5555): "SoftEther VPN", (17, 5555): "SoftEther VPN",
     (6, 9001): "Tor", (6, 9030): "Tor", (6, 9050): "Tor", (6, 9150): "Tor",
+    # proxies set in the phone / browser (8080 is left out: too many normal services use it)
+    (6, 3128): "HTTP proxy", (6, 3129): "HTTP proxy", (6, 8118): "HTTP proxy (Privoxy)", (6, 1080): "SOCKS proxy",
 }
 PROTOS = {47: "PPTP VPN (GRE)", 50: "IPsec VPN (ESP)", 51: "IPsec VPN (AH)"}
 KEYWORD = re.compile(r"vpn")
+PROXY_WORD = re.compile(r"proxy|unblock|bypass")
 PUBLIC_LISTS = [
     ("VPN provider (public list)", "https://raw.githubusercontent.com/X4BNet/lists_vpn/main/output/vpn/ipv4.txt"),
     ("Tor exit (public list)", "https://check.torproject.org/torbulkexitlist"),
@@ -88,8 +92,12 @@ class Matcher:
         hit = next((s for s in sfx if s in self.block), None)
         if hit:
             return (e["app"] if e else hit), "block list"
-        if KEYWORD.search(host) and not e:
+        if e:
+            return None
+        if KEYWORD.search(host):
             return cdnmap.registrable(host), "name has 'vpn'"
+        if PROXY_WORD.search(host):
+            return "Web proxy: " + cdnmap.registrable(host), "name has 'proxy'"
         return None
 
     def ip_shared(self, ip):

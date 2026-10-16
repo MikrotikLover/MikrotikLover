@@ -11,7 +11,8 @@ import re, sys, glob, os
 FW = {"chain", "in-interface-list", "src-address-list", "dst-address-list", "src-address",
       "dst-address", "protocol", "dst-port", "action", "to-addresses", "to-ports",
       "reject-with", "comment", "tls-host", "place-before", "disabled", "jump-target", "time",
-      "log", "log-prefix", "connection-state", "limit", "tcp-flags"}
+      "log", "log-prefix", "connection-state", "limit", "tcp-flags", "psd", "connection-limit",
+      "address-list", "address-list-timeout"}
 PROPS = {
     "/radius": {"address", "secret", "service", "timeout", "comment", "src-address"},
     "/radius incoming": {"accept"},
@@ -23,6 +24,7 @@ PROPS = {
     "/ipv6 firewall address-list": {"list", "address", "comment", "timeout"},
     "/ip firewall nat": FW,
     "/ip firewall filter": FW,
+    "/ip firewall raw": FW,
     "/ipv6 firewall filter": FW,
     "/interface wifi security": {"name", "authentication-types", "eap-accounting", "passphrase"},
     "/interface wifi configuration": {"name", "ssid", "security", "country", "mode"},
