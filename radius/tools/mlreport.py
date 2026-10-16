@@ -7,7 +7,7 @@ Reads the logs that rsyslog writes on the RADIUS server:
 and maps client IP / MAC to the RADIUS username active at that moment (radacct).
 Installed to /usr/local/lib/mikrotiklover/ and run by radius-admin (sites, history, blocked, live).
 """
-import argparse, glob, gzip, os, re, subprocess, sys, time
+import argparse, glob, gzip, json, os, re, subprocess, sys, time
 from datetime import datetime, timedelta
 
 LOGDIR = os.environ.get("MLREPORT_LOGDIR", "/var/log/mikrotik")
@@ -255,12 +255,35 @@ def cmd_live(a, s):
         print()
 
 
+def human(n):
+    for unit, size in (("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)):
+        if n >= size:
+            return f"{n / size:.1f} {unit}"
+    return f"{n} B"
+
+
+def cmd_now(a, s):
+    try:
+        snap = json.load(open("/run/mikrotiklover/traffic-now.json"))
+    except (OSError, ValueError):
+        print("No live data yet — is the traffic collector on? (radius-admin traffic collector status)")
+        return
+    secs = max(snap.get("interval", 60), 1)
+    rows = [r for r in snap["rows"] if match(r["user"] or "-", r["ip"], a)]
+    rows.sort(key=lambda r: -(r["down"] + r["up"]))
+    age = int(time.time() - snap["time"])
+    print(f"Last {secs:.0f} s (updated {age} s ago)")
+    table([(r["ip"], r["user"] or "-", r["site"], human(r["down"]), human(r["up"]),
+            f"{(r['down'] + r['up']) * 8 / secs / 1e6:.2f} Mbps") for r in rows[:a.top]],
+          ("ip", "user", "site", "download", "upload", "speed"))
+
+
 def main():
     p = argparse.ArgumentParser(prog="radius-admin report")
     p.add_argument("--cnf", default="/etc/mikrotiklover-radius/my.cnf")
     p.add_argument("--db", default="radius")
     sub = p.add_subparsers(dest="cmd", required=True)
-    for name in ("sites", "history", "blocked", "live"):
+    for name in ("sites", "history", "blocked", "live", "now"):
         sp = sub.add_parser(name)
         sp.add_argument("-u", "--user", default="")
         sp.add_argument("--ip", default="")
@@ -270,7 +293,7 @@ def main():
     a = p.parse_args()
     s = Sessions(a.cnf, a.db, max(a.days, 1))
     s.refresh(force=True)
-    {"sites": cmd_sites, "history": cmd_history, "blocked": cmd_blocked, "live": cmd_live}[a.cmd](a, s)
+    {"sites": cmd_sites, "history": cmd_history, "blocked": cmd_blocked, "live": cmd_live, "now": cmd_now}[a.cmd](a, s)
 
 
 if __name__ == "__main__":

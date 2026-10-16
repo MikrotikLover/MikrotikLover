@@ -32,12 +32,14 @@ PROPS = {
         "unicast-ciphers", "group-ciphers", "radius-eap-accounting", "wpa2-pre-shared-key",
         "radius-mac-authentication", "radius-mac-accounting", "radius-mac-mode", "radius-mac-format"},
     "/interface wireless": {"security-profile", "ssid", "mode", "disabled", "master-interface", "name", "vlan-mode"},
+    "/ip traffic-flow": {"enabled", "interfaces", "active-flow-timeout", "inactive-flow-timeout", "cache-entries"},
+    "/ip traffic-flow target": {"dst-address", "port", "version", "src-address"},
     "/tool netwatch": {"host", "interval", "timeout", "comment", "up-script", "down-script", "type"},
     "/system logging action": {"name", "target", "remote", "remote-port"},
     "/system logging": {"topics", "action", "prefix"},
     "/ip hotspot profile": {"use-radius", "radius-accounting", "radius-interim-update", "login-by", "mac-auth-mode"},
 }
-VERBS = {"add", "set", "remove", "move", ":foreach", ":if", "}"}
+VERBS = {"add", "set", "remove", "move", "disable", "enable", ":foreach", ":if", "}"}
 
 def strip_quoted(s):
     return re.sub(r'"(?:\\.|[^"\\])*"', 'Q', s)

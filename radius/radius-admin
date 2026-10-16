@@ -87,9 +87,9 @@ ruleset(name="mikrotiklover") {
     stop
 }
 input(type="imudp" port="514" ruleset="mikrotiklover")
-# DNS logger (dnsmasq on this server): keep only the "query[...]" lines
+# DNS logger (dnsmasq on this server): keep query and answer lines
 if (\$programname == "dnsmasq") then {
-    if (\$msg contains "query[") then {
+    if (\$msg contains "query[" or \$msg contains " reply " or \$msg contains " cached " or \$msg contains " config ") then {
         action(type="omfile" file="/var/log/mikrotik/dns.log" template="mikrotiklover_wf" fileCreateMode="0640" fileGroup="adm")
     }
     stop
@@ -445,7 +445,7 @@ no-resolv
 no-hosts
 server=$up
 cache-size=1000
-log-queries
+log-queries=extra
 log-async=50
 log-facility=DAEMON
 user=$(id dnsmasq >/dev/null 2>&1 && echo dnsmasq || echo nobody)
@@ -490,6 +490,93 @@ EOF
         fi
         ;;
     *) die "usage: radius-admin dnslog on ROUTER_IP | off | status" ;;
+    esac
+}
+
+# ======================================================================= data usage per site / IP / user
+hb() { # SQL: human readable bytes for expression $1
+    echo "CASE WHEN $1 >= 1073741824 THEN CONCAT(ROUND($1/1073741824,2),' GB')
+               WHEN $1 >= 1048576 THEN CONCAT(ROUND($1/1048576,1),' MB')
+               ELSE CONCAT(ROUND($1/1024),' KB') END"
+}
+
+TRAFFIC_UNIT=/etc/systemd/system/mikrotiklover-traffic.service
+cmd_traffic() {
+    local by=site days=1 top=30 user="" ip="" site=""
+    case ${1:-} in
+        now) shift; report_args "$@"; report now "$@"; return ;;
+        collector) shift; cmd_collector "$@"; return ;;
+    esac
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --by)    by=${2:-}; [[ $by =~ ^(site|ip|user|day|hour)$ ]] || die "--by site|ip|user|day|hour"; shift 2 ;;
+            --days)  days=${2:-}; valid_int "$days" days; shift 2 ;;
+            --top)   top=${2:-}; valid_int "$top" top; shift 2 ;;
+            -u|--user) user=${2:-}; valid_name "$user" username; shift 2 ;;
+            --ip)    ip=${2:-}; valid_ip "$ip"; shift 2 ;;
+            --site)  site=${2:-}; [[ $site =~ ^[A-Za-z0-9.-]{1,253}$ ]] || die "Invalid site"; shift 2 ;;
+            *) die "usage: radius-admin traffic [--by site|ip|user|day|hour] [--days N] [-u USER] [--ip IP] [--site SITE] [--top N] | now | collector on|off|status" ;;
+        esac
+    done
+    local where="bucket >= NOW() - INTERVAL $days DAY"
+    [ -z "$user" ] || where+=" AND username=$(q "$user")"
+    [ -z "$ip" ]   || where+=" AND client_ip=$(q "$ip")"
+    [ -z "$site" ] || where+=" AND site=$(q "${site,,}")"
+    local key label extra=""
+    case $by in
+        site) key="site"; label="site"; extra=", COUNT(DISTINCT client_ip) AS devices, COALESCE(LEFT(GROUP_CONCAT(DISTINCT NULLIF(username,'') ORDER BY username),40),'-') AS users" ;;
+        ip)   key="client_ip"; label="ip"; extra=", COALESCE(MAX(NULLIF(username,'')),'-') AS user, COUNT(DISTINCT site) AS sites" ;;
+        user) key="IF(username='','(no login)',username)"; label="user"; extra=", COUNT(DISTINCT client_ip) AS devices, COUNT(DISTINCT site) AS sites" ;;
+        day)  key="DATE(bucket)"; label="day"; extra=", COUNT(DISTINCT client_ip) AS devices" ;;
+        hour) key="bucket"; label="hour"; extra=", COUNT(DISTINCT client_ip) AS devices" ;;
+    esac
+    local order="SUM(bytes_down+bytes_up) DESC"
+    [[ $by == day || $by == hour ]] && order="$key DESC"
+    echo "SELECT $key AS \`$label\`,
+                 $(hb 'SUM(bytes_down)') AS download, $(hb 'SUM(bytes_up)') AS upload,
+                 $(hb 'SUM(bytes_down+bytes_up)') AS total $extra
+          FROM traffic_site WHERE $where
+          GROUP BY $key ORDER BY $order LIMIT $top;" | dbt
+}
+
+cmd_collector() {
+    case ${1:-status} in
+    on)
+        if [ -d /run/systemd/system ]; then
+            cat > "$TRAFFIC_UNIT" <<EOF
+[Unit]
+Description=MikrotikLover traffic collector (NetFlow v9 / IPFIX -> data per site, IP, user)
+After=network-online.target mariadb.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 -I /usr/local/lib/mikrotiklover/flowcollector.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+            systemctl daemon-reload
+            systemctl enable --now mikrotiklover-traffic >/dev/null 2>&1
+            systemctl restart mikrotiklover-traffic
+        else
+            pkill -f '^(/usr/bin/)?python3 -I /usr/local/lib/mikrotiklover/flowcollector[.]py' 2>/dev/null || true
+            nohup python3 -I /usr/local/lib/mikrotiklover/flowcollector.py >>/var/log/mikrotik/traffic-collector.log 2>&1 &
+        fi
+        ok "Traffic collector on (UDP 2055). Import mikrotik/traffic-flow.rsc on the router."
+        [ -f "$DNSLOG_CONF" ] || echo "   Tip: radius-admin dnslog on ROUTER_IP — without it sites show as IP addresses." >&2
+        ;;
+    off)
+        if [ -d /run/systemd/system ]; then systemctl disable --now mikrotiklover-traffic >/dev/null 2>&1 || true
+        else pkill -f '^(/usr/bin/)?python3 -I /usr/local/lib/mikrotiklover/flowcollector[.]py' 2>/dev/null || true; fi
+        ok "Traffic collector off"
+        ;;
+    status)
+        if pgrep -f '^(/usr/bin/)?python3 -I /usr/local/lib/mikrotiklover/flowcollector[.]py' >/dev/null; then echo "Collector : running (UDP 2055)"; else echo "Collector : off  (radius-admin traffic collector on)"; fi
+        echo "Last hour : $(echo "SELECT CONCAT(COUNT(DISTINCT client_ip),' devices, ', ROUND(SUM(bytes_down+bytes_up)/1048576,1),' MB') FROM traffic_site WHERE bucket >= NOW() - INTERVAL 1 HOUR" | db)"
+        ;;
+    *) die "usage: radius-admin traffic collector on|off|status" ;;
     esac
 }
 
@@ -578,6 +665,15 @@ Visited sites / live log (needs: radius-admin dnslog on ROUTER_IP + mikrotik/dns
   history -u USER [--days 1] [N]                     what a user opened, in order
   live [-u USER] [--ip IP]                            live log: visits + blocks (Ctrl+C)
   dnslog on ROUTER_IP | off | status                  DNS query logger on this server
+
+Data usage — download/upload per website, IP, user (needs: traffic collector on + mikrotik/traffic-flow.rsc)
+  traffic                              today, per website (download / upload / total)
+  traffic --by ip|user|day|hour        per client IP, per user, per day, per hour
+  traffic -u ali --days 30             one user, per website
+  traffic --ip 192.168.88.23           one IP, per website
+  traffic --site youtube.com --by user who used YouTube, how much
+  traffic now                          last minute, live (Mbps)
+  traffic collector on|off|status
   IP range / single device: on the router — see README "Policies"
 
 MAC authentication (devices without username/password: printers, CCTV, TVs, POS)
@@ -611,6 +707,7 @@ case ${1:-help} in
     history) shift; cmd_history "$@" ;;
     live)    shift; cmd_live "$@" ;;
     dnslog)  shift; cmd_dnslog "$@" ;;
+    traffic) shift; cmd_traffic "$@" ;;
     syslog-sync) syslog_sync ;;
     online)  cmd_online ;;
     log)     shift; cmd_log "$@" ;;

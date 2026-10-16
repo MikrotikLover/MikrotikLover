@@ -104,6 +104,7 @@ sudo radius-admin mac del     AA-BB-CC-DD-EE-FF
 | `webfilter-policies.rsc` | Single user / group / IP range ki alag policies, time ke saath |
 | `webfilter-logging.rsc` | Blocked attempts server par (`radius-admin blocked`) |
 | `dns-logging.rsc` | Visited sites + live log (`radius-admin sites / history / live`) |
+| `traffic-flow.rsc` | Data download/upload per site / IP / user (`radius-admin traffic`) |
 | `allow-only-whatsapp.rsc` | Sirf WhatsApp |
 
 Wi-Fi aur hotspot dono ek router par hain to ek hi entry kafi hai: `/radius add address=... secret=... service=wireless,hotspot`.
@@ -276,6 +277,39 @@ sudo radius-admin blocked -u ali          # ali ki blocked koshishein
 - **Limitation:** sirf site ka naam (domain) aata hai, page/URL nahi (HTTPS). Jo users DNS bypass karte hain (exempt list, policy ki family DNS) woh `sites` mein nahi aate — `blocked` mein aate hain.
 - **Privacy / qanoon:** users ki browsing record ho rahi hai — unhein pehle bata dein (Wi-Fi terms / office policy). Pakistan mein PECA 2016 ke tehat data sirf zaroorat tak rakhein aur mehfooz rakhein; log files sirf root/adm parh sakte hain.
 
+### Data usage — kis website / kis IP / kis user ne kitna download-upload kiya
+
+**Setup (ek dafa):**
+1. Server par: `sudo radius-admin traffic collector on` (UDP 2055) — aur site ke naam ke liye `sudo radius-admin dnslog on ROUTER_IP` (upar wala DNS logger).
+2. Router par: `mikrotik/traffic-flow.rsc` (`RADIUS_SERVER_IP` badal kar). Ye Traffic Flow (IPFIX) on karta hai aur **fasttrack band** karta hai — fasttrack wale packets Traffic Flow mein nahi aate, warna download ka bara hissa gina hi nahi jata. Busy router par CPU barhega.
+
+**Reports:**
+```bash
+sudo radius-admin traffic                           # aaj: har website ka download / upload / total
+sudo radius-admin traffic --by ip                   # har IP ne kitna (user ke naam ke saath)
+sudo radius-admin traffic --by user --days 30       # har user ka mahina
+sudo radius-admin traffic -u ali --days 7           # ali: kis site se kitna
+sudo radius-admin traffic --ip 192.168.88.23        # ek IP: kis site se kitna
+sudo radius-admin traffic --site youtube.com --by user   # YouTube kis ne kitna chalaya
+sudo radius-admin traffic --by day --days 30        # roz ka total
+sudo radius-admin traffic now                       # LIVE: pichle 1 minute — IP, user, site, speed (Mbps)
+```
+```
++--------------+----------+---------+----------+---------+-------+
+| site         | download | upload  | total    | devices | users |
+| youtube.com  | 810.6 MB | 11.4 MB | 822.1 MB |       1 | ali   |
+| facebook.com | 114.4 MB | 2.9 MB  | 117.3 MB |       1 | ali   |
+```
+
+**Kaise kaam karta hai:**
+- Router har connection ke bytes (IPFIX/NetFlow v9) server ko bhejta hai. NAT ke baad router kabhi client ka private IP aur kabhi apna public IP report karta hai — collector record ke **saare** address fields (NAT se pehle aur baad) dekh kar asal LAN client dhoondta hai.
+- Wohi packets do interfaces (LAN + WAN) par report hon to **ek hi dafa** gine jate hain.
+- Remote IP ka naam: DNS logger ke `query` → `reply` serial se — jo IP client X ko `www.youtube.com` ke liye mila, X ka us IP ka traffic `youtube.com`. CDN naam (`googlevideo.com`, `fbcdn.net`) asal site mein jor diye jate hain. Naam na mile to IP dikhta hai.
+- Ghante ke hisaab se MariaDB table `traffic_site` mein (90 din, `TRAFFIC_DAYS=` in `radius.conf`). Username RADIUS session se.
+- `tests/test-flowcollector.py` 7 cases (NAT field se client, duplicate, NetFlow v9, cached DNS, LAN-LAN ignore) — aur yahan asal DB ke saath end-to-end chala kar dekha.
+
+**Limitations:** sirf site (domain) level — page/URL ka data nahi (HTTPS). IPv6 traffic abhi nahi gina jata (IPv6 band rakhein ya v4 hi istemal karein). Jo device DNS logger bypass kare (exempt / family DNS policy) us ka data IP ke naam se dikhega. Pehli dafa router par lagane ke baad `radius-admin traffic now` se check karein ke IP aur bytes sahi aa rahe hain.
+
 ### Sirf WhatsApp (baqi sab band) — `allow-only-whatsapp.rsc`
 
 Kisi user/device ko sirf WhatsApp dena ho (chat, voice/video call, photo/video, voice note, status, WhatsApp Web) aur **YouTube, Facebook, Instagram, TikTok, browser — sab band**:
@@ -326,6 +360,7 @@ python3 tests/lint-rsc.py             # har .rsc: quotes, braces, menu aur prope
 python3 tests/simulate-allowonly.py   # WhatsApp-only rules ka simulation
 python3 tests/simulate-policies.py    # policies: user/group/range, office time, raat
 python3 tests/test-mlreport.py        # sites / history / blocked reports (sample logs)
+python3 tests/test-flowcollector.py   # data usage collector (synthetic IPFIX / NetFlow v9)
 ```
 
 **Limitations (honestly):**

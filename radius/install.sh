@@ -36,7 +36,7 @@ command -v apt-get >/dev/null || die "Only Debian/Ubuntu are supported"
 log "Installing FreeRADIUS + MariaDB"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq freeradius freeradius-mysql freeradius-utils mariadb-server openssl rsyslog python3 dnsmasq-base >/dev/null
+apt-get install -y -qq freeradius freeradius-mysql freeradius-utils mariadb-server openssl rsyslog python3 python3-pymysql dnsmasq-base >/dev/null
 # eapol_test lets "radius-admin test --peap" simulate a real Wi-Fi client (optional package)
 apt-get install -y -qq eapoltest >/dev/null 2>&1 || warn "eapoltest not available; PEAP self-test disabled"
 [ -d "$RADDB" ] || die "$RADDB not found — unexpected FreeRADIUS layout"
@@ -187,6 +187,7 @@ grep -q "$LOCAL_SECRET" "$RADDB/clients.conf" || warn "Could not set the localho
 install -m 750 "$SCRIPT_DIR/radius-admin" /usr/local/sbin/radius-admin
 install -d -m 755 /usr/local/lib/mikrotiklover
 install -m 644 "$SCRIPT_DIR/tools/mlreport.py" /usr/local/lib/mikrotiklover/mlreport.py
+install -m 644 "$SCRIPT_DIR/tools/flowcollector.py" /usr/local/lib/mikrotiklover/flowcollector.py
 rm -f /usr/local/lib/mikrotiklover/wf-report.py
 
 # ---------------------------------------------------------------- router logs (blocked-site report)
@@ -220,6 +221,13 @@ EOF
 svc enable rsyslog >/dev/null 2>&1 || true
 svc start rsyslog >/dev/null 2>&1 || true
 /usr/local/sbin/radius-admin syslog-sync
+# Re-apply optional services so upgrades take effect (DNS logger format, collector code)
+if [ -f "$CONF_DIR/dnsmasq.conf" ]; then
+    /usr/local/sbin/radius-admin dnslog on "$(sed -n 's/^server=//p' "$CONF_DIR/dnsmasq.conf" | head -1)" >/dev/null
+fi
+if pgrep -f '^(/usr/bin/)?python3 -I /usr/local/lib/mikrotiklover/flowcollector[.]py' >/dev/null; then
+    /usr/local/sbin/radius-admin traffic collector on >/dev/null
+fi
 
 # ---------------------------------------------------------------- start
 log "Checking configuration"
