@@ -137,6 +137,8 @@ Filtering MikroTik router ke DNS par hoti hai (RouterOS **7.15+**). Blocked site
 | `webfilter-messaging.rsc` | WhatsApp, Telegram, Signal, Viber, IMO, Discord | static list |
 | `webfilter-custom.rsc` | Aap ki apni list | static list |
 | `webfilter-adlists.rsc` | **Adult** (~75k), **Gambling** (~7k), Ads+Malware, Fake news (optional) | adlist, router khud download/update karta hai |
+| `webfilter-keywords.rsc` | **Words** in website names: porn, xxx, sex, nude, ... (`webfilter/keywords.txt`) | DNS regexp + HTTPS SNI firewall |
+| `webfilter-safesearch.rsc` | Google / YouTube / Bing / DuckDuckGo **SafeSearch lock** — "sex video" search par explicit results nahi | DNS CNAME |
 
 Har static domain ke **saare subdomains** bhi block hote hain (`facebook.com` → `m.facebook.com`, `web.facebook.com`).
 
@@ -156,8 +158,29 @@ Har static domain ke **saare subdomains** bhi block hote hain (`facebook.com` �
 - **Hotspot users**: `sudo radius-admin group add managers --address-list web-filter-exempt` — login hote hi user ka IP exempt list mein chala jata hai, baqi sab filtered.
 - **WPA-Enterprise users**: group ko VLAN dein (`--vlan 10`) aur us VLAN ka subnet exempt list mein daalein: `/ip firewall address-list add list=web-filter-exempt address=192.168.10.0/24`.
 
+### Word / keyword blocking ("sex", "xxx", ...)
+
+HTTPS mein browser aur website ke darmiyan sab kuch encrypted hota hai. Router ko sirf **website ka naam** nazar aata hai (DNS query aur TLS SNI), page ka path, search ke words aur page ka content nahi:
+
+| Address | Router ko kya dikhta hai |
+|---|---|
+| `https://www.xvideos.com/video123/abc` | `www.xvideos.com` ✔ — path ✘ |
+| `https://www.google.com/search?q=sex+video` | `www.google.com` ✔ — "sex video" ✘ |
+
+Is liye keyword blocking 3 tareeqon se hoti hai:
+
+1. **Website ke naam mein word** → `webfilter-keywords.rsc`. `webfilter/keywords.txt` mein words likhein:
+   - `porn` → naam mein kahin bhi ho to block (`pornhub.com`, `freeporn.net`)
+   - `^sex` → sirf naam ke hisse ke shuru mein (`sex.com`, `free-sex.org`, `cdn.sexvideos.com`), taa ke `essex.ac.uk`, `sussex.gov.uk`, `middlesex.edu` block na hon. Phir bhi `sextant.com` jaisi kuch sites block hongi.
+   - **"video" akela kabhi na likhein** — `googlevideo.com` (poora YouTube) block ho jayega. Combination likhein: `sexvideo`, `xxxvideo`. Isi wajah se list mein `xvideos` hai, `xvideo` nahi (`nflxvideo.net` = Netflix).
+   - Do layers: DNS regexp, aur firewall `tls-host` jo HTTPS connection ko website ke naam par reset karta hai — chahe device ne IP kisi aur tareeqe se li ho.
+2. **Search mein word** ("sex video" Google/YouTube par) → `webfilter-safesearch.rsc`. SafeSearch / YouTube Restricted Mode zabardasti on, user off nahi kar sakta. Devices par koi certificate nahi chahiye.
+3. **Har page ke URL path / content mein word** → sirf SSL-inspection proxy (Squid ssl-bump + e2guardian) se mumkin hai. Is ke liye har device par apna CA certificate install karna padta hai; banking/WhatsApp jaisi certificate-pinning wali apps toot jati hain, aur sab users ka HTTPS traffic decrypt hota hai (privacy / legal zimmedari). MikroTik khud ye nahi kar sakta — alag Linux server chahiye.
+
+**Behtareen combination:** `webfilter-base` + `webfilter-adlists` (adult ~75k sites) + `webfilter-keywords` + `webfilter-safesearch`.
+
 **Limitations (honestly):**
-- HTTPS mein poora URL path (`site.com/page`) router nahi dekh sakta — blocking **domain** level par hoti hai. Path-level blocking ke liye SSL interception proxy chahiye jo har device par certificate maangta hai.
+- HTTPS mein poora URL path (`site.com/page`) router nahi dekh sakta — blocking **domain** level par hoti hai (upar dekhein).
 - Device par pehle se install VPN app DNS filter ko bypass kar sakti hai; `vpn-proxy` category sirf VPN websites band karti hai.
 - Naye DoH servers aate rehte hain; `webfilter/categories/doh.txt` aur `base.rsc.in` ki IP list update karte rahein.
 

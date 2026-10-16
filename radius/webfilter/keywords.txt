@@ -1,0 +1,31 @@
+# Keywords blocked in WEBSITE NAMES (domains) — one per line, lowercase letters/digits only.
+# Then run ./build.sh and import mikrotik/webfilter-keywords.rsc on the router.
+#
+#   word     blocked anywhere in the domain:  porn → pornhub.com, freeporn.net, m.porn-site.org
+#   ^word    blocked only at the START of a domain part, to avoid false hits:
+#            ^sex → sex.com, sexstories.net, free-sex.org, x.sexvideos.com
+#                   but NOT essex.ac.uk, sussex.gov.uk, middlesex.edu
+#
+# Do NOT add very common words like "video", "live", "hot", "free": "video" alone would
+# also block googlevideo.com (all of YouTube), nflxvideo.net (Netflix), vimeo, Zoom, ...
+# Use combinations instead (sexvideo, xxxvideo) — they are covered below.
+
+porn
+xxx
+xnxx
+xvideos
+xhamster
+redtube
+youporn
+brazzers
+hentai
+nsfw
+sexvideo
+sexmovie
+sexcam
+freesex
+hotsex
+livesex
+^sex
+^nude
+^xnx
