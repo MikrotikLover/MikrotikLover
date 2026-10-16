@@ -45,7 +45,7 @@ Log in with **admin / admin123**. You'll be asked to change the password on firs
 
 Hosts without SSH: set `security.setup_key` in `config.php`, open `/migrate.php?key=…` (add `&seed=1` for demo data), then clear the key.
 
-**Wi-Fi user authentication (RADIUS for MikroTik): see [radius/README.md](radius/README.md)** — FreeRADIUS + MariaDB installer, `radius-admin` tool and RouterOS scripts.
+**Wi-Fi user authentication (RADIUS for MikroTik): see [radius/README.md](radius/README.md)** — FreeRADIUS + MariaDB installer, web dashboard, `radius-admin` tool and RouterOS scripts.
 
 **Production on Hostinger: follow [DEPLOY.md](DEPLOY.md)** (upload, config outside `public_html`, migrations from the browser, devices, backups, security checklist).
 

@@ -229,6 +229,141 @@ if pgrep -f '^(/usr/bin/)?python3 -I /usr/local/lib/mikrotiklover/flowcollector[
     /usr/local/sbin/radius-admin traffic collector on >/dev/null
 fi
 
+# ---------------------------------------------------------------- web dashboard
+# WEB=0 skips it. WEB_PORT (default 8443). WEB_ALLOW: who may open it (default: private networks).
+WEB=${WEB:-1}
+WEB_URL=""
+if [ "$WEB" = 1 ]; then
+    WEB_PORT=${WEB_PORT:-8443}
+    WEB_ALLOW=${WEB_ALLOW:-"127.0.0.1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10"}
+    [[ $WEB_PORT =~ ^[0-9]{2,5}$ ]] || die "Invalid WEB_PORT"
+    [[ $WEB_ALLOW =~ ^[0-9a-fA-F.:/\ ]+$ || $WEB_ALLOW == any ]] || die "WEB_ALLOW: IPs/networks separated by spaces, or 'any'"
+    log "Installing the web dashboard (port $WEB_PORT)"
+    apt-get install -y -qq python3-flask python3-waitress python3-werkzeug nginx sudo >/dev/null
+    id mlweb >/dev/null 2>&1 || useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin mlweb
+    usermod -a -G adm mlweb                          # read /var/log/mikrotik (reports)
+    chgrp adm /var/log/mikrotik/*.log 2>/dev/null || true
+
+    WEB_DIR=/etc/mikrotiklover-radius-web
+    install -d -m 750 -o root -g mlweb "$WEB_DIR"
+    WEB_DB_PASS="" SECRET_KEY=""
+    if [ -f "$WEB_DIR/web.conf" ]; then
+        WEB_DB_PASS=$(sed -n 's/^WEB_DB_PASS=//p' "$WEB_DIR/web.conf")
+        SECRET_KEY=$(sed -n 's/^SECRET_KEY=//p' "$WEB_DIR/web.conf")
+    fi
+    WEB_DB_PASS=${WEB_DB_PASS:-$(openssl rand -hex 16)}
+    SECRET_KEY=${SECRET_KEY:-$(openssl rand -hex 32)}
+    mysql <<EOF
+CREATE USER IF NOT EXISTS 'radius_web'@'localhost' IDENTIFIED BY '$WEB_DB_PASS';
+ALTER USER 'radius_web'@'localhost' IDENTIFIED BY '$WEB_DB_PASS';
+GRANT SELECT ON \`$DB_NAME\`.* TO 'radius_web'@'localhost';
+GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.web_admin TO 'radius_web'@'localhost';
+GRANT INSERT ON \`$DB_NAME\`.web_audit TO 'radius_web'@'localhost';
+FLUSH PRIVILEGES;
+EOF
+    umask 027
+    cat > "$WEB_DIR/web.conf" <<EOF
+# MikrotikLover web dashboard (written by install.sh)
+DB_NAME=$DB_NAME
+WEB_DB_USER=radius_web
+WEB_DB_PASS=$WEB_DB_PASS
+SECRET_KEY=$SECRET_KEY
+BIND=127.0.0.1:8099
+EOF
+    cat > "$WEB_DIR/my.cnf" <<EOF
+[client]
+user=radius_web
+password=$WEB_DB_PASS
+socket=/run/mysqld/mysqld.sock
+EOF
+    umask 022
+    chgrp mlweb "$WEB_DIR/web.conf" "$WEB_DIR/my.cnf"
+
+    # application + the policy list it offers
+    install -d -m 755 /usr/local/lib/mikrotiklover/web/static /usr/local/lib/mikrotiklover/policies
+    install -m 644 "$SCRIPT_DIR/web/app.py" /usr/local/lib/mikrotiklover/web/app.py
+    install -m 644 "$SCRIPT_DIR"/web/static/* /usr/local/lib/mikrotiklover/web/static/
+    rm -f /usr/local/lib/mikrotiklover/policies/*.txt
+    install -m 644 "$SCRIPT_DIR"/webfilter/policies/*.txt /usr/local/lib/mikrotiklover/policies/
+
+    # the dashboard may run radius-admin as root — and nothing else
+    echo 'mlweb ALL=(root) NOPASSWD: /usr/local/sbin/radius-admin' > /etc/sudoers.d/.mikrotiklover-web.tmp
+    visudo -cf /etc/sudoers.d/.mikrotiklover-web.tmp >/dev/null || die "sudoers check failed"
+    install -m 440 /etc/sudoers.d/.mikrotiklover-web.tmp /etc/sudoers.d/mikrotiklover-web
+    rm -f /etc/sudoers.d/.mikrotiklover-web.tmp
+
+    # nginx: TLS with this server's certificate, only allowed networks, proxy to the app
+    {
+        echo "# Managed by MikrotikLover install.sh"
+        echo "server {"
+        echo "    listen $WEB_PORT ssl;"
+        [ -e /proc/net/if_inet6 ] && echo "    listen [::]:$WEB_PORT ssl;"
+        echo "    server_name _;"
+        echo "    ssl_certificate $CERT_DIR/server.pem;"
+        echo "    ssl_certificate_key $CERT_DIR/server.key;"
+        echo "    ssl_protocols TLSv1.2 TLSv1.3;"
+        echo "    server_tokens off;"
+        echo "    client_max_body_size 64k;"
+        echo '    add_header Strict-Transport-Security "max-age=31536000" always;'
+        if [ "$WEB_ALLOW" != any ]; then
+            for a in $WEB_ALLOW; do echo "    allow $a;"; done
+            echo "    deny all;"
+        fi
+        echo "    location / {"
+        echo "        proxy_pass http://127.0.0.1:8099;"
+        echo '        proxy_set_header Host $host;'
+        echo '        proxy_set_header X-Forwarded-For $remote_addr;'
+        echo "        proxy_set_header X-Forwarded-Proto https;"
+        echo "        proxy_read_timeout 150s;"
+        echo "    }"
+        echo "}"
+    } > /etc/nginx/sites-available/mikrotiklover
+    ln -sfn ../sites-available/mikrotiklover /etc/nginx/sites-enabled/mikrotiklover
+    # IPv6 disabled on this host: nginx's stock default site would fail on "listen [::]:80"
+    if [ ! -e /proc/net/if_inet6 ] && [ -f /etc/nginx/sites-available/default ]; then
+        sed -i -E 's/^([[:space:]]*)listen \[::\]/\1# listen [::]/' /etc/nginx/sites-available/default
+    fi
+    nginx -t >/dev/null 2>&1 || { nginx -t; die "nginx configuration failed"; }
+
+    if [ -d /run/systemd/system ]; then
+        cat > /etc/systemd/system/mikrotiklover-web.service <<EOF
+[Unit]
+Description=MikrotikLover RADIUS web dashboard
+After=network-online.target mariadb.service
+Wants=network-online.target
+
+[Service]
+User=mlweb
+Group=mlweb
+SupplementaryGroups=adm
+ExecStart=/usr/bin/python3 -I /usr/local/lib/mikrotiklover/web/app.py
+Restart=always
+RestartSec=3
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl daemon-reload
+        systemctl enable mikrotiklover-web >/dev/null 2>&1
+        systemctl restart mikrotiklover-web
+        systemctl enable nginx >/dev/null 2>&1 || true
+        systemctl reload nginx 2>/dev/null || systemctl restart nginx
+    else
+        pkill -u mlweb -f '^/usr/bin/python3 -I /usr/local/lib/mikrotiklover/web/app[.]py' 2>/dev/null || true
+        runuser -u mlweb -- nohup /usr/bin/python3 -I /usr/local/lib/mikrotiklover/web/app.py >>/var/log/mikrotik/web.log 2>&1 &
+        if pgrep -x nginx >/dev/null; then nginx -s reload; else nginx; fi
+    fi
+
+    # first dashboard account
+    if [ "$(mysql -N "$DB_NAME" -e 'SELECT COUNT(*) FROM web_admin')" = 0 ]; then
+        WEB_FIRST_PASS=$(openssl rand -base64 18 | tr -dc 'A-HJ-NP-Za-km-z2-9' | cut -c1-14)
+        printf '%s\n' "$WEB_FIRST_PASS" | /usr/local/sbin/radius-admin web passwd admin -p - >/dev/null
+    fi
+    WEB_URL="https://$(hostname -I 2>/dev/null | awk '{print $1}'):$WEB_PORT"
+fi
+
 # ---------------------------------------------------------------- start
 log "Checking configuration"
 freeradius -C -lstdout >/dev/null 2>&1 || { freeradius -XC 2>&1 | tail -30; die "FreeRADIUS configuration check failed"; }
@@ -244,6 +379,9 @@ $(printf '\033[1;32m')RADIUS server is ready.$(printf '\033[0m')
   Settings         : $CONF_FILE
   CA certificate   : $CERT_DIR/ca.pem  (ca.der for Windows/Android)
   Cert domain      : $RADIUS_DOMAIN   (enter this as "Domain" on Android)
+
+$( [ -n "$WEB_URL" ] && printf 'Web dashboard    : %s\n' "$WEB_URL" )
+$( [ -n "${WEB_FIRST_PASS:-}" ] && printf '  First login    : admin / %s   (change it under Settings)\n' "$WEB_FIRST_PASS" )
 
 Next steps:
   radius-admin nas add <mikrotik-ip> [secret] [name]

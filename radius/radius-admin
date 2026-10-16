@@ -64,6 +64,8 @@ parse_pass_opts() { # common options: -p PASS, -g GROUP, --nt-hash
             *) die "Unknown option $1" ;;
         esac
     done
+    # "-p -" reads the password from stdin (keeps it out of the process list; used by the web dashboard)
+    if [ "$PASS" = - ]; then IFS= read -r PASS || true; [ -n "$PASS" ] || die "Empty password on stdin"; fi
     if [ -n "$PASS" ]; then valid_pass "$PASS"; fi
     if [ -n "$GROUP" ]; then valid_name "$GROUP" group; fi
     return 0
@@ -210,10 +212,29 @@ cmd_group() {
     add|set)
         local g=${1:-}; [ -n "$g" ] || die "usage: radius-admin group add NAME [--rate RX/TX] [--vlan ID] [--session-timeout SEC] [--idle-timeout SEC] [--max-sessions N]"
         shift; valid_name "$g" group
-        local sql="" n=0
+        local sql="INSERT IGNORE INTO radgroup_meta (groupname) VALUES ($(q "$g"));" n=0
         while [ $# -gt 0 ]; do
             local v=${2:-}
+            if [ "$v" = - ]; then   # "--rate -" etc. removes that setting from the group
+                local attrs table=radgroupreply
+                case $1 in
+                    --rate) attrs="'Mikrotik-Rate-Limit'" ;;
+                    --vlan) attrs="'Tunnel-Type','Tunnel-Medium-Type','Tunnel-Private-Group-Id','Mikrotik-Wireless-VLANID'" ;;
+                    --session-timeout) attrs="'Session-Timeout'" ;;
+                    --idle-timeout) attrs="'Idle-Timeout'" ;;
+                    --address-list|--policy) attrs="'Mikrotik-Address-List'" ;;
+                    --max-sessions) attrs="'Simultaneous-Use'"; table=radgroupcheck ;;
+                    --description) attrs="" ;;
+                    *) die "Unknown option $1" ;;
+                esac
+                if [ -n "$attrs" ]; then sql+="DELETE FROM $table WHERE groupname=$(q "$g") AND attribute IN ($attrs);"
+                else sql+="UPDATE radgroup_meta SET description='' WHERE groupname=$(q "$g");"; fi
+                shift 2; n=$((n+1)); continue
+            fi
             case $1 in
+            --description)
+                [[ ${#v} -le 128 && $v =~ ^[[:print:]]*$ ]] || die "Description: max 128 printable characters"
+                sql+="UPDATE radgroup_meta SET description=$(q "$v") WHERE groupname=$(q "$g");" ;;
             --rate)
                 [[ $v =~ ^[0-9A-Za-z/\ ]{1,64}$ ]] || die "Rate must look like 10M/10M (MikroTik rx/tx[ burst...] syntax)"
                 sql+="DELETE FROM radgroupreply WHERE groupname=$(q "$g") AND attribute='Mikrotik-Rate-Limit';
@@ -245,14 +266,15 @@ cmd_group() {
             shift 2; n=$((n+1))
         done
         [ "$n" -gt 0 ] || echo "Note: no limits given — members of '$g' get no speed/VLAN/time limits" >&2
-        [ -z "$sql" ] || echo "START TRANSACTION; $sql COMMIT;" | db
+        echo "START TRANSACTION; $sql COMMIT;" | db
         ok "Group '$g' saved"
         cmd_group show "$g"
         ;;
     del|delete|rm)
         local g=${1:-}; valid_name "$g" group
         local members; members=$(echo "SELECT COUNT(*) FROM radusergroup WHERE groupname=$(q "$g")" | db)
-        echo "DELETE FROM radgroupreply WHERE groupname=$(q "$g"); DELETE FROM radgroupcheck WHERE groupname=$(q "$g"); DELETE FROM radusergroup WHERE groupname=$(q "$g");" | db
+        echo "DELETE FROM radgroupreply WHERE groupname=$(q "$g"); DELETE FROM radgroupcheck WHERE groupname=$(q "$g");
+              DELETE FROM radusergroup WHERE groupname=$(q "$g"); DELETE FROM radgroup_meta WHERE groupname=$(q "$g");" | db
         ok "Group '$g' deleted ($members user(s) are now without a group)"
         ;;
     show)
@@ -269,7 +291,8 @@ cmd_group() {
                      COALESCE((SELECT value FROM radgroupcheck c WHERE c.groupname=g.groupname AND c.attribute='Simultaneous-Use' LIMIT 1),'-') AS max_sessions
               FROM (SELECT groupname,attribute,value FROM radgroupreply
                     UNION ALL SELECT groupname,'',NULL FROM radgroupcheck
-                    UNION ALL SELECT groupname,'',NULL FROM radusergroup) g
+                    UNION ALL SELECT groupname,'',NULL FROM radusergroup
+                    UNION ALL SELECT groupname,'',NULL FROM radgroup_meta) g
               GROUP BY g.groupname ORDER BY g.groupname;" | dbt
         ;;
     *) die "Unknown: group $sub (add|del|show|list)" ;;
@@ -580,6 +603,39 @@ EOF
     esac
 }
 
+# ======================================================================= web dashboard accounts
+cmd_web() {
+    case ${1:-list} in
+    passwd)
+        local u=${2:-}; valid_name "$u" "dashboard user"; shift 2
+        PASS=""; [ "${1:-}" = -p ] && PASS=${2:-}
+        if [ "$PASS" = - ]; then IFS= read -r PASS || true
+        elif [ -z "$PASS" ]; then
+            [ -t 0 ] || die "usage: radius-admin web passwd NAME [-p -]"
+            local p2; read -r -s -p "New dashboard password for $u: " PASS; echo >&2
+            read -r -s -p "Repeat: " p2; echo >&2; [ "$PASS" = "$p2" ] || die "Passwords do not match"
+        fi
+        [[ ${#PASS} -ge 10 && ${#PASS} -le 256 ]] || die "Dashboard password: at least 10 characters"
+        local hash; hash=$(printf '%s\n' "$PASS" | python3 -c 'import sys; from werkzeug.security import generate_password_hash as g; print(g(sys.stdin.readline().rstrip("\n")))') \
+            || die "python3-werkzeug missing (install.sh installs it)"
+        echo "INSERT INTO web_admin (username,password_hash,role) VALUES ($(q "$u"),$(q "$hash"),'admin')
+              ON DUPLICATE KEY UPDATE password_hash=VALUES(password_hash);" | db
+        ok "Dashboard account '$u' saved"
+        ;;
+    role)
+        local u=${2:-} r=${3:-}; valid_name "$u" "dashboard user"; [[ $r =~ ^(admin|viewer)$ ]] || die "role: admin | viewer"
+        echo "UPDATE web_admin SET role=$(q "$r") WHERE username=$(q "$u");" | db; ok "'$u' is now $r"
+        ;;
+    del)
+        local u=${2:-}; valid_name "$u" "dashboard user"
+        echo "DELETE FROM web_admin WHERE username=$(q "$u");" | db; ok "Dashboard account '$u' deleted"
+        ;;
+    list)
+        echo "SELECT username, role, created_at, last_login FROM web_admin ORDER BY username;" | dbt ;;
+    *) die "usage: radius-admin web passwd NAME | role NAME admin|viewer | del NAME | list" ;;
+    esac
+}
+
 cmd_online() {
     echo "SELECT username AS user, nasipaddress AS router, framedipaddress AS ip, callingstationid AS mac,
                  acctstarttime AS since, SEC_TO_TIME(TIMESTAMPDIFF(SECOND,acctstarttime,NOW())) AS duration,
@@ -674,6 +730,9 @@ Data usage — download/upload per website, IP, user (needs: traffic collector o
   traffic --site youtube.com --by user who used YouTube, how much
   traffic now                          last minute, live (Mbps)
   traffic collector on|off|status
+
+Web dashboard (https://SERVER:8443)
+  web list | web passwd NAME | web role NAME admin|viewer | web del NAME
   IP range / single device: on the router — see README "Policies"
 
 MAC authentication (devices without username/password: printers, CCTV, TVs, POS)
@@ -708,6 +767,7 @@ case ${1:-help} in
     live)    shift; cmd_live "$@" ;;
     dnslog)  shift; cmd_dnslog "$@" ;;
     traffic) shift; cmd_traffic "$@" ;;
+    web)     shift; cmd_web "$@" ;;
     syslog-sync) syslog_sync ;;
     online)  cmd_online ;;
     log)     shift; cmd_log "$@" ;;

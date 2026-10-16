@@ -361,12 +361,52 @@ python3 tests/simulate-allowonly.py   # WhatsApp-only rules ka simulation
 python3 tests/simulate-policies.py    # policies: user/group/range, office time, raat
 python3 tests/test-mlreport.py        # sites / history / blocked reports (sample logs)
 python3 tests/test-flowcollector.py   # data usage collector (synthetic IPFIX / NetFlow v9)
+URL=https://127.0.0.1:8443 USER=admin PASS=... node tests/ui-dashboard.mjs   # web dashboard (Playwright)
 ```
 
 **Limitations (honestly):**
 - HTTPS mein poora URL path (`site.com/page`) router nahi dekh sakta — blocking **domain** level par hoti hai (upar dekhein).
 - Port 443 par chhupi hui VPN (Psiphon jaisi) DNS filter bypass kar sakti hai; `vpn-protocols` baqi VPN band karta hai, sakhti chahiye to allow-only profile.
 - Naye DoH servers aate rehte hain; `webfilter/categories/doh.txt` aur `base.rsc.in` ki IP list update karte rahein.
+
+## 5c. Web dashboard (browser se sab kuch)
+
+`install.sh` dashboard bhi install karta hai. Install ke aakhir mein link aur pehla password dikhta hai:
+```
+Web dashboard    : https://192.168.10.5:8443
+  First login    : admin / XXXXXXXXXXXXXX   (change it under Settings)
+```
+
+| Page | Kya hota hai |
+|---|---|
+| **Dashboard** | Online users, users/MAC/routers ginti, aaj ke logins, aaj ka data, blocked hits, 24 ghante ka data chart, top sites, recent logins (30 s auto-refresh) |
+| **Users** | Search, add (password khud generate), group, apni policy, password change, disable/enable, kick, delete. User page par: sessions, 30 din ka data chart, top sites, login attempts |
+| **Groups & policies** | Speed limit, VLAN, session/idle timeout, devices per user, web-filter policy, description — add / edit / delete |
+| **MAC devices** | Printer/CCTV wagera add, disable, remove, last seen |
+| **Routers** | MikroTik add (strong secret khud banta hai, MikroTik ki command dikhti hai), secret dekhna, remove |
+| **Online now** | Kaun connected hai — IP, MAC, kab se, data — Kick button (15 s refresh) |
+| **Live log** | Har site visit aur har block, live (3 s), user filter, pause |
+| **Reports** | Visited sites, history, blocked, login log — user / IP / din ke filter |
+| **Data usage** | Per website / per IP / per user / per day + live speed |
+| **Settings** | Services ka status, disk/DB size, apna password, dashboard accounts (admin / viewer), **audit log** (kis admin ne kab kya badla) |
+
+**Security:**
+- HTTPS (nginx, isi server ka certificate), port `8443`. Default mein **sirf private networks** (LAN, WireGuard 10.x/172.16.x/192.168.x/100.64.x) khol sakte hain. Badalna ho: `sudo WEB_ALLOW="203.0.113.7 192.168.0.0/16" ./install.sh` (ya `WEB_ALLOW=any` — internet par khulne ka mashwara nahi).
+- App alag user `mlweb` ke tor par chalti hai; database sirf parh sakti hai. Har tabdeeli `radius-admin` se hoti hai (wohi validation), `sudo` sirf `radius-admin` ke liye. Passwords stdin se jate hain, command line par nahi.
+- Login: 5 galat koshishon ke baad 10 minute block; session cookie HttpOnly + Secure + SameSite=Strict; har tabdeeli par CSRF token; strict Content-Security-Policy; koi bahar ki script/CDN nahi (offline LAN par bhi chalta hai).
+- **Roles:** `admin` (sab kuch) aur `viewer` (sirf dekhna — report wale staff ke liye).
+- Browser "Not secure / certificate" warning: certificate aap ke apne CA ka hai — admin PC par `ca.der` install kar dein (Windows: double-click → Trusted Root), ya warning accept karein.
+
+**Terminal se dashboard accounts:**
+```bash
+sudo radius-admin web list
+sudo radius-admin web passwd admin          # password bhool gaye to
+sudo radius-admin web passwd ahmed && sudo radius-admin web role ahmed viewer
+sudo radius-admin web del ahmed
+```
+Dashboard band karna ho: `sudo WEB=0 ./install.sh` se naya install dashboard ke bina hota hai; chal rahe ko `sudo systemctl disable --now mikrotiklover-web`.
+
+**Test:** `tests/ui-dashboard.mjs` asal browser (Playwright/Chromium) mein login, group/user/MAC/router banana, policy lagana, saare pages, mobile + dark mode, aur sab delete karna check karta hai — console ya CSP error par fail.
 
 ## 6. Monitoring aur testing
 

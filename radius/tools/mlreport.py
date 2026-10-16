@@ -146,7 +146,8 @@ def match(user, ip, a):
     return (not a.user or user == a.user) and (not a.ip or ip == a.ip)
 
 
-def cmd_sites(a, s):
+def sites_rows(a, s):
+    """[(site, visits, users, last_visit, who)] most visited first."""
     since = time.time() - a.days * 86400
     count, users, last, seen = {}, {}, {}, {}
     for ts, t, ip, name in dns_events(read_lines(DNS_LOG), since):
@@ -161,11 +162,15 @@ def cmd_sites(a, s):
         users.setdefault(d, set()).add(user if user != "-" else ip)
         last[d] = t
     rows = sorted(count, key=lambda d: -count[d])[:a.top]
-    table([(d, count[d], len(users[d]), last[d], ", ".join(sorted(users[d]))[:60]) for d in rows],
-          ("site", "visits", "users", "last visit", "who"))
+    return [(d, count[d], len(users[d]), last[d], ", ".join(sorted(users[d]))[:60]) for d in rows]
 
 
-def cmd_history(a, s):
+def cmd_sites(a, s):
+    table(sites_rows(a, s), ("site", "visits", "users", "last visit", "who"))
+
+
+def history_rows(a, s):
+    """[(time, user, ip, site, hostname)] oldest first, last a.n."""
     since = time.time() - a.days * 86400
     rows, prev = [], {}
     for ts, t, ip, name in dns_events(read_lines(DNS_LOG), since):
@@ -177,7 +182,11 @@ def cmd_history(a, s):
             continue
         prev[ip] = (d, int(ts // 300))
         rows.append((t, user, ip, d, name))
-    table(rows[-a.n:], ("time", "user", "ip", "site", "hostname"))
+    return rows[-a.n:]
+
+
+def cmd_history(a, s):
+    table(history_rows(a, s), ("time", "user", "ip", "site", "hostname"))
 
 
 def wf_row(line, s):
@@ -192,14 +201,37 @@ def wf_row(line, s):
         cat, f"{dst}:{port}" if port else dst, router
 
 
-def cmd_blocked(a, s):
+def blocked_rows(a, s):
+    """[(time, user, ip, mac, category, destination, router)] oldest first, last a.n."""
     since = time.time() - a.days * 86400
     rows = []
     for line in read_lines(WF_LOG):
         r = wf_row(line, s)
         if r and r[0] >= since and match(r[2], r[3], a):
             rows.append(r[1:])
-    table(rows[-a.n:], ("time", "user", "ip", "mac", "category", "destination", "router"))
+    return rows[-a.n:]
+
+
+def cmd_blocked(a, s):
+    table(blocked_rows(a, s), ("time", "user", "ip", "mac", "category", "destination", "router"))
+
+
+def live_events(path, lines, s, last):
+    """Turn new log lines into live events (dicts); 'last' de-duplicates repeated site lookups."""
+    out = []
+    for line in lines:
+        if path == WF_LOG:
+            r = wf_row(line, s)
+            if r:
+                out.append({"time": r[1], "user": r[2], "ip": r[3], "type": "blocked", "site": r[5], "detail": r[6]})
+            continue
+        for ts, t, ip, name in dns_events([line], 0):
+            d = base_domain(name)
+            if ts - last.get((ip, d), 0) < 30:
+                continue
+            last[(ip, d)] = ts
+            out.append({"time": t, "user": s.who(ip, ts), "ip": ip, "type": "visit", "site": d, "detail": name})
+    return out
 
 
 def follow(paths):
@@ -262,9 +294,12 @@ def human(n):
     return f"{n} B"
 
 
+NOW_FILE = "/run/mikrotiklover/traffic-now.json"
+
+
 def cmd_now(a, s):
     try:
-        snap = json.load(open("/run/mikrotiklover/traffic-now.json"))
+        snap = json.load(open(NOW_FILE))
     except (OSError, ValueError):
         print("No live data yet — is the traffic collector on? (radius-admin traffic collector status)")
         return
