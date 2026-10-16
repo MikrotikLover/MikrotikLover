@@ -143,6 +143,7 @@ log "Configuring FreeRADIUS"
 backup_once "$RADDB/mods-available/sql"
 backup_once "$RADDB/mods-available/eap"
 backup_once "$RADDB/sites-available/default"
+backup_once "$RADDB/sites-available/inner-tunnel"
 backup_once "$RADDB/clients.conf"
 backup_once "$RADDB/mods-config/sql/main/mysql/queries.conf"
 
@@ -165,8 +166,14 @@ install -m 644 "$SCRIPT_DIR/templates/policy" "$RADDB/policy.d/mikrotiklover"
 sed -i -e '/^authorize {/,/^}/ s/^\tpreprocess$/\tpreprocess\n\tmikrotiklover_mac_normalize/' \
        -e '/^authorize {/,/^}/ s/^\t-sql$/\t-sql\n\tmikrotiklover_limits/' \
        -e '/^post-auth {/,/^}/ s/^\t-sql$/\tmikrotiklover_activate\n\t-sql/' \
-       -e '/^preacct {/,/^}/ s/^\tpreprocess$/\tpreprocess\n\tmikrotiklover_mac_normalize/' \
+       -e '/^preacct {/,/^}/ s/^\tpreprocess$/\tpreprocess\n\tmikrotiklover_mac_normalize\n\tmikrotiklover_eap_account/' \
        "$RADDB/sites-available/default"
+
+# WPA-Enterprise (PEAP/TTLS): the same plan limits inside the tunnel, where the real user logs in
+cp -a "$RADDB/sites-available/inner-tunnel.mikrotiklover.orig" "$RADDB/sites-available/inner-tunnel"
+sed -i -e '/^authorize {/,/^}/ s/^\t-sql$/\t-sql\n\tmikrotiklover_limits/' \
+       -e '/^post-auth {/,/^}/ s/^\t-sql$/\tmikrotiklover_activate\n\tmikrotiklover_eap_identity\n\t-sql/' \
+       "$RADDB/sites-available/inner-tunnel"
 
 # Hosts/containers with IPv6 disabled cannot bind "::" — keep only the IPv4 listeners there.
 if [ ! -e /proc/net/if_inet6 ]; then
@@ -194,13 +201,14 @@ cat > /etc/cron.d/mikrotiklover <<'EOF'
 # MikrotikLover RADIUS (install.sh)
 */5 * * * * root /usr/local/sbin/radius-admin enforce >/dev/null 2>&1
 17 4 * * 1 root /usr/local/sbin/radius-admin cdn update >/dev/null 2>&1
+7 * * * * root /usr/local/sbin/radius-admin cdn learn >/dev/null 2>&1
 EOF
 chmod 644 /etc/cron.d/mikrotiklover
 command -v cron >/dev/null || apt-get install -y -qq cron >/dev/null 2>&1 || warn "cron missing: run 'radius-admin enforce' every 5 minutes yourself"
 install -d -m 755 /usr/local/lib/mikrotiklover
 install -m 644 "$SCRIPT_DIR/tools/mlreport.py" /usr/local/lib/mikrotiklover/mlreport.py
 install -m 644 "$SCRIPT_DIR/tools/flowcollector.py" /usr/local/lib/mikrotiklover/flowcollector.py
-install -m 644 "$SCRIPT_DIR/tools/cdnmap.py" "$SCRIPT_DIR/tools/cdn-apps.json" /usr/local/lib/mikrotiklover/
+install -m 644 "$SCRIPT_DIR/tools/cdnmap.py" "$SCRIPT_DIR/tools/cdnlearn.py" "$SCRIPT_DIR/tools/cdn-apps.json" /usr/local/lib/mikrotiklover/
 install -d -m 755 /var/lib/mikrotiklover
 [ -s /var/lib/mikrotiklover/asn.json ] || python3 -I /usr/local/lib/mikrotiklover/cdnmap.py update >/dev/null 2>&1 \
     || warn "Could not download the CDN detective IP lists (no internet?) — run later: radius-admin cdn update"

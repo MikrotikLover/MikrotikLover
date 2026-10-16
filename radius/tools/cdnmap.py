@@ -19,6 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "cdn-apps.json")
 STATE = os.environ.get("MLCDN_STATE", "/var/lib/mikrotiklover")
 LOCAL = os.path.join(STATE, "cdn-apps.local.json")
+LEARNED = os.path.join(STATE, "cdn-apps.learned.json")
 ASN_DB = os.path.join(STATE, "asn.json")
 DNS_LOG = os.environ.get("MLREPORT_LOGDIR", "/var/log/mikrotik") + "/dns.log"
 
@@ -35,9 +36,11 @@ def registrable(name):
 
 
 class Catalog:
-    def __init__(self):
+    def __init__(self, with_learned=True):
         self.suffix = {}        # domain -> entry
         self.asn = {}
+        self.asn_sites = {}
+        self.sources = {}       # domain -> builtin | local | learned
         for path in (DATA, LOCAL):
             try:
                 data = json.load(open(path, encoding="utf-8"))
@@ -50,6 +53,7 @@ class Catalog:
                 for d in e.get("domains", []):
                     if local or d.lower() not in self.suffix:
                         self.suffix[d.lower()] = entry
+                        self.sources[d.lower()] = "local" if local else "builtin"
             for owner, doms in data.get("generic_cdns", {}).items():
                 if owner.startswith("_"):
                     continue
@@ -57,6 +61,22 @@ class Catalog:
                 for d in doms:
                     self.suffix.setdefault(d.lower(), entry)
             self.asn.update({k: v for k, v in data.get("asn", {}).items() if not k.startswith("_")})
+            self.asn_sites.update({k: v for k, v in data.get("asn_sites", {}).items() if not k.startswith("_")})
+        # domains the learner found by itself (cdnlearn.py) — lowest priority
+        self.learned = {}
+        if with_learned:
+            try:
+                learned = json.load(open(LEARNED, encoding="utf-8"))
+            except (OSError, ValueError):
+                learned = {}
+            by_site = {e["site"]: e for e in self.suffix.values() if not e["generic"]}
+            for d, info in learned.get("domains", {}).items():
+                base = by_site.get(info.get("site"))
+                if d in self.suffix or not base:
+                    continue
+                self.suffix[d] = {**base, "note": f"learned automatically ({info.get('why', '')})", "learned": True}
+                self.sources[d] = "learned"
+                self.learned[d] = info
         self._ranges = None
 
     def name(self, host):
@@ -76,6 +96,26 @@ class Catalog:
         if e and not e["generic"]:
             return e["site"]
         return registrable(host)
+
+    def apps(self):
+        """{app: {site, category, domains: [{domain, source, ...}]}} for every known app."""
+        out = {}
+        for d, e in self.suffix.items():
+            if e["generic"]:
+                continue
+            a = out.setdefault(e["app"], {"app": e["app"], "site": e["site"], "category": e["category"], "domains": []})
+            row = {"domain": d, "source": self.sources.get(d, "builtin")}
+            if d in self.learned:
+                row.update({k: self.learned[d].get(k) for k in ("score", "devices", "why", "first_seen", "last_seen")})
+            a["domains"].append(row)
+        for a in out.values():
+            a["domains"].sort(key=lambda r: (r["source"] != "learned", r["domain"]))
+        return out
+
+    def ip_site(self, ip):
+        """Site for an IP whose owner serves only one app (TikTok, Netflix, Telegram ...), else None."""
+        o = self.ip_owner(ip)
+        return self.asn_sites.get(o["owner"]) if o else None
 
     # ---- IP owners
     def ranges(self):
@@ -115,13 +155,25 @@ class Catalog:
         return None
 
 
-_CATALOG = None
+_CATALOG, _STAMP = None, None
+
+
+def _stamp():
+    out = []
+    for p in (DATA, LOCAL, LEARNED, ASN_DB):
+        try:
+            out.append(os.path.getmtime(p))
+        except OSError:
+            out.append(0)
+    return tuple(out)
 
 
 def catalog():
-    global _CATALOG
-    if _CATALOG is None:
-        _CATALOG = Catalog()
+    """Shared catalog; rebuilt when cdn-apps / local / learned / ASN files change (long-running services)."""
+    global _CATALOG, _STAMP
+    st = _stamp()
+    if _CATALOG is None or st != _STAMP:
+        _CATALOG, _STAMP = Catalog(), st
     return _CATALOG
 
 
@@ -267,6 +319,23 @@ def lookup(target, lines=None):
              "category": "", "confidence": "none", "reason": "Not in the catalog and no DNS evidence"}
     res["verdict"] = v
     return res
+
+
+def rsc_for(app):
+    """RouterOS script that blocks every known domain of an app (built-in + local + learned)."""
+    cat = catalog()
+    info = cat.apps().get(app)
+    if not info:
+        raise ValueError(f"unknown app {app!r}")
+    slug = re.sub(r"[^a-z0-9]+", "-", app.lower()).strip("-")
+    lines = [f"# Block {app} — {len(info['domains'])} domains (MikrotikLover CDN detective, {time.strftime('%Y-%m-%d')})",
+             f"# Undo: /ip dns static remove [find comment=\"webfilter:app-{slug}\"]",
+             "/ip dns static", f"remove [find comment=\"webfilter:app-{slug}\"]"]
+    for r in info["domains"]:
+        d = r["domain"]
+        if re.match(r"^[a-z0-9.-]+$", d):
+            lines.append(f"add name={d} type=NXDOMAIN match-subdomain=yes comment=\"webfilter:app-{slug}\"")
+    return "\n".join(lines) + "\n"
 
 
 # ---------------------------------------------------------------- ASN lists

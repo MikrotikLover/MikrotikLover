@@ -363,6 +363,7 @@ python3 tests/simulate-policies.py    # policies: user/group/range, office time,
 python3 tests/test-mlreport.py        # sites / history / blocked reports (sample logs)
 python3 tests/test-flowcollector.py   # data usage collector (synthetic IPFIX / NetFlow v9)
 python3 tests/test-cdnmap.py          # CDN detective: names, CNAME evidence, context, IP owners
+python3 tests/test-cdnlearn.py        # auto-learner: cname / ip / co-occurrence, SDK not learned, reject
 URL=https://127.0.0.1:8443 USER=admin PASS=... node tests/ui-dashboard.mjs   # web dashboard (Playwright)
 ```
 
@@ -454,7 +455,10 @@ Dashboard mein user ke page par **Package** card: plan, expiry, data bar (kitna 
 - Login ho to MikroTik ko **Session-Timeout** (baqi waqt) aur **Mikrotik-Total-Limit + Gigawords** (baqi data, 4 GB se zyada bhi) bheja jata hai — limit puri hote hi MikroTik khud disconnect karta hai.
 - Voucher ki **pehli login** par validity shuru hoti hai aur sale record hoti hai (ek hi dafa).
 - Data `radacct` se ginti hai — hotspot profile mein `radius-interim-update=5m` (hamari `hotspot.rsc` mein hai) zaroori hai.
-- Limits hotspot (aur MAC auth) logins par lagti hain; WPA-Enterprise (PEAP) users par expiry/quota abhi nahi.
+- Limits **hotspot, MAC auth, PPPoE aur WPA-Enterprise (PEAP/TTLS)** — sab par lagti hain. WPA-Enterprise mein check tunnel ke andar asal user par hota hai; package khatam ho to Wi-Fi login fail hota hai, warna Session-Timeout (baqi waqt) Wi-Fi ko bheja jata hai.
+- WPA-Enterprise phones "anonymous" naam bhejte hain: login par device ka MAC → asal user yaad rakha jata hai (`ml_eap_identity`), aur accounting mein "anonymous" ki jagah asal username likha jata hai — taa ke data quota, enforcer, online list aur reports sahi user par hon.
+- Wi-Fi par data quota MikroTik khud nahi kaat-ta (Total-Limit sirf hotspot mein hai): enforcer har 5 minute quota khatam hone par Disconnect (ya FUP par CoA) bhejta hai. Router par `/radius incoming accept=yes` zaroori; Wi-Fi par Disconnect/CoA support apne RouterOS version par ek dafa test karein.
+- **PIN mode** (vouchers): card par ek hi code hota hai jo username bhi hai aur password bhi — customer sirf ek code likhta hai (login page par "Card par sirf PIN hai").
 
 **Dashboard:** *Plans*, *Vouchers* (batches, print, delete unused), *Sales* (roz ki kamai, plan wise, recent), Dashboard par "Sales today / this month" aur "Active packages / unused vouchers". *Settings → Business & branding*: business naam, currency, hotspot Wi-Fi naam, login address, contact, card ke neeche ka text.
 
@@ -517,6 +521,30 @@ sudo radius-admin cdn update           # IP owner lists naye (cron har hafte khu
 Dashboard → **CDN detective**: naam/IP likhein → app, confidence, wajah, IP owner, DNS sabooth (kis device ne kya poocha); neeche "Heavy traffic without a site name" + Investigate. Data usage mein jo site sirf IP ho us par 🔍 link.
 
 **Reports par asar:** Visited sites, history aur Data usage ab CDN ki jagah **app ke naam** se gintay hain (googlevideo + ytimg → youtube.com; fbcdn → facebook.com ...). Bare shared-CDN naam visits mein shamil nahi hote; un ka data (traffic collector mein) usi site ke khate mein jata hai jo device ne abhi khola tha.
+
+### Auto-learning — har app ki domain list khud barhti rehti hai
+
+Har ghante (cron, `radius-admin cdn learn`) learner DNS log dekh kar naye domains khud seekhta hai:
+
+| Sabooth | Misal | Wazan |
+|---|---|---|
+| **CNAME app → naya domain** | `www.tiktok.com` → `v16.tiktok.tiktokcdn-new.net` | mazboot |
+| **CNAME naya → app** | `img.fbnew.net` → `scontent.xx.fbcdn.net` | mazboot |
+| **IP ka malik** (sirf ek app wali company) | `api.bytenew.com` → sirf ByteDance IPs → TikTok | darmiyana |
+| **Saath saath** | 3+ devices TikTok kholte hi 5 second mein `cdn.tkstatic.net` maangte hain | kamzor (zyada devices aur wazeh akseriyat chahiye) |
+
+- Score kafi ho, kam az kam 2 devices (saath-saath ke liye 3+), aur ek app wazeh jeete (75%+) — tab hi seekha jata hai. Is tarah `app-measurement.com` jaise sab apps mein istemal hone wale SDK kisi app ke naam nahi lagte.
+- Seekhe hue domains foran har jagah istemal hote hain: reports (sites, history, data usage), detective, aur **RouterOS block script**.
+- Ghalat seekha? `sudo radius-admin cdn reject DOMAIN` (ya dashboard mein Reject) — hat jata hai aur dobara kabhi nahi seekha jata.
+- **Bina DNS ke traffic:** jo app IP par seedha jati hai (DNS ke bina), us ka data IP ke malik se naam pata hai agar wo company ek hi app chalati hai (ByteDance → TikTok, Netflix, Telegram, Steam, X).
+
+```bash
+sudo radius-admin cdn apps                  # har app aur us ke domains (built-in + learned)
+sudo radius-admin cdn learned TikTok        # TikTok ke seekhe hue domains, sabooth ke saath
+sudo radius-admin cdn learn                 # abhi seekho
+sudo radius-admin cdn rsc TikTok > block-tiktok.rsc     # router par poori TikTok list block
+```
+Dashboard → CDN detective → **App domain lists**: har app khol kar domains (built-in / learned / local), sabooth (cname/ip/cooc, kitne devices, kab se), **Reject**, **Learn now**, aur **⬇ RouterOS block script**.
 
 **Apni apps add karein:** `/var/lib/mikrotiklover/cdn-apps.local.json` (same format, pehle check hoti hai):
 ```json

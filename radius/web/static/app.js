@@ -941,11 +941,36 @@ ROUTES.cdn = async (initial) => {
       { label: "", render: (r) => h("button", { class: "small", onclick: () => check(r.site) }, "Investigate") }], rows,
       "Nothing unknown — all of today's traffic has a site name."));
   };
+  const appsBox = h("div");
+  const loadApps = async () => {
+    const d = await api("GET", "/api/cdn/apps");
+    const open = new Set([...appsBox.querySelectorAll("details[open]")].map((x) => x.dataset.app));
+    appsBox.replaceChildren(
+      h("div", { class: "toolbar" }, h("span", { class: "muted grow" },
+        `${d.apps.length} apps · ${d.learned} domains learned automatically` + (d.updated ? ` · last run ${d.updated}` : "") + " · learns every hour from the DNS log"),
+        isAdmin() ? h("button", { onclick: async () => { await act(api("POST", "/api/cdn/learn", {})); loadApps(); } }, "Learn now") : null),
+      h("div", { class: "applist" }, d.apps.map((a) => {
+        const nLearned = a.domains.filter((x) => x.source === "learned").length;
+        const det = h("details", { dataset: { app: a.app }, open: open.has(a.app) || undefined },
+          h("summary", {}, h("b", {}, a.app), " ", h("span", { class: "muted" }, `${a.domains.length} domains`), nLearned ? [" ", badge(`+${nLearned} learned`, "ok")] : null, " ", a.category ? badge(a.category) : null),
+          h("div", { class: "toolbar" }, h("a", { class: "btn small", href: `/api/cdn/rsc?app=${encodeURIComponent(a.app)}` }, "⬇ RouterOS block script")),
+          table([{ label: "Domain", render: (x) => h("code", {}, x.domain) },
+            { label: "Source", render: (x) => x.source === "learned" ? badge("learned", "ok") : x.source === "local" ? badge("local", "info") : badge("built-in") },
+            { label: "Evidence", render: (x) => x.source === "learned" ? `${x.why} · ${x.devices} devices · since ${x.first_seen}` : "—", wrap: true },
+            { label: "", render: (x) => x.source === "learned" && isAdmin() ? h("button", { class: "small danger", onclick: async () => {
+                if (await confirmDlg("Reject learned domain", `${x.domain} is not ${a.app}? It will be removed and never learned again.`, "Reject"))
+                  if (await act(api("POST", "/api/cdn/reject", { domain: x.domain }))) loadApps();
+              } }, "Reject") : null }], a.domains));
+        return det;
+      })));
+  };
   shell("CDN detective", h("div", { class: "stack" },
     card(null, null, h("form", { class: "toolbar", onsubmit: (e) => { e.preventDefault(); check(); } }, input, h("button", { class: "primary", type: "submit" }, icon("search"), "Investigate")),
       h("div", { class: "muted" }, "Which app is behind a CDN name or IP? Uses the name catalog (YouTube, Facebook, TikTok, Netflix…), the DNS logger's CNAME evidence, IP owner lists and what the device opened just before.")),
     out,
-    card("Heavy traffic without a site name", "today — click Investigate", unknown)));
+    card("Heavy traffic without a site name", "today — click Investigate", unknown),
+    card("App domain lists", "built-in + learned automatically", appsBox)));
   loadUnknown().catch(() => unknown.replaceChildren(h("div", { class: "empty" }, "No traffic data.")));
+  loadApps().catch((e) => appsBox.replaceChildren(h("div", { class: "note" }, e.message)));
   if (initial) await check(initial);
 };

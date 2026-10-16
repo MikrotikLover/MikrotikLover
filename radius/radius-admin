@@ -953,6 +953,22 @@ cmd_cdn() {
     local tool=/usr/local/lib/mikrotiklover/cdnmap.py
     case ${1:-} in
         update) python3 -I "$tool" update ;;
+        learn)  python3 -I /usr/local/lib/mikrotiklover/cdnlearn.py run ;;
+        learned) shift; python3 -I /usr/local/lib/mikrotiklover/cdnlearn.py list "$@" ;;
+        reject|unreject)
+            [[ ${2:-} =~ ^[A-Za-z0-9.-]{1,253}$ ]] || die "usage: radius-admin cdn $1 DOMAIN"
+            python3 -I /usr/local/lib/mikrotiklover/cdnlearn.py "$1" "$2" ;;
+        apps)
+            python3 -I -c 'import sys; sys.path.insert(0,"/usr/local/lib/mikrotiklover"); import cdnmap
+for a, i in sorted(cdnmap.catalog().apps().items()):
+    doms = i["domains"]
+    n = sum(1 for d in doms if d["source"] == "learned")
+    print(f"{a:<28} {len(doms):>4} domains" + (f"  ({n} learned)" if n else ""))' ;;
+        rsc)
+            [ -n "${2:-}" ] || die "usage: radius-admin cdn rsc 'APP NAME'   (see: radius-admin cdn apps)"
+            python3 -I -c 'import sys; sys.path.insert(0,"/usr/local/lib/mikrotiklover"); import cdnmap
+try: print(cdnmap.rsc_for(sys.argv[1]), end="")
+except ValueError as e: sys.exit(str(e))' "$2" ;;
         unknown)
             local days=${2:-1}; valid_int "$days" days
             echo "SELECT site, ROUND(SUM(bytes_down+bytes_up)/1048576,1) AS MB, COUNT(DISTINCT client_ip) AS devices
@@ -960,7 +976,7 @@ cmd_cdn() {
                   GROUP BY site ORDER BY SUM(bytes_down+bytes_up) DESC LIMIT 30;" | dbt
             echo "(IPs without a site name — check one with: radius-admin cdn IP)"
             ;;
-        ""|-h|--help) die "usage: radius-admin cdn HOSTNAME|IP | cdn unknown [DAYS] | cdn update" ;;
+        ""|-h|--help) die "usage: radius-admin cdn HOSTNAME|IP | unknown [DAYS] | apps | learned [APP] | learn | reject DOMAIN | rsc APP | update" ;;
         *)
             [[ $1 =~ ^[A-Za-z0-9_.-]{1,253}$ ]] || die "Enter a hostname or an IPv4 address"
             python3 -I "$tool" lookup "$1" ${2:+"$2"} ;;
@@ -1049,6 +1065,11 @@ CDN detective
   cdn HOSTNAME|IP [--json]             which app/site is behind it (name, DNS evidence, IP owner, context)
   cdn unknown [DAYS]                   heaviest traffic that has no site name yet
   cdn update                           refresh the IP owner lists (weekly by cron)
+  cdn apps                             every app with its domain count (built-in + learned)
+  cdn learned [APP]                    domains learned automatically (hourly by cron)
+  cdn learn                            learn now from the DNS log
+  cdn reject DOMAIN | unreject DOMAIN  wrongly learned -> remove and never learn again
+  cdn rsc 'APP'                        RouterOS script blocking all domains of an app
   sales [DAYS]                         money in per day
 
 Groups (speed limit, VLAN, timeouts, devices per user)

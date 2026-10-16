@@ -1029,6 +1029,46 @@ def cdn_unknown():
     return jsonify(rows=out[:60])
 
 
+@app.get("/api/cdn/apps")
+@login_required()
+def cdn_apps():
+    import cdnmap
+    apps = sorted(cdnmap.catalog().apps().values(), key=lambda x: (x["category"], x["app"]))
+    learned_total = sum(1 for a in apps for d in a["domains"] if d["source"] == "learned")
+    try:
+        updated = json.load(open(cdnmap.LEARNED)).get("updated", "")
+    except (OSError, ValueError):
+        updated = ""
+    return jsonify(apps=apps, learned=learned_total, updated=updated)
+
+
+@app.post("/api/cdn/learn")
+@login_required("admin")
+def cdn_learn():
+    return result(*radius_admin(["cdn", "learn"]))
+
+
+@app.post("/api/cdn/reject")
+@login_required("admin")
+def cdn_reject():
+    dom = field(body(), "domain", re.compile(r"^[a-z0-9.-]{1,253}$"), required=True)
+    return result(*radius_admin(["cdn", "reject", dom]))
+
+
+@app.get("/api/cdn/rsc")
+@login_required()
+def cdn_rsc():
+    import cdnmap
+    appname = request.args.get("app", "")
+    try:
+        text = cdnmap.rsc_for(appname)
+    except ValueError as e:
+        abort(404, str(e))
+    slug = re.sub(r"[^a-z0-9]+", "-", appname.lower()).strip("-")
+    return app.response_class(text, mimetype="text/plain",
+                              headers={"Content-Disposition": f'attachment; filename="block-{slug}.rsc"'})
+
+
 # ------------------------------------------------------------------ system / admins / audit
 def running(pattern):
     try:

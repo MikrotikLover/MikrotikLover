@@ -240,7 +240,15 @@ class DnsNames:
 
     def site(self, client, remote):
         hit = self.by_client.get((client, remote)) or self.by_ip.get(remote)
-        return base_domain(hit[0]) if hit else remote
+        if hit:
+            return base_domain(hit[0])
+        # no DNS name (app uses a fixed IP or private DNS): an owner that serves one app is enough
+        try:
+            import cdnmap
+            s = cdnmap.catalog().ip_site(remote)
+        except Exception:
+            s = None
+        return s or remote
 
 
 class Tail:

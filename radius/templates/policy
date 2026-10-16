@@ -77,3 +77,27 @@ mikrotiklover_activate {
 		}
 	}
 }
+
+# WPA-Enterprise: phones send an anonymous outer identity, so accounting would arrive as
+# "anonymous". Remember which real user logged in from which MAC (inner-tunnel post-auth) ...
+mikrotiklover_eap_identity {
+	if (&outer.request:Calling-Station-Id) {
+		update control {
+			&Tmp-String-4 := "%{sql:REPLACE INTO ml_eap_identity (mac, username, at) VALUES ('%{outer.request:Calling-Station-Id}', '%{User-Name}', NOW())}"
+		}
+	}
+}
+
+# ... and put the real name into accounting (preacct), unless the name already is a real user.
+mikrotiklover_eap_account {
+	if (&Calling-Station-Id) {
+		update control {
+			&Tmp-String-4 := "%{sql:SELECT e.username FROM ml_eap_identity e WHERE e.mac = '%{Calling-Station-Id}' AND e.at > NOW() - INTERVAL 1 DAY AND NOT EXISTS (SELECT 1 FROM radcheck c WHERE c.username = '%{User-Name}') LIMIT 1}"
+		}
+		if (&control:Tmp-String-4 && (&control:Tmp-String-4 != "")) {
+			update request {
+				&User-Name := &control:Tmp-String-4
+			}
+		}
+	}
+}

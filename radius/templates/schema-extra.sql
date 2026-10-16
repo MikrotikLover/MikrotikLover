@@ -107,3 +107,10 @@ CREATE TABLE IF NOT EXISTS ml_fup (
   username VARCHAR(64) NOT NULL,
   applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- WPA-Enterprise: real user behind an anonymous outer identity, by device MAC (for accounting)
+CREATE TABLE IF NOT EXISTS ml_eap_identity (
+  mac CHAR(17) NOT NULL PRIMARY KEY,
+  username VARCHAR(64) NOT NULL,
+  at DATETIME NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -1,82 +1,728 @@
 {
   "_comment": "Which app a hostname belongs to. 'domains' match the name itself and every subdomain. Add your own in /var/lib/mikrotiklover/cdn-apps.local.json (same format, checked first).",
   "apps": [
-    {"app": "YouTube", "site": "youtube.com", "category": "video", "domains": ["youtube.com", "youtu.be", "ytimg.com", "youtube-nocookie.com", "youtubei.googleapis.com", "youtube.googleapis.com", "youtubekids.com", "yt3.ggpht.com", "yt4.ggpht.com", "withyoutube.com"]},
-    {"app": "YouTube", "site": "youtube.com", "category": "video", "domains": ["googlevideo.com"], "note": "YouTube video stream servers. Names with 'sn-' are often a Google cache (GGC) inside your ISP."},
-    {"app": "Instagram", "site": "instagram.com", "category": "social", "domains": ["instagram.com", "cdninstagram.com", "ig.me", "instagram.c10r.facebook.com"]},
-    {"app": "WhatsApp", "site": "whatsapp.com", "category": "messaging", "domains": ["whatsapp.com", "whatsapp.net", "wa.me", "whatsapp.biz"]},
-    {"app": "Messenger", "site": "messenger.com", "category": "messaging", "domains": ["messenger.com", "m.me", "edge-chat.facebook.com"]},
-    {"app": "Threads", "site": "threads.net", "category": "social", "domains": ["threads.net", "threads.com"]},
-    {"app": "Facebook", "site": "facebook.com", "category": "social", "domains": ["fbcdn.net"], "note": "Facebook/Instagram photo & video CDN. 'fna' names are a Meta cache inside your ISP."},
-    {"app": "Facebook", "site": "facebook.com", "category": "social", "domains": ["facebook.com", "fb.com", "fb.me", "fbsbx.com", "facebook.net", "fbpigeon.com", "fburl.com", "meta.com", "meta.ai"]},
-    {"app": "TikTok", "site": "tiktok.com", "category": "video", "domains": ["tiktok.com", "tiktokv.com", "tiktokv.us", "tiktokv.eu", "tiktokcdn.com", "tiktokcdn-us.com", "tiktokcdn-eu.com", "tiktokw.us", "byteoversea.com", "byteoversea.net", "ibytedtos.com", "ibyteimg.com", "ipstatp.com", "muscdn.com", "musical.ly", "byteimg.com", "ttwstatic.com", "snssdk.com", "isnssdk.com", "tik-tokapi.com", "bytefcdn-oversea.com", "bytegecko-i18n.com"]},
-    {"app": "Snapchat", "site": "snapchat.com", "category": "social", "domains": ["snapchat.com", "snap.com", "sc-cdn.net", "sc-static.net", "snapkit.com", "snapads.com", "snap-dev.net", "sc-prod.net"]},
-    {"app": "X (Twitter)", "site": "x.com", "category": "social", "domains": ["x.com", "twitter.com", "twimg.com", "t.co", "twttr.com"]},
-    {"app": "LinkedIn", "site": "linkedin.com", "category": "social", "domains": ["linkedin.com", "licdn.com", "lnkd.in"]},
-    {"app": "Pinterest", "site": "pinterest.com", "category": "social", "domains": ["pinterest.com", "pinimg.com"]},
-    {"app": "Reddit", "site": "reddit.com", "category": "social", "domains": ["reddit.com", "redd.it", "redditmedia.com", "redditstatic.com"]},
-    {"app": "Likee", "site": "likee.video", "category": "video", "domains": ["likee.video", "like.video", "likeevideo.com", "bigo.tv", "bigo.sg"]},
-    {"app": "Kwai / Snack Video", "site": "kwai.com", "category": "video", "domains": ["kwai.com", "kwai-pro.com", "kwaicdn.com", "snackvideo.com", "snackvideo.in"]},
-    {"app": "Netflix", "site": "netflix.com", "category": "video", "domains": ["netflix.com", "netflix.net", "nflxvideo.net", "nflximg.net", "nflximg.com", "nflxext.com", "nflxso.net"], "note": "nflxvideo.net is often a Netflix Open Connect box inside your ISP."},
-    {"app": "Prime Video", "site": "primevideo.com", "category": "video", "domains": ["primevideo.com", "aiv-cdn.net", "aiv-delivery.net", "pv-cdn.net", "amazonvideo.com"]},
-    {"app": "Disney+ Hotstar", "site": "hotstar.com", "category": "video", "domains": ["hotstar.com", "hotstarext.com", "disneyplus.com", "dssott.com", "bamgrid.com", "disney-plus.net"]},
-    {"app": "Tamasha / Tapmad", "site": "tamashaweb.com", "category": "video", "domains": ["tamashaweb.com", "tamasha.com.pk", "tapmad.com"]},
-    {"app": "Dailymotion", "site": "dailymotion.com", "category": "video", "domains": ["dailymotion.com", "dmcdn.net", "dm-event.net"]},
-    {"app": "Twitch", "site": "twitch.tv", "category": "video", "domains": ["twitch.tv", "ttvnw.net", "jtvnw.net", "twitchcdn.net"]},
-    {"app": "Vimeo", "site": "vimeo.com", "category": "video", "domains": ["vimeo.com", "vimeocdn.com"]},
-    {"app": "Spotify", "site": "spotify.com", "category": "music", "domains": ["spotify.com", "scdn.co", "spotifycdn.com", "spotifycdn.net", "spotilocal.com", "audio-ak-spotify-com.akamaized.net", "audio-fa.scdn.co"]},
-    {"app": "Telegram", "site": "telegram.org", "category": "messaging", "domains": ["telegram.org", "t.me", "telegram.me", "cdn-telegram.org", "telesco.pe", "tdesktop.com"]},
-    {"app": "Signal", "site": "signal.org", "category": "messaging", "domains": ["signal.org", "whispersystems.org", "signal.art"]},
-    {"app": "Viber", "site": "viber.com", "category": "messaging", "domains": ["viber.com", "viber.io"]},
-    {"app": "IMO", "site": "imo.im", "category": "messaging", "domains": ["imo.im", "imoim.net", "imoim.app"]},
-    {"app": "Discord", "site": "discord.com", "category": "messaging", "domains": ["discord.com", "discord.gg", "discordapp.com", "discordapp.net", "discord.media"]},
-    {"app": "Zoom", "site": "zoom.us", "category": "work", "domains": ["zoom.us", "zoom.com", "zoomgov.com"]},
-    {"app": "Microsoft Teams / Skype", "site": "teams.microsoft.com", "category": "work", "domains": ["teams.microsoft.com", "teams.live.com", "skype.com", "skypeassets.com", "lync.com"]},
-    {"app": "Google Meet", "site": "meet.google.com", "category": "work", "domains": ["meet.google.com"]},
-    {"app": "PUBG Mobile", "site": "pubgmobile.com", "category": "gaming", "domains": ["pubgmobile.com", "pubg.com", "igamecj.com", "gcloudsdk.com", "proximabeta.com", "anticheatexpert.com", "tencentgames.com"]},
-    {"app": "Free Fire", "site": "freefiremobile.com", "category": "gaming", "domains": ["freefiremobile.com", "garena.com", "garenanow.com", "ff.garena.com"]},
-    {"app": "Roblox", "site": "roblox.com", "category": "gaming", "domains": ["roblox.com", "rbxcdn.com", "rbx.com"]},
-    {"app": "Steam", "site": "steampowered.com", "category": "gaming", "domains": ["steampowered.com", "steamcommunity.com", "steamcontent.com", "steamserver.net", "steamstatic.com", "steamgames.com"]},
-    {"app": "Epic Games / Fortnite", "site": "epicgames.com", "category": "gaming", "domains": ["epicgames.com", "epicgames.dev", "unrealengine.com", "fortnite.com"]},
-    {"app": "Xbox / PlayStation", "site": "xboxlive.com", "category": "gaming", "domains": ["xboxlive.com", "xbox.com", "playstation.com", "playstation.net", "sonyentertainmentnetwork.com"]},
-    {"app": "Supercell games", "site": "supercell.com", "category": "gaming", "domains": ["supercell.com", "clashofclans.com", "clashroyaleapp.com", "brawlstarsgame.com"]},
-    {"app": "Daraz", "site": "daraz.pk", "category": "shopping", "domains": ["daraz.pk", "daraz.com", "daraz.lk", "darazcdn.com"]},
-    {"app": "Alibaba / AliExpress", "site": "aliexpress.com", "category": "shopping", "domains": ["aliexpress.com", "alicdn.com", "alibaba.com", "aliexpress.us"]},
-    {"app": "Amazon", "site": "amazon.com", "category": "shopping", "domains": ["amazon.com", "media-amazon.com", "ssl-images-amazon.com", "amazon.ae"]},
-    {"app": "Google Play / Android updates", "site": "play.google.com", "category": "updates", "domains": ["play.google.com", "play.googleapis.com", "play-lh.googleusercontent.com", "gvt1.com", "gvt2.com", "gvt3.com", "android.clients.google.com"]},
-    {"app": "Google", "site": "google.com", "category": "search", "domains": ["google.com", "google.com.pk", "gstatic.com", "googleapis.com", "googleusercontent.com", "ggpht.com", "googleadservices.com", "googlesyndication.com", "doubleclick.net", "google-analytics.com", "googletagmanager.com", "1e100.net", "gmail.com", "googledrive.com"]},
-    {"app": "Apple / iCloud / App Store", "site": "apple.com", "category": "updates", "domains": ["apple.com", "icloud.com", "icloud-content.com", "mzstatic.com", "aaplimg.com", "apple-dns.net", "cdn-apple.com", "itunes.apple.com", "apple.news"]},
-    {"app": "Windows / Microsoft", "site": "microsoft.com", "category": "updates", "domains": ["microsoft.com", "windowsupdate.com", "windows.com", "msftconnecttest.com", "msftncsi.com", "live.com", "office.com", "office.net", "office365.com", "msn.com", "bing.com", "onedrive.com", "sharepoint.com", "outlook.com", "microsoftonline.com"]},
-    {"app": "Wikipedia", "site": "wikipedia.org", "category": "info", "domains": ["wikipedia.org", "wikimedia.org", "wiktionary.org"]},
-    {"app": "ChatGPT / OpenAI", "site": "openai.com", "category": "work", "domains": ["openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com"]},
-    {"app": "Claude / Anthropic", "site": "claude.ai", "category": "work", "domains": ["claude.ai", "anthropic.com"]}
+    {
+      "app": "YouTube",
+      "site": "youtube.com",
+      "category": "video",
+      "domains": [
+        "youtube.com",
+        "youtu.be",
+        "ytimg.com",
+        "youtube-nocookie.com",
+        "youtubei.googleapis.com",
+        "youtube.googleapis.com",
+        "youtubekids.com",
+        "yt3.ggpht.com",
+        "yt4.ggpht.com",
+        "withyoutube.com"
+      ]
+    },
+    {
+      "app": "YouTube",
+      "site": "youtube.com",
+      "category": "video",
+      "domains": [
+        "googlevideo.com"
+      ],
+      "note": "YouTube video stream servers. Names with 'sn-' are often a Google cache (GGC) inside your ISP."
+    },
+    {
+      "app": "Instagram",
+      "site": "instagram.com",
+      "category": "social",
+      "domains": [
+        "instagram.com",
+        "cdninstagram.com",
+        "ig.me",
+        "instagram.c10r.facebook.com"
+      ]
+    },
+    {
+      "app": "WhatsApp",
+      "site": "whatsapp.com",
+      "category": "messaging",
+      "domains": [
+        "whatsapp.com",
+        "whatsapp.net",
+        "wa.me",
+        "whatsapp.biz"
+      ]
+    },
+    {
+      "app": "Messenger",
+      "site": "messenger.com",
+      "category": "messaging",
+      "domains": [
+        "messenger.com",
+        "m.me",
+        "edge-chat.facebook.com"
+      ]
+    },
+    {
+      "app": "Threads",
+      "site": "threads.net",
+      "category": "social",
+      "domains": [
+        "threads.net",
+        "threads.com"
+      ]
+    },
+    {
+      "app": "Facebook",
+      "site": "facebook.com",
+      "category": "social",
+      "domains": [
+        "fbcdn.net"
+      ],
+      "note": "Facebook/Instagram photo & video CDN. 'fna' names are a Meta cache inside your ISP."
+    },
+    {
+      "app": "Facebook",
+      "site": "facebook.com",
+      "category": "social",
+      "domains": [
+        "facebook.com",
+        "fb.com",
+        "fb.me",
+        "fbsbx.com",
+        "facebook.net",
+        "fbpigeon.com",
+        "fburl.com",
+        "meta.com",
+        "meta.ai"
+      ]
+    },
+    {
+      "app": "TikTok",
+      "site": "tiktok.com",
+      "category": "video",
+      "domains": [
+        "tiktok.com",
+        "tiktokv.com",
+        "tiktokv.us",
+        "tiktokv.eu",
+        "tiktokcdn.com",
+        "tiktokcdn-us.com",
+        "tiktokcdn-eu.com",
+        "tiktokw.us",
+        "byteoversea.com",
+        "byteoversea.net",
+        "ibytedtos.com",
+        "ibyteimg.com",
+        "ipstatp.com",
+        "muscdn.com",
+        "musical.ly",
+        "byteimg.com",
+        "ttwstatic.com",
+        "snssdk.com",
+        "isnssdk.com",
+        "tik-tokapi.com",
+        "bytefcdn-oversea.com",
+        "bytegecko-i18n.com"
+      ]
+    },
+    {
+      "app": "Snapchat",
+      "site": "snapchat.com",
+      "category": "social",
+      "domains": [
+        "snapchat.com",
+        "snap.com",
+        "sc-cdn.net",
+        "sc-static.net",
+        "snapkit.com",
+        "snapads.com",
+        "snap-dev.net",
+        "sc-prod.net"
+      ]
+    },
+    {
+      "app": "X (Twitter)",
+      "site": "x.com",
+      "category": "social",
+      "domains": [
+        "x.com",
+        "twitter.com",
+        "twimg.com",
+        "t.co",
+        "twttr.com"
+      ]
+    },
+    {
+      "app": "LinkedIn",
+      "site": "linkedin.com",
+      "category": "social",
+      "domains": [
+        "linkedin.com",
+        "licdn.com",
+        "lnkd.in"
+      ]
+    },
+    {
+      "app": "Pinterest",
+      "site": "pinterest.com",
+      "category": "social",
+      "domains": [
+        "pinterest.com",
+        "pinimg.com"
+      ]
+    },
+    {
+      "app": "Reddit",
+      "site": "reddit.com",
+      "category": "social",
+      "domains": [
+        "reddit.com",
+        "redd.it",
+        "redditmedia.com",
+        "redditstatic.com"
+      ]
+    },
+    {
+      "app": "Likee",
+      "site": "likee.video",
+      "category": "video",
+      "domains": [
+        "likee.video",
+        "like.video",
+        "likeevideo.com",
+        "bigo.tv",
+        "bigo.sg"
+      ]
+    },
+    {
+      "app": "Kwai / Snack Video",
+      "site": "kwai.com",
+      "category": "video",
+      "domains": [
+        "kwai.com",
+        "kwai-pro.com",
+        "kwaicdn.com",
+        "snackvideo.com",
+        "snackvideo.in"
+      ]
+    },
+    {
+      "app": "Netflix",
+      "site": "netflix.com",
+      "category": "video",
+      "domains": [
+        "netflix.com",
+        "netflix.net",
+        "nflxvideo.net",
+        "nflximg.net",
+        "nflximg.com",
+        "nflxext.com",
+        "nflxso.net"
+      ],
+      "note": "nflxvideo.net is often a Netflix Open Connect box inside your ISP."
+    },
+    {
+      "app": "Prime Video",
+      "site": "primevideo.com",
+      "category": "video",
+      "domains": [
+        "primevideo.com",
+        "aiv-cdn.net",
+        "aiv-delivery.net",
+        "pv-cdn.net",
+        "amazonvideo.com"
+      ]
+    },
+    {
+      "app": "Disney+ Hotstar",
+      "site": "hotstar.com",
+      "category": "video",
+      "domains": [
+        "hotstar.com",
+        "hotstarext.com",
+        "disneyplus.com",
+        "dssott.com",
+        "bamgrid.com",
+        "disney-plus.net"
+      ]
+    },
+    {
+      "app": "Tamasha / Tapmad",
+      "site": "tamashaweb.com",
+      "category": "video",
+      "domains": [
+        "tamashaweb.com",
+        "tamasha.com.pk",
+        "tapmad.com"
+      ]
+    },
+    {
+      "app": "Dailymotion",
+      "site": "dailymotion.com",
+      "category": "video",
+      "domains": [
+        "dailymotion.com",
+        "dmcdn.net",
+        "dm-event.net"
+      ]
+    },
+    {
+      "app": "Twitch",
+      "site": "twitch.tv",
+      "category": "video",
+      "domains": [
+        "twitch.tv",
+        "ttvnw.net",
+        "jtvnw.net",
+        "twitchcdn.net"
+      ]
+    },
+    {
+      "app": "Vimeo",
+      "site": "vimeo.com",
+      "category": "video",
+      "domains": [
+        "vimeo.com",
+        "vimeocdn.com"
+      ]
+    },
+    {
+      "app": "Spotify",
+      "site": "spotify.com",
+      "category": "music",
+      "domains": [
+        "spotify.com",
+        "scdn.co",
+        "spotifycdn.com",
+        "spotifycdn.net",
+        "spotilocal.com",
+        "audio-ak-spotify-com.akamaized.net",
+        "audio-fa.scdn.co"
+      ]
+    },
+    {
+      "app": "Telegram",
+      "site": "telegram.org",
+      "category": "messaging",
+      "domains": [
+        "telegram.org",
+        "t.me",
+        "telegram.me",
+        "cdn-telegram.org",
+        "telesco.pe",
+        "tdesktop.com"
+      ]
+    },
+    {
+      "app": "Signal",
+      "site": "signal.org",
+      "category": "messaging",
+      "domains": [
+        "signal.org",
+        "whispersystems.org",
+        "signal.art"
+      ]
+    },
+    {
+      "app": "Viber",
+      "site": "viber.com",
+      "category": "messaging",
+      "domains": [
+        "viber.com",
+        "viber.io"
+      ]
+    },
+    {
+      "app": "IMO",
+      "site": "imo.im",
+      "category": "messaging",
+      "domains": [
+        "imo.im",
+        "imoim.net",
+        "imoim.app"
+      ]
+    },
+    {
+      "app": "Discord",
+      "site": "discord.com",
+      "category": "messaging",
+      "domains": [
+        "discord.com",
+        "discord.gg",
+        "discordapp.com",
+        "discordapp.net",
+        "discord.media"
+      ]
+    },
+    {
+      "app": "Zoom",
+      "site": "zoom.us",
+      "category": "work",
+      "domains": [
+        "zoom.us",
+        "zoom.com",
+        "zoomgov.com"
+      ]
+    },
+    {
+      "app": "Microsoft Teams / Skype",
+      "site": "teams.microsoft.com",
+      "category": "work",
+      "domains": [
+        "teams.microsoft.com",
+        "teams.live.com",
+        "skype.com",
+        "skypeassets.com",
+        "lync.com"
+      ]
+    },
+    {
+      "app": "Google Meet",
+      "site": "meet.google.com",
+      "category": "work",
+      "domains": [
+        "meet.google.com"
+      ]
+    },
+    {
+      "app": "PUBG Mobile",
+      "site": "pubgmobile.com",
+      "category": "gaming",
+      "domains": [
+        "pubgmobile.com",
+        "pubg.com",
+        "igamecj.com",
+        "gcloudsdk.com",
+        "proximabeta.com",
+        "anticheatexpert.com",
+        "tencentgames.com"
+      ]
+    },
+    {
+      "app": "Free Fire",
+      "site": "freefiremobile.com",
+      "category": "gaming",
+      "domains": [
+        "freefiremobile.com",
+        "garena.com",
+        "garenanow.com",
+        "ff.garena.com"
+      ]
+    },
+    {
+      "app": "Roblox",
+      "site": "roblox.com",
+      "category": "gaming",
+      "domains": [
+        "roblox.com",
+        "rbxcdn.com",
+        "rbx.com"
+      ]
+    },
+    {
+      "app": "Steam",
+      "site": "steampowered.com",
+      "category": "gaming",
+      "domains": [
+        "steampowered.com",
+        "steamcommunity.com",
+        "steamcontent.com",
+        "steamserver.net",
+        "steamstatic.com",
+        "steamgames.com"
+      ]
+    },
+    {
+      "app": "Epic Games / Fortnite",
+      "site": "epicgames.com",
+      "category": "gaming",
+      "domains": [
+        "epicgames.com",
+        "epicgames.dev",
+        "unrealengine.com",
+        "fortnite.com"
+      ]
+    },
+    {
+      "app": "Xbox / PlayStation",
+      "site": "xboxlive.com",
+      "category": "gaming",
+      "domains": [
+        "xboxlive.com",
+        "xbox.com",
+        "playstation.com",
+        "playstation.net",
+        "sonyentertainmentnetwork.com"
+      ]
+    },
+    {
+      "app": "Supercell games",
+      "site": "supercell.com",
+      "category": "gaming",
+      "domains": [
+        "supercell.com",
+        "clashofclans.com",
+        "clashroyaleapp.com",
+        "brawlstarsgame.com"
+      ]
+    },
+    {
+      "app": "Daraz",
+      "site": "daraz.pk",
+      "category": "shopping",
+      "domains": [
+        "daraz.pk",
+        "daraz.com",
+        "daraz.lk",
+        "darazcdn.com"
+      ]
+    },
+    {
+      "app": "Alibaba / AliExpress",
+      "site": "aliexpress.com",
+      "category": "shopping",
+      "domains": [
+        "aliexpress.com",
+        "alicdn.com",
+        "alibaba.com",
+        "aliexpress.us"
+      ]
+    },
+    {
+      "app": "Amazon",
+      "site": "amazon.com",
+      "category": "shopping",
+      "domains": [
+        "amazon.com",
+        "media-amazon.com",
+        "ssl-images-amazon.com",
+        "amazon.ae"
+      ]
+    },
+    {
+      "app": "Google Play / Android updates",
+      "site": "play.google.com",
+      "category": "updates",
+      "domains": [
+        "play.google.com",
+        "play.googleapis.com",
+        "play-lh.googleusercontent.com",
+        "gvt1.com",
+        "gvt2.com",
+        "gvt3.com",
+        "android.clients.google.com"
+      ]
+    },
+    {
+      "app": "Google",
+      "site": "google.com",
+      "category": "search",
+      "domains": [
+        "google.com",
+        "google.com.pk",
+        "gstatic.com",
+        "googleapis.com",
+        "googleusercontent.com",
+        "ggpht.com",
+        "googleadservices.com",
+        "googlesyndication.com",
+        "doubleclick.net",
+        "google-analytics.com",
+        "googletagmanager.com",
+        "1e100.net",
+        "gmail.com",
+        "googledrive.com"
+      ]
+    },
+    {
+      "app": "Apple / iCloud / App Store",
+      "site": "apple.com",
+      "category": "updates",
+      "domains": [
+        "apple.com",
+        "icloud.com",
+        "icloud-content.com",
+        "mzstatic.com",
+        "aaplimg.com",
+        "apple-dns.net",
+        "cdn-apple.com",
+        "itunes.apple.com",
+        "apple.news"
+      ]
+    },
+    {
+      "app": "Windows / Microsoft",
+      "site": "microsoft.com",
+      "category": "updates",
+      "domains": [
+        "microsoft.com",
+        "windowsupdate.com",
+        "windows.com",
+        "msftconnecttest.com",
+        "msftncsi.com",
+        "live.com",
+        "office.com",
+        "office.net",
+        "office365.com",
+        "msn.com",
+        "bing.com",
+        "onedrive.com",
+        "sharepoint.com",
+        "outlook.com",
+        "microsoftonline.com"
+      ]
+    },
+    {
+      "app": "Wikipedia",
+      "site": "wikipedia.org",
+      "category": "info",
+      "domains": [
+        "wikipedia.org",
+        "wikimedia.org",
+        "wiktionary.org"
+      ]
+    },
+    {
+      "app": "ChatGPT / OpenAI",
+      "site": "openai.com",
+      "category": "work",
+      "domains": [
+        "openai.com",
+        "chatgpt.com",
+        "oaistatic.com",
+        "oaiusercontent.com"
+      ]
+    },
+    {
+      "app": "Claude / Anthropic",
+      "site": "claude.ai",
+      "category": "work",
+      "domains": [
+        "claude.ai",
+        "anthropic.com"
+      ]
+    }
   ],
   "generic_cdns": {
     "_comment": "Shared CDNs that serve thousands of sites: the name alone says nothing about the app.",
-    "Akamai": ["akamaized.net", "akamaihd.net", "akamai.net", "akamaiedge.net", "edgekey.net", "edgesuite.net", "akadns.net", "akamaitechnologies.com"],
-    "Amazon CloudFront / AWS": ["cloudfront.net", "amazonaws.com", "awsglobalaccelerator.com"],
-    "Cloudflare": ["cloudflare.net", "cloudflare.com", "cdn.cloudflare.net", "cloudflare-dns.com", "cloudflare-ech.com"],
-    "Fastly": ["fastly.net", "fastlylb.net", "fastly-edge.com"],
-    "Microsoft Azure CDN": ["azureedge.net", "azurefd.net", "msecnd.net", "trafficmanager.net", "azure.com"],
-    "Google Cloud": ["appspot.com", "googlehosted.com", "run.app", "web.app", "firebaseapp.com", "firebaseio.com"],
-    "Other CDNs": ["llnwd.net", "llnw.net", "cdn77.org", "b-cdn.net", "jsdelivr.net", "gcdn.co", "edgecastcdn.net", "stackpathdns.com", "kxcdn.com", "bunny.net", "cdnjs.cloudflare.com", "unpkg.com"]
+    "Akamai": [
+      "akamaized.net",
+      "akamaihd.net",
+      "akamai.net",
+      "akamaiedge.net",
+      "edgekey.net",
+      "edgesuite.net",
+      "akadns.net",
+      "akamaitechnologies.com"
+    ],
+    "Amazon CloudFront / AWS": [
+      "cloudfront.net",
+      "amazonaws.com",
+      "awsglobalaccelerator.com"
+    ],
+    "Cloudflare": [
+      "cloudflare.net",
+      "cloudflare.com",
+      "cdn.cloudflare.net",
+      "cloudflare-dns.com",
+      "cloudflare-ech.com"
+    ],
+    "Fastly": [
+      "fastly.net",
+      "fastlylb.net",
+      "fastly-edge.com"
+    ],
+    "Microsoft Azure CDN": [
+      "azureedge.net",
+      "azurefd.net",
+      "msecnd.net",
+      "trafficmanager.net",
+      "azure.com"
+    ],
+    "Google Cloud": [
+      "appspot.com",
+      "googlehosted.com",
+      "run.app",
+      "web.app",
+      "firebaseapp.com",
+      "firebaseio.com"
+    ],
+    "Other CDNs": [
+      "llnwd.net",
+      "llnw.net",
+      "cdn77.org",
+      "b-cdn.net",
+      "jsdelivr.net",
+      "gcdn.co",
+      "edgecastcdn.net",
+      "stackpathdns.com",
+      "kxcdn.com",
+      "bunny.net",
+      "cdnjs.cloudflare.com",
+      "unpkg.com"
+    ]
   },
   "asn": {
     "_comment": "IPv4 owners for IP lookups — downloaded by 'radius-admin cdn update' from github.com/ipverse/asn-ip.",
-    "Meta (Facebook / Instagram / WhatsApp)": [32934],
-    "Google / YouTube": [15169, 36040, 43515],
-    "ByteDance (TikTok)": [396986, 138699],
-    "Netflix": [2906, 40027],
-    "Akamai (shared CDN)": [20940, 16625],
-    "Cloudflare (shared CDN)": [13335],
-    "Amazon / AWS (shared)": [16509, 14618],
-    "Microsoft": [8075],
-    "Apple": [714, 6185],
-    "Telegram": [62041, 59930],
-    "X (Twitter)": [13414],
-    "Fastly (shared CDN)": [54113],
-    "Valve (Steam)": [32590],
-    "Alibaba (Daraz / AliExpress)": [45102, 24429],
-    "Tencent (PUBG / games)": [132203]
+    "Meta (Facebook / Instagram / WhatsApp)": [
+      32934
+    ],
+    "Google / YouTube": [
+      15169,
+      36040,
+      43515
+    ],
+    "ByteDance (TikTok)": [
+      396986,
+      138699
+    ],
+    "Netflix": [
+      2906,
+      40027
+    ],
+    "Akamai (shared CDN)": [
+      20940,
+      16625
+    ],
+    "Cloudflare (shared CDN)": [
+      13335
+    ],
+    "Amazon / AWS (shared)": [
+      16509,
+      14618
+    ],
+    "Microsoft": [
+      8075
+    ],
+    "Apple": [
+      714,
+      6185
+    ],
+    "Telegram": [
+      62041,
+      59930
+    ],
+    "X (Twitter)": [
+      13414
+    ],
+    "Fastly (shared CDN)": [
+      54113
+    ],
+    "Valve (Steam)": [
+      32590
+    ],
+    "Alibaba (Daraz / AliExpress)": [
+      45102,
+      24429
+    ],
+    "Tencent (PUBG / games)": [
+      132203
+    ]
+  },
+  "asn_sites": {
+    "_comment": "IP owners that serve (almost) only one app: traffic to their IPs without a DNS name is counted for that site.",
+    "ByteDance (TikTok)": "tiktok.com",
+    "Netflix": "netflix.com",
+    "Telegram": "telegram.org",
+    "X (Twitter)": "x.com",
+    "Valve (Steam)": "steampowered.com",
+    "Meta (Facebook / Instagram / WhatsApp)": "meta (facebook/instagram/whatsapp)"
   }
 }

@@ -196,6 +196,20 @@ try {
   await shot(page, "26-cdn-detective");
   ok("detective: Meta IP -> Facebook (DNS evidence)");
 
+  // auto-learned app domain lists
+  const tiktok = page.locator("details", { has: page.locator("summary b", { hasText: /^TikTok$/ }) });
+  await tiktok.locator("summary").click();
+  await tiktok.locator("td code", { hasText: "tiktokcdn-new.net" }).waitFor({ timeout: 15000 });
+  if (!(await tiktok.locator(".badge", { hasText: "learned" }).count())) throw new Error("learned badge missing");
+  const rsc = await page.request.get(`${URL}/api/cdn/rsc?app=TikTok`);
+  const body = await rsc.text();
+  if (rsc.status() !== 200 || !body.includes("name=tiktokcdn-new.net")) throw new Error("RouterOS export missing learned domain");
+  console.log("     toast:", (await clickToast(page, page.locator("button", { hasText: "Learn now" }))).trim());
+  await page.waitForTimeout(500);
+  await tiktok.scrollIntoViewIfNeeded();
+  await shot(page, "28-app-domain-lists");
+  ok("app domain lists: learned TikTok domain, RouterOS export, Learn now");
+
   // business settings
   await go(page, "#/settings", "Settings");
   await page.fill("input[name=brand]", "Lover Net WiFi");
