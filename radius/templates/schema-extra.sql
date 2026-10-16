@@ -114,3 +114,33 @@ CREATE TABLE IF NOT EXISTS ml_eap_identity (
   username VARCHAR(64) NOT NULL,
   at DATETIME NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Ports & protocols per device / app (hourly, filled by the traffic collector)
+CREATE TABLE IF NOT EXISTS traffic_port (
+  bucket DATETIME NOT NULL,
+  client_ip VARCHAR(45) NOT NULL,
+  username VARCHAR(64) NOT NULL DEFAULT '',
+  site VARCHAR(253) NOT NULL,
+  proto TINYINT UNSIGNED NOT NULL,
+  port SMALLINT UNSIGNED NOT NULL,
+  direction ENUM('out','in','p2p') NOT NULL,
+  bytes_down BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  bytes_up BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  flows INT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (bucket, client_ip, site, proto, port, direction),
+  KEY idx_port (proto, port, bucket),
+  KEY idx_dir (direction, bucket)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Long-term memory: which ports/protocols every app uses (kept after traffic data expires)
+CREATE TABLE IF NOT EXISTS ml_app_port (
+  site VARCHAR(253) NOT NULL,
+  proto TINYINT UNSIGNED NOT NULL,
+  port SMALLINT UNSIGNED NOT NULL,
+  direction ENUM('out','in','p2p') NOT NULL,
+  first_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  flows BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (site, proto, port, direction)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

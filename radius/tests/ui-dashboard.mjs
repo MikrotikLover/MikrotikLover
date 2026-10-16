@@ -225,6 +225,17 @@ try {
     ok("discovered app renamed in the dashboard");
   } else console.log("     (no discovered app on this server — skipped)");
 
+  // ports & protocols
+  await go(page, "#/ports/port", "Ports & protocols");
+  await page.locator("code", { hasText: "443/udp" }).first().waitFor({ timeout: 15000 });
+  await shot(page, "30-ports");
+  await go(page, "#/ports/in", "Ports & protocols");
+  await page.locator("code", { hasText: "37777/tcp" }).first().waitFor({ timeout: 15000 });
+  await go(page, "#/ports/profile", "Ports & protocols");
+  await page.locator("h2", { hasText: "whatsapp.com" }).first().waitFor({ timeout: 15000 });
+  await shot(page, "31-app-port-profiles");
+  ok("ports & protocols: top ports, inbound, saved app profiles");
+
   // business settings
   await go(page, "#/settings", "Settings");
   await page.fill("input[name=brand]", "Lover Net WiFi");

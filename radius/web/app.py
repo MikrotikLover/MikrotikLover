@@ -1088,6 +1088,54 @@ def cdn_rsc():
                               headers={"Content-Disposition": f'attachment; filename="block-{slug}.rsc"'})
 
 
+# ------------------------------------------------------------------ ports & protocols
+@app.get("/api/ports")
+@login_required()
+def ports_report():
+    import ports
+    by = request.args.get("by", "port")
+    a = report_args()
+    site = request.args.get("app", "").lower()
+    if site and not re.match(r"^[a-z0-9.()/ -]{1,253}$", site):
+        abort(400, "invalid app")
+    where, args = ["bucket >= NOW() - INTERVAL %s HOUR"], [int(a.days * 24)]
+    for col, val in (("username", a.user), ("client_ip", a.ip), ("site", site)):
+        if val:
+            where.append(f"{col}=%s")
+            args.append(val)
+    w = " AND ".join(where)
+    if by == "port":
+        rows = q(f"""SELECT proto, port, direction, SUM(bytes_down) AS down, SUM(bytes_up) AS up, COUNT(DISTINCT client_ip) AS devices,
+                       SUM(flows) AS flows, LEFT(GROUP_CONCAT(DISTINCT site ORDER BY site SEPARATOR ', '),200) AS apps
+                     FROM traffic_port WHERE {w} GROUP BY proto, port, direction ORDER BY SUM(bytes_down+bytes_up) DESC LIMIT %s""", args + [a.top])
+    elif by == "app":
+        rows = q(f"""SELECT site, proto, port, direction, SUM(bytes_down) AS down, SUM(bytes_up) AS up, COUNT(DISTINCT client_ip) AS devices
+                     FROM traffic_port WHERE {w} GROUP BY site, proto, port, direction ORDER BY site, SUM(bytes_down+bytes_up) DESC LIMIT %s""", args + [a.top * 10])
+    elif by == "device":
+        rows = q(f"""SELECT client_ip, MAX(NULLIF(username,'')) AS username, proto, port, direction, SUM(bytes_down) AS down, SUM(bytes_up) AS up,
+                       LEFT(GROUP_CONCAT(DISTINCT site ORDER BY site SEPARATOR ', '),200) AS apps
+                     FROM traffic_port WHERE {w} GROUP BY client_ip, proto, port, direction ORDER BY client_ip, SUM(bytes_down+bytes_up) DESC LIMIT %s""", args + [a.top * 10])
+    elif by == "in":
+        rows = q(f"""SELECT client_ip, MAX(NULLIF(username,'')) AS username, proto, port, SUM(bytes_down) AS down, SUM(bytes_up) AS up,
+                       SUM(flows) AS flows, MIN(bucket) AS first, MAX(bucket) AS last
+                     FROM traffic_port WHERE {w} AND direction='in' GROUP BY client_ip, proto, port ORDER BY SUM(bytes_down+bytes_up) DESC LIMIT %s""", args + [a.top])
+    elif by == "profile":
+        rows = q("SELECT site, proto, port, direction, bytes, flows, first_seen, last_seen FROM ml_app_port"
+                 + (" WHERE site=%s" if site else "") + " ORDER BY site, bytes DESC LIMIT 2000", [site] if site else None)
+    else:
+        abort(400, "by: port | app | device | in | profile")
+    out = jsonable(rows)
+    for r in out:
+        r["protocol"] = ports.proto_name(r["proto"])
+        r["service"] = ports.name(r["proto"], r["port"])
+    totals = q1("""SELECT COALESCE(SUM(IF(direction='out',bytes_down+bytes_up,0)),0) AS out_b,
+                      COALESCE(SUM(IF(direction='in',bytes_down+bytes_up,0)),0) AS in_b,
+                      COALESCE(SUM(IF(direction='p2p',bytes_down+bytes_up,0)),0) AS p2p_b,
+                      COUNT(DISTINCT CONCAT(proto,'/',port)) AS ports
+                   FROM traffic_port WHERE bucket >= NOW() - INTERVAL %s HOUR""", (int(a.days * 24),))
+    return jsonify(by=by, rows=out, totals=jsonable([totals])[0])
+
+
 # ------------------------------------------------------------------ system / admins / audit
 def running(pattern):
     try:

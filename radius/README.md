@@ -476,6 +476,31 @@ Dashboard mein user ke page par **Package** card: plan, expiry, data bar (kitna 
 
 WhatsApp par link bhejein, ya Wi-Fi ke paas QR/poster laga dein. Users ka phone server tak pohanch sake (LAN, ya server public ho to internet se).
 
+## 5e2. Ports & protocols — kaunsa port IN, kaunsa OUT, kaunsi app kya istemal karti hai
+
+Traffic collector (section 5b, `traffic-flow.rsc`) har connection ka protocol aur port bhi save karta hai:
+
+| Rukh | Matlab | Misal |
+|---|---|---|
+| **OUT** | LAN device ne internet par kisi service se connection banaya | `443/tcp` HTTPS, `443/udp` QUIC (YouTube), `5222/tcp` WhatsApp chat |
+| **IN** | **internet se** connection LAN device tak aaya (port-forward, DVR/camera, server) | `37777/tcp` Dahua DVR, `3389/tcp` RDP |
+| **P2P** | dono taraf "high" ports — calls, games, torrents | `50123/udp` |
+
+- Har port ka naam: 100+ maloom services (HTTPS, QUIC, DNS, STUN/TURN calls, WhatsApp, push notifications, VPNs, RDP, Winbox, DVR cameras, games, BitTorrent ...).
+- Kaunsa side "service" hai: well-known port (< 1024 ya list mein) → registered (< 32768) → ephemeral; jo side zyada "service" ho wahi port, aur usi se IN/OUT.
+- Hourly data `traffic_port` mein (90 din); har app ka **port profile** `ml_app_port` mein **hamesha** (pehli aur aakhri dafa, kitna data) — purana traffic delete hone ke baad bhi.
+
+```bash
+sudo radius-admin ports                              # aaj ke top ports: protocol, port, service, OUT/IN/P2P, data, devices, apps
+sudo radius-admin ports --by app --app whatsapp.com  # WhatsApp kaunse ports/protocols istemal karti hai
+sudo radius-admin ports --by device --ip 192.168.88.23
+sudo radius-admin ports --by in                      # internet se andar aane wale connections (security check)
+sudo radius-admin ports --by profile                 # saved profile: har app ke ports, kab se
+```
+Dashboard → **Ports & protocols**: Top ports · App → ports · Devices · **Inbound (IN)** · **Saved app profiles**, aur upar OUT / IN / P2P ka total.
+
+> IN/OUT andaza ports se hai: agar LAN par koi service ghair-maroof port par chal rahi ho to woh P2P dikh sakti hai. Unknown **IN** entries zaroor dekhein — ho sakta hai koi port-forward ya khula device ho.
+
 ## 5f. PPPoE users (ISP style)
 
 Ghar/dukaan ke router PPPoE se username/password par chalte hain — wohi RADIUS, wohi plans, wohi dashboard.

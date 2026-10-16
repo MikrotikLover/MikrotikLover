@@ -41,6 +41,7 @@ const ICONS = {
   money: "M3 6h18v12H3zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6M6 9v.01M18 15v.01",
   print: "M6 9V3h12v6M6 18H4v-7h16v7h-2M7 14h10v7H7z",
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14m10 3-5.2-5.2",
+  ports: "M7 7h10v10H7zM3 9h4M3 15h4M17 9h4M17 15h4M9 3v4M15 3v4M9 17v4M15 17v4",
   plus: "M12 5v14M5 12h14",
   refresh: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7",
 };
@@ -200,7 +201,7 @@ const NAV = [
   ["macs", "MAC devices", "mac"], ["routers", "Routers", "router"], "-",
   ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
-  ["data", "Data usage", "data"], "-", ["settings", "Settings", "settings"],
+  ["data", "Data usage", "data"], ["ports", "Ports & protocols", "ports"], "-", ["settings", "Settings", "settings"],
 ];
 
 function shell(title, content, actions) {
@@ -1002,4 +1003,47 @@ ROUTES.cdn = async (initial) => {
   loadUnknown().catch(() => unknown.replaceChildren(h("div", { class: "empty" }, "No traffic data.")));
   loadApps().catch((e) => appsBox.replaceChildren(h("div", { class: "note" }, e.message)));
   if (initial) await check(initial);
+};
+
+// ------------------------------------------------------------------ ports & protocols
+ROUTES.ports = async (by = "port") => {
+  const tabs = [["port", "Top ports"], ["app", "App → ports"], ["device", "Devices"], ["in", "Inbound (IN)"], ["profile", "Saved app profiles"]];
+  const holder = h("div", { class: "stack" });
+  const days = h("select", {}, [["1", "Today (24 h)"], ["7", "7 days"], ["30", "30 days"]].map(([v, l]) => h("option", { value: v }, l)));
+  const user = h("input", { type: "search", placeholder: "User" }), ip = h("input", { type: "search", placeholder: "Device IP" }), app = h("input", { type: "search", placeholder: "App/site e.g. whatsapp.com" });
+  const dirBadge = (d) => d === "in" ? badge("IN", "bad") : d === "p2p" ? badge("P2P", "warn") : badge("OUT", "info");
+  const portCell = (r) => h("span", {}, h("code", {}, `${r.port || "—"}/${r.protocol}`), r.service ? h("div", { class: "muted" }, r.service) : null);
+  const load = async () => {
+    const qs = new URLSearchParams({ by, days: days.value, user: user.value.trim(), ip: ip.value.trim(), app: app.value.trim(), top: 60 });
+    const d = await api("GET", `/api/ports?${qs}`);
+    const t = d.totals;
+    const tiles = h("div", { class: "grid g-tiles" }, tile("OUT (devices → internet)", bytes(t.out_b)), tile("IN (internet → devices)", bytes(t.in_b), "port-forwards, cameras, servers"),
+      tile("P2P (calls, games, torrents)", bytes(t.p2p_b)), tile("Different ports", num(t.ports)));
+    let tbl;
+    if (by === "port") tbl = table([{ label: "Port / protocol", render: portCell }, { label: "Direction", render: (r) => dirBadge(r.direction) },
+      { label: "Download", num: true, render: (r) => bytes(r.down) }, { label: "Upload", num: true, render: (r) => bytes(r.up) },
+      { label: "Devices", key: "devices", num: true }, { label: "Apps using it", key: "apps", wrap: true }], d.rows, "No data yet (traffic collector + router traffic-flow).");
+    else if (by === "app" || by === "profile") {
+      const groups = new Map();
+      d.rows.forEach((r) => { if (!groups.has(r.site)) groups.set(r.site, []); groups.get(r.site).push(r); });
+      tbl = groups.size ? h("div", { class: "grid g-2" }, [...groups].map(([site, rs]) => card(site, by === "profile" ? `saved since ${String(rs.reduce((m, r) => r.first_seen < m ? r.first_seen : m, rs[0].first_seen)).slice(0, 10)}` : `${rs.length} port(s)`,
+        table([{ label: "Port / protocol", render: portCell }, { label: "Dir", render: (r) => dirBadge(r.direction) },
+          { label: "Data", num: true, render: (r) => bytes(by === "profile" ? r.bytes : Number(r.down) + Number(r.up)) },
+          by === "profile" ? { label: "Last seen", render: (r) => String(r.last_seen).slice(0, 16) } : { label: "Devices", key: "devices", num: true }], rs))))
+        : h("div", { class: "card" }, h("div", { class: "empty" }, "No data yet."));
+    } else if (by === "device") tbl = table([{ label: "Device", render: (r) => h("span", {}, r.client_ip, r.username ? h("div", { class: "muted" }, r.username) : null) },
+      { label: "Port / protocol", render: portCell }, { label: "Direction", render: (r) => dirBadge(r.direction) },
+      { label: "Download", num: true, render: (r) => bytes(r.down) }, { label: "Upload", num: true, render: (r) => bytes(r.up) }, { label: "Apps", key: "apps", wrap: true }], d.rows, "No data yet.");
+    else tbl = [h("div", { class: "note" }, "Connections started FROM the internet TO a device in your network (port-forwards, DVR/cameras, servers). Anything you don't recognise deserves a look."),
+      table([{ label: "LAN device", render: (r) => h("span", {}, r.client_ip, r.username ? h("div", { class: "muted" }, r.username) : null) },
+        { label: "Port / protocol", render: portCell }, { label: "Download", num: true, render: (r) => bytes(r.down) }, { label: "Upload", num: true, render: (r) => bytes(r.up) },
+        { label: "Flows", key: "flows", num: true }, { label: "First / last", render: (r) => `${String(r.first).slice(5, 16)} → ${String(r.last).slice(5, 16)}` }], d.rows, "No inbound connections — good.")];
+    holder.replaceChildren(tiles, by === "port" || by === "device" || by === "in" ? h("div", { class: "card" }, tbl) : tbl);
+  };
+  shell("Ports & protocols", h("div", { class: "stack" },
+    h("div", { class: "tabs" }, tabs.map(([k, l]) => h("a", { href: `#/ports/${k}`, class: k === by ? "active" : "" }, l))),
+    card(null, null, h("div", { class: "toolbar" }, by !== "profile" ? days : null, by !== "profile" ? [user, ip] : null, by !== "device" && by !== "in" ? app : null,
+      h("button", { class: "primary", onclick: () => load().catch((e) => toast(e.message, true)) }, "Show"))),
+    holder));
+  await load();
 };

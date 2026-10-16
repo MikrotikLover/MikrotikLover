@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import flowcollector as fc  # noqa: E402
 
-from flowgen import rec, ipfix, v9  # noqa: E402
+from flowgen import rec, ipfix, v9, FIELDS  # noqa: E402
 
 CLIENT, PUB, YT = "192.168.88.23", "203.0.113.5", "142.250.181.14"
 dec, cls, dd, names = fc.Decoder(), fc.Classifier(["192.168.0.0/16", "10.0.0.0/8"]), fc.Dedupe(), fc.DnsNames()
@@ -63,6 +63,25 @@ for line in ["x dnsmasq[1]: 20 192.168.88.50/6000 query[A] www.olx.com.pk from 1
     names.feed(line, 105)
 got = run(ipfix([rec("99.84.20.20", "192.168.88.50", 443, 42000, 3_000_000)], with_template=False))
 check("CloudFront data after olx -> olx.com.pk", got == {("192.168.88.50", "olx.com.pk", "down"): 3_000_000}, got)
+# 8) NAT: WAN record with a different public port is still the same flow (post-NAT port used)
+dupA = rec(YT, CLIENT, 443, 40050, 777_000, start=9000, end=9100)
+dupB = rec(YT, PUB, 443, 61001, 777_000, ndst=CLIENT, start=9000, end=9100)
+import struct as _st
+# dupB needs post-NAT port 40050: add natdport field via a second template
+F2 = FIELDS + [(228, 2)]
+def ipfix2(records, tid=257):
+    t = _st.pack("!HH", tid, len(F2)) + b"".join(_st.pack("!HH", *f) for f in F2)
+    body = b"".join(records)
+    return _st.pack("!HHIII", 10, 16 + 4 + len(t) + 4 + len(body), 0, 1, 0) + _st.pack("!HH", 2, 4 + len(t)) + t + _st.pack("!HH", tid, 4 + len(body)) + body
+got = run(ipfix2([dupA + _st.pack("!H", 0), dupB + _st.pack("!H", 40050)]))
+check("NAT port change: LAN + WAN record of one flow counted once", got == {(CLIENT, "youtube.com", "down"): 777_000}, got)
+# 9) port / protocol classification
+import ports
+r = cls.classify(dec.decode(ipfix([rec(CLIENT, YT, 51234, 443, 1000, proto=17)], with_template=False), "192.168.88.1")[0])
+check("QUIC: udp 443 out", (ports.proto_name(r[5]),) + ports.service(r[5], r[6], r[7]) == ("udp", "out", 443), r)
+r = cls.classify(dec.decode(ipfix([rec("203.0.113.77", "192.168.88.30", 50123, 37777, 5000)], with_template=False), "192.168.88.1")[0])
+check("inbound to a DVR: tcp 37777 in", ports.service(r[5], r[6], r[7]) == ("in", 37777), r)
+
 # 7) garbage does not crash
 check("garbage packet ignored", dec.decode(b"\x00\x0a\xff\xff" + b"\x00" * 30, "x") == [], "")
 sys.exit(1 if fail else 0)

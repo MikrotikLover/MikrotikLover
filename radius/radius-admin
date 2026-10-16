@@ -16,6 +16,7 @@ svc() { if [ -d /run/systemd/system ]; then systemctl "$1" "$2"; else service "$
 
 db()   { mysql --defaults-extra-file="$CONF_DIR/my.cnf" -N -B "$DB_NAME"; }   # raw output
 dbt()  { mysql --defaults-extra-file="$CONF_DIR/my.cnf" -t "$DB_NAME"; }      # table output
+dbh()  { mysql --defaults-extra-file="$CONF_DIR/my.cnf" -B "$DB_NAME"; }      # TSV with header
 
 # SQL string literal. Inputs are validated first; this escapes what remains.
 q() { local s=${1//\\/\\\\}; s=${s//\'/\\\'}; printf "'%s'" "$s"; }
@@ -993,6 +994,44 @@ except ValueError as e: sys.exit(str(e))' "$2" ;;
     esac
 }
 
+# Ports & protocols (traffic collector): which ports go in / out, which apps use which ports
+cmd_ports() {
+    local by=port days=1 top=40 user="" ip="" app=""
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --by)   by=${2:-}; [[ $by =~ ^(port|app|device|in|profile)$ ]] || die "--by port|app|device|in|profile"; shift 2 ;;
+            --days) days=${2:-}; valid_int "$days" days; shift 2 ;;
+            --top)  top=${2:-}; valid_int "$top" top; shift 2 ;;
+            -u|--user) user=${2:-}; valid_name "$user" username; shift 2 ;;
+            --ip)   ip=${2:-}; valid_ip "$ip"; shift 2 ;;
+            --app)  app=${2:-}; [[ $app =~ ^[A-Za-z0-9.()/\ -]{1,253}$ ]] || die "Invalid app/site"; shift 2 ;;
+            *) die "usage: radius-admin ports [--by port|app|device|in|profile] [--days N] [-u USER] [--ip IP] [--app SITE] [--top N]" ;;
+        esac
+    done
+    local where="bucket >= NOW() - INTERVAL $days DAY"
+    [ -z "$user" ] || where+=" AND username=$(q "$user")"
+    [ -z "$ip" ]   || where+=" AND client_ip=$(q "$ip")"
+    [ -z "$app" ]  || where+=" AND site=$(q "${app,,}")"
+    local sql
+    case $by in
+        port) sql="SELECT proto, port, direction, SUM(bytes_down) AS down, SUM(bytes_up) AS up, COUNT(DISTINCT client_ip) AS devices,
+                          LEFT(GROUP_CONCAT(DISTINCT site ORDER BY site SEPARATOR ', '),70) AS apps
+                   FROM traffic_port WHERE $where GROUP BY proto, port, direction ORDER BY SUM(bytes_down+bytes_up) DESC LIMIT $top" ;;
+        app)  sql="SELECT site AS app, proto, port, direction, SUM(bytes_down+bytes_up) AS total, COUNT(DISTINCT client_ip) AS devices
+                   FROM traffic_port WHERE $where GROUP BY site, proto, port, direction ORDER BY site, SUM(bytes_down+bytes_up) DESC LIMIT $((top*10))" ;;
+        device) sql="SELECT client_ip AS device, MAX(NULLIF(username,'')) AS user, proto, port, direction, SUM(bytes_down+bytes_up) AS total,
+                            LEFT(GROUP_CONCAT(DISTINCT site ORDER BY site SEPARATOR ', '),60) AS apps
+                     FROM traffic_port WHERE $where GROUP BY client_ip, proto, port, direction ORDER BY client_ip, SUM(bytes_down+bytes_up) DESC LIMIT $((top*10))" ;;
+        in)   sql="SELECT client_ip AS lan_device, MAX(NULLIF(username,'')) AS user, proto, port, SUM(bytes_down) AS down, SUM(bytes_up) AS up,
+                          SUM(flows) AS flows, MIN(bucket) AS first, MAX(bucket) AS last
+                   FROM traffic_port WHERE $where AND direction='in' GROUP BY client_ip, proto, port ORDER BY SUM(bytes_down+bytes_up) DESC LIMIT $top" ;;
+        profile) sql="SELECT site AS app, proto, port, direction, bytes, first_seen, last_seen FROM ml_app_port
+                      $( [ -n "$app" ] && echo "WHERE site=$(q "${app,,}")") ORDER BY site, bytes DESC LIMIT $((top*20))" ;;
+    esac
+    echo "$sql;" | dbh | python3 -I /usr/local/lib/mikrotiklover/ports.py table
+    [ "$by" != in ] || echo "IN = started from the internet towards a LAN device (port-forward, DVR/camera, server). Unknown ones deserve a look."
+}
+
 cmd_sales() {
     local days=${1:-30}; valid_int "$days" days
     echo "SELECT DATE(at) AS day, COUNT(*) AS sales, SUM(kind='voucher') AS vouchers, SUM(kind='renew') AS renewals,
@@ -1070,6 +1109,13 @@ Hotspot business (plans, vouchers, expiry, data quota, daily time)
   user ip NAME 10.20.0.5|-             static IP (PPPoE)          group add NAME --pool POOL   (PPPoE IP pool)
   plan add NAME ... --fup 1M/1M        after the quota: slower instead of cut off (FUP)
   enforce [-v]                         cut expired / slow FUP sessions now (cron runs it every 5 min)
+
+Ports & protocols (traffic collector)
+  ports                                 top ports today: protocol, port, service, OUT/IN/P2P, data, devices, apps
+  ports --by app [--app youtube.com]    which ports/protocols each app uses
+  ports --by device [--ip IP | -u USER] ports per device
+  ports --by in                         connections started FROM the internet to LAN devices
+  ports --by profile [--app SITE]       saved long-term port profile of every app
 
 CDN detective
   cdn HOSTNAME|IP [--json]             which app/site is behind it (name, DNS evidence, IP owner, context)
@@ -1153,6 +1199,7 @@ case ${1:-help} in
     sales)   shift; cmd_sales "$@" ;;
     enforce) shift; cmd_enforce "$@" ;;
     cdn)     shift; cmd_cdn "$@" ;;
+    ports)   shift; cmd_ports "$@" ;;
     syslog-sync) syslog_sync ;;
     online)  cmd_online ;;
     log)     shift; cmd_log "$@" ;;

@@ -16,6 +16,7 @@ from collections import OrderedDict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mlreport import base_domain, is_generic_cdn  # noqa: E402  (same directory)
+import ports  # noqa: E402
 
 CONF = "/etc/mikrotiklover-radius/radius.conf"
 DNS_LOG = os.environ.get("MLREPORT_LOGDIR", "/var/log/mikrotik") + "/dns.log"
@@ -157,7 +158,7 @@ class Classifier:
         return any(a in n for n in self.lan)
 
     def classify(self, rec):
-        """-> (client_ip, remote_ip, 'up'|'down', bytes, dedupe_key) or None."""
+        """-> (client_ip, remote_ip, 'up'|'down', bytes, dedupe_key, proto, client_port, remote_port) or None."""
         nbytes = rec.get(IE_BYTES, rec.get(IE_BYTES_TOTAL, 0))
         if not nbytes:
             return None
@@ -169,17 +170,22 @@ class Classifier:
         dst_remote = next((ip for ip in dsts if ip and not self.is_lan(ip)), None)
         if src_client and dst_remote and not dst_client:
             client, remote, direction = src_client, dst_remote, "up"
-            cport, rport = rec.get(IE_SPORT, 0), rec.get(IE_DPORT, 0)
+            cport = rec.get(IE_SPORT, 0) if src_client == rec.get(IE_SRC4) else rec.get(IE_NAT_SPORT) or rec.get(IE_SPORT, 0)
+            rport = rec.get(IE_DPORT, 0) if dst_remote == rec.get(IE_DST4) else rec.get(IE_NAT_DPORT) or rec.get(IE_DPORT, 0)
         elif dst_client and src_remote and not src_client:
             client, remote, direction = dst_client, src_remote, "down"
-            cport, rport = rec.get(IE_DPORT, 0), rec.get(IE_SPORT, 0)
+            # client found in the post-NAT field (download on the WAN side): use the post-NAT port too,
+            # so the LAN and WAN record of the same packets get the same dedupe key
+            cport = rec.get(IE_DPORT, 0) if dst_client == rec.get(IE_DST4) else rec.get(IE_NAT_DPORT) or rec.get(IE_DPORT, 0)
+            rport = rec.get(IE_SPORT, 0) if src_remote == rec.get(IE_SRC4) else rec.get(IE_NAT_SPORT) or rec.get(IE_SPORT, 0)
         else:
             return None  # LAN<->LAN, router itself, or the client is not visible in this record
         # The same packets can be reported on the LAN and the WAN interface: identical
         # (client, remote, ports, proto, times, bytes) means a duplicate.
         times = tuple(rec.get(t, 0) for t in IE_TIMES)
-        key = (client, cport, remote, rport, rec.get(IE_PROTO, 0), direction, nbytes, times)
-        return client, remote, direction, nbytes, key
+        proto = rec.get(IE_PROTO, 0)
+        key = (client, cport, remote, rport, proto, direction, nbytes, times)
+        return client, remote, direction, nbytes, key, proto, cport, rport
 
 
 class Dedupe:
@@ -295,6 +301,29 @@ class Store:
             c.execute("SELECT nasname FROM nas")
             return [r[0] for r in c.fetchall()]
 
+    def write_ports(self, rows, keep_days):
+        """rows: (bucket, client, user, site, proto, port, dir, down, up, flows)."""
+        sql = ("INSERT INTO traffic_port (bucket, client_ip, username, site, proto, port, direction, bytes_down, bytes_up, flows) "
+               "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE username=VALUES(username), "
+               "bytes_down=bytes_down+VALUES(bytes_down), bytes_up=bytes_up+VALUES(bytes_up), flows=flows+VALUES(flows)")
+        prof = ("INSERT INTO ml_app_port (site, proto, port, direction, bytes, flows) VALUES (%s,%s,%s,%s,%s,%s) "
+                "ON DUPLICATE KEY UPDATE last_seen=NOW(), bytes=bytes+VALUES(bytes), flows=flows+VALUES(flows)")
+        profile = {}
+        for b, c, u, site, proto, port, d, down, up, fl in rows:
+            k = (site, proto, port, d)
+            v = profile.setdefault(k, [0, 0])
+            v[0] += down + up
+            v[1] += fl
+        try:
+            with self.conn().cursor() as c:
+                c.executemany(sql, rows)
+                c.executemany(prof, [k + tuple(v) for k, v in profile.items()])
+                if int(time.time()) % 3600 < FLUSH_EVERY:
+                    c.execute("DELETE FROM traffic_port WHERE bucket < NOW() - INTERVAL %s DAY", (keep_days,))
+        except self.pymysql.MySQLError:
+            self.db = None
+            raise
+
     def write(self, rows, keep_days):
         sql = ("INSERT INTO traffic_site (bucket, client_ip, username, site, bytes_down, bytes_up, flows) "
                "VALUES (%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE username=VALUES(username), "
@@ -336,7 +365,7 @@ def main():
     os.makedirs(os.path.dirname(NOW_FILE), exist_ok=True)
     print(f"traffic collector listening on udp/{port}, LAN {','.join(lan)}", flush=True)
 
-    agg, last_flush, rejected = {}, time.time(), 0
+    agg, pagg, last_flush, rejected = {}, {}, time.time(), 0
     while True:
         now = time.time()
         try:
@@ -348,10 +377,15 @@ def main():
                     r = cls.classify(rec)
                     if not r or not dedupe.first(r[4], now):
                         continue
-                    client, remote, direction, nbytes, _ = r
-                    a = agg.setdefault((client, names.site(client, remote)), [0, 0, 0])
+                    client, remote, direction, nbytes, _, proto, cport, rport = r
+                    site = names.site(client, remote)
+                    a = agg.setdefault((client, site), [0, 0, 0])
                     a[0 if direction == "down" else 1] += nbytes
                     a[2] += 1
+                    pdir, pport = ports.service(proto, cport, rport)
+                    pa = pagg.setdefault((client, site, int(proto or 0), int(pport), pdir), [0, 0, 0])
+                    pa[0 if direction == "down" else 1] += nbytes
+                    pa[2] += 1
             else:
                 rejected += 1
         except socket.timeout:
@@ -371,10 +405,14 @@ def main():
             snapshot = {"time": int(now), "interval": round(interval, 1),
                         "rows": [{"ip": c, "user": users.get(c, ""), "site": s, "down": v[0], "up": v[1]}
                                  for (c, s), v in agg.items()]}
+            prows = [(bucket, c, users.get(c, ""), s, pr, po, d, v[0], v[1], v[2]) for (c, s, pr, po, d), v in pagg.items()]
             try:
                 if rows:
                     store.write(rows, keep_days)
                 agg = {}
+                if prows:
+                    store.write_ports(prows, keep_days)
+                pagg = {}
             except Exception as e:  # keep the counters and retry on the next flush
                 print(f"warning: database write failed, retrying: {e}", file=sys.stderr, flush=True)
             tmp = NOW_FILE + ".tmp"
