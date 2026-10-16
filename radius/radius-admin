@@ -1152,6 +1152,8 @@ cmd_policy() {
         ok "Policy '$n' deleted" ;;
     build)
         install -d -m 755 "$ROUTER_DIR" "$POLICY_DIR"
+        exec 9>/run/mikrotiklover-build.lock           # one build at a time (cron + dashboard + CLI)
+        flock -w 300 9 || die "another router-rules build is still running"
         local lists; lists=$(mktemp -d)
         { echo "SELECT domain FROM ml_vpn_domain ORDER BY domain" | db 2>/dev/null || true; } | grep -E '^[a-z0-9.-]+$' > "$lists/vpn-domains.txt" || true
         if ! WF_OUT="$lists" POLICY_DIR="$POLICY_DIR" VPN_DOMAINS="$lists/vpn-domains.txt" CDNMAP=/usr/local/lib/mikrotiklover/cdnmap.py \
@@ -1441,6 +1443,16 @@ run_update() { # run_update NAME command...
     local out; if out=$("$@" 2>&1); then update_stamp "$name" "ok: $(tail -1 <<<"$out" | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-120)"; echo "✔ $name"
     else update_stamp "$name" "failed: $(tail -1 <<<"$out" | cut -c1-120)"; echo "! $name: $(tail -1 <<<"$out")"; fi
 }
+cmd_hourly() { # cron, every hour: one run at a time; each job's result is shown in Settings → Automatic updates
+    exec 8>/run/mikrotiklover-hourly.lock
+    flock -n 8 || { echo "the hourly jobs are still running"; return 0; }
+    run_update "Hourly: learn app domains + find new apps" cmd_cdn learn
+    run_update "Hourly: app inventory + website names" cmd_apps update
+    run_update "Hourly: VPN & proxy scan" cmd_vpn scan
+    run_update "Hourly: security scan" cmd_security scan
+    run_update "Hourly: router rules" cmd_policy build
+}
+
 cmd_update() {
     run_update "App catalog" python3 -I /usr/local/lib/mikrotiklover/cdnmap.py catalog-update ${CATALOG_URL:+"$CATALOG_URL"}
     run_update "IP owner lists (ASN)" python3 -I /usr/local/lib/mikrotiklover/cdnmap.py update
@@ -1773,6 +1785,7 @@ case ${1:-help} in
     backups) cmd_backups ;;
     restore) shift; cmd_restore "$@" ;;
     update)  cmd_update ;;
+    hourly)  cmd_hourly ;;
     syslog-sync) syslog_sync ;;
     online)  cmd_online ;;
     log)     shift; cmd_log "$@" ;;

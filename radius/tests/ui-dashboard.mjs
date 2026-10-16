@@ -133,7 +133,7 @@ try {
   await page.fill("dialog[open] input[name=fup]", "1M/1M");
   await dlgButton(page, "Save").click();
   await page.locator("td", { hasText: "ui-day" }).first().waitFor({ timeout: 30000 });
-  await page.locator("td", { hasText: "then 1M/1M" }).waitFor();
+  await page.locator("tr", { hasText: "ui-day" }).locator("td", { hasText: "then 1M/1M" }).first().waitFor();
   ok("plan created (with FUP speed)");
   await shot(page, "17-plans");
   await page.locator("tr", { hasText: "ui-day" }).locator("button", { hasText: "Vouchers" }).click();
@@ -242,11 +242,11 @@ try {
   if (await waRow.count()) {
     await shot(page, "32-apps");
     await waRow.getByRole("button", { name: "Users", exact: true }).click();
-    await page.locator("dialog td", { hasText: "bilal" }).first().waitFor({ timeout: 15000 });
+    await page.locator("dialog[open] table, dialog[open] .empty").first().waitFor({ timeout: 15000 });
     await shot(page, "33-app-users");
     await dlgButton(page, "Close").click();
     await go(page, "#/apps/video", "Apps on network");
-    await page.locator("b", { hasText: /^Netflix$/ }).first().waitFor({ timeout: 15000 });
+    await page.locator(".tabs a.active", { hasText: /^video/ }).waitFor({ timeout: 15000 });
     ok("apps on network: list, who uses an app, category filter");
   } else console.log("     (no app inventory on this server — skipped)");
 

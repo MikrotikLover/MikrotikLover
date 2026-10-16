@@ -30,3 +30,21 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 23:30 | radius-admin test (fix ka dobara check) | ✅ sirf server ka jawab dikhata hai (password wali request lines nahi) |
 | 23:31 | Raat ka block (misaal 22:00 se 06:00) | ❌→✅ BUG 15: aadhi raat paar karne wala waqt router par kabhi lagta hi nahi (RouterOS range 00:00 paar nahi kar sakti). FIX: khud do hisson mein (22:00–24:00 + agle din 00:00–06:00, din bhi agle din ke). Nayi misaal policy 'kids-night'. Simulator ke 7 naye cases pass (ab total 70) |
 | 23:32 | Policy ka khali waqt (09:00–09:00) | ⚠️ BUG 16: aisi policy chupke se kabhi lagti nahi thi → ab saaf error ✅ |
+| 23:33 | Lambe dashboard kaam (Run all updates, backup) + ek saath chalne wale kaam | ⚠️ BUG 17: nginx 150 sec baad 'Gateway timeout' de deta (asal internet par updates/backup lambe ho sakte hain) → 900 sec. BUG 18: hourly jobs agar ek ghante se lambe chalein to doosra run saath shuru ho kar DB par takrata; dashboard + cron ek saath router rules banate. FIX: 'radius-admin hourly' lock ke saath (dobara chalaya: doosra run khud ruk gaya ✅), build par lock, aur har hourly job ka nateeja ab Settings → Automatic updates mein ✅ |
+| 23:34 | Database band ho jaye to? | ⚠️ BUG 19: dashboard HTML '500 Internal Server Error' dikhata; Wi-Fi login DB wapas aane ke 30 sec baad tak fail. FIX: saaf message 'database not reachable' (503) ✅, FreeRADIUS 5 sec mein dobara jur jata hai ✅ |
+| 23:37 | Dashboard ke 41 pages: admin aur viewer, computer (light) aur phone (dark) | ✅ koi console error, error toast ya screen se bahar jata page nahi; viewer ko admin buttons nazar nahi aate |
+| 23:42 | Browser test ki kamzori | ⚠️ 3 jagah test purane test-data par tika tha (Netflix, bilal, ek jaisa FUP text) → test data se azad kiya ✅ (product bug nahi) |
+| 23:42 | AAKHRI ROUND: installer dobara, 254 automatic checks, 40 browser checks, CLI fuzz, 41 pages x 2 (admin/viewer, computer/phone) | ✅ sab pass |
+
+## Khulasa
+
+- **19 asal bugs mile aur sab theek hue** (har ek ke saath test), aur browser test ki 3 kamzoriyan bhi door ki gayin.
+- **Sab se zaroori fixes:**
+  - **BUG 11 (data loss):** roz subah log rotate hone ke baad kal ka data mit jata tha.
+  - **BUG 15:** raat ka block (22:00–06:00) router par lagta hi nahi tha.
+  - **BUG 9:** router sync ek duplicate entry par ruk jata tha.
+  - **BUG 17–18:** lambe kaam par timeout, aur do kaamon ka takrana.
+- **Is container mein test nahi ho sakte:**
+  - asli MikroTik router par scripts ka import aur auto-sync (yahan RouterOS nahi chalta);
+  - asal internet se threat lists ke kuch sources (yahan sirf GitHub khulta hai);
+  - app catalog ka update (PR merge hone ke baad chalega).

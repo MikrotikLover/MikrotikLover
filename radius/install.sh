@@ -200,7 +200,8 @@ install -m 750 "$SCRIPT_DIR/radius-admin" /usr/local/sbin/radius-admin
 cat > /etc/cron.d/mikrotiklover <<'EOF'
 # MikrotikLover RADIUS (install.sh)
 */5 * * * * root /usr/local/sbin/radius-admin enforce >/dev/null 2>&1
-7 * * * * root /usr/local/sbin/radius-admin cdn learn >/dev/null 2>&1; /usr/local/sbin/radius-admin apps update >/dev/null 2>&1; /usr/local/sbin/radius-admin vpn scan >/dev/null 2>&1; /usr/local/sbin/radius-admin security scan >/dev/null 2>&1; /usr/local/sbin/radius-admin policy build >/dev/null 2>&1
+# hourly: learn app domains, app inventory + website names, VPN scan, security scan, router rules
+7 * * * * root /usr/local/sbin/radius-admin hourly >/dev/null 2>&1
 # weekly: app catalog, IP owners, new app names, threat lists, VPN lists, router rules
 17 4 * * 2 root /usr/local/sbin/radius-admin update >/dev/null 2>&1
 # nightly complete backup (newest 14 kept in /var/backups/mikrotiklover)
@@ -373,7 +374,7 @@ EOF
         echo '        proxy_set_header X-Forwarded-For $remote_addr;'
         echo "        proxy_set_header X-Forwarded-Proto https;"
         echo '        proxy_set_header X-Forwarded-Port $server_port;'
-        echo "        proxy_read_timeout 150s;"
+        echo "        proxy_read_timeout 900s;    # backups, Run all updates now and threat-list downloads can take minutes"
         echo "    }"
         echo "}"
     } > /etc/nginx/sites-available/mikrotiklover

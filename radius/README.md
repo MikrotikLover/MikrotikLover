@@ -202,6 +202,7 @@ Upar wali DNS blocking **sab** par lagti hai. Policies se har user, group ya IP 
 | `guests` | Torrent, VPN, adult words + Cloudflare family DNS |
 | `no-internet` | Internet bilkul band |
 | `night-off` | Raat 12 se 6 tak internet band, din mein guests jaisa |
+| `kids-night` | School ki raaton 22:00–06:00 internet band, games 21:00–07:00 band (aadhi raat paar karne wala waqt khud do hisson mein toot jata hai) |
 | `no-video` | Facebook/Instagram **videos & Reels**, YouTube **videos**, TikTok band — Facebook feed, photos, Messenger, WhatsApp, Google chalte hain |
 | `no-video-day` | Wohi, lekin sirf din mein (8:00–20:00); raat ko videos chalti hain |
 
@@ -602,6 +603,7 @@ sudo radius-admin apps update               # abhi update karein (cron har ghant
 | `guests` | Torrent, VPN, adult band |
 | `no-internet` | Internet band |
 | `night-off` | Raat 12 se 6 tak internet band |
+| `kids-night` | School ki raaton (itwar–jumeraat) 22:00–06:00 internet band, games 21:00–07:00 band. Aadhi raat paar karne wala waqt khud do hisson mein toot jata hai |
 
 CLI:
 ```bash
@@ -876,4 +878,4 @@ sudo radius-admin restore FILE                 # sab wapas (pehle maujooda haala
 | Public VPN / Tor lists | X4BNet, Tor project (agar `radius-admin vpn update` ek dafa chalaya ho) |
 | Router rules | auto-sync ke liye |
 
-Har ghante yeh kaam bhi khud chalte hain: app domains seekhna, nayi apps dhoondna, app inventory, website names, VPN watch aur security scan. Har kaam ka aakhri run aur nateeja Dashboard → **Settings → Automatic updates** mein dikhta hai.
+Har ghante `radius-admin hourly` yeh kaam khud chalata hai (ek waqt mein sirf ek run): app domains seekhna, nayi apps dhoondna, app inventory, website names, VPN watch, security scan aur router rules. Har kaam ka aakhri run aur nateeja Dashboard → **Settings → Automatic updates** mein dikhta hai.

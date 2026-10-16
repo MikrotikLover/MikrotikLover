@@ -163,6 +163,18 @@ def json_error(e):
     return jsonify(error=getattr(e, "description", str(e))), e.code
 
 
+@app.errorhandler(pymysql.err.OperationalError)
+def db_down(e):
+    """MariaDB stopped / restarting: a clear message instead of an HTML 500 page."""
+    app.logger.warning("database: %s", e)
+    return jsonify(error="The database is not reachable (MariaDB stopped?). Try again in a moment."), 503
+
+
+@app.errorhandler(500)
+def server_error(e):
+    return jsonify(error="Server error — see /var/log/mikrotik/web.log"), 500
+
+
 @app.after_request
 def security_headers(resp):
     resp.headers["Content-Security-Policy"] = ("default-src 'self'; img-src 'self' data:; style-src 'self'; "
