@@ -57,3 +57,57 @@ add name=freedns.controld.com type=NXDOMAIN match-subdomain=yes comment="webfilt
 add name=use-application-dns.net type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
 add name=mask.icloud.com type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
 add name=mask-h2.icloud.com type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
+
+# Encrypted DNS on servers that are not in doh-servers: reset HTTPS by server name (SNI)
+/ip firewall filter
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="dns.google" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.dns.google" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="dns64.dns.google" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.dns64.dns.google" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="cloudflare-dns.com" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.cloudflare-dns.com" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="one.one.one.one" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.one.one.one.one" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="dns.quad9.net" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.dns.quad9.net" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="doh.opendns.com" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.doh.opendns.com" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="dns.adguard-dns.com" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.dns.adguard-dns.com" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="dns.adguard.com" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.dns.adguard.com" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="dns.nextdns.io" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.dns.nextdns.io" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="doh.cleanbrowsing.org" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.doh.cleanbrowsing.org" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="doh.mullvad.net" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.doh.mullvad.net" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="dns.mullvad.net" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.dns.mullvad.net" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="dns.controld.com" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.dns.controld.com" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="freedns.controld.com" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.freedns.controld.com" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="use-application-dns.net" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.use-application-dns.net" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="mask.icloud.com" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.mask.icloud.com" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="mask-h2.icloud.com" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.mask-h2.icloud.com" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
+move [find comment~"^webfilter:"] destination=0
+
+# ---- IPv6: close the same bypasses (direct DNS, DoT, DoH) if your LAN has IPv6
+/ipv6 firewall address-list
+remove [find comment="webfilter:doh-ip"]
+:foreach a in={"2606:4700:4700::1111";"2606:4700:4700::1001";"2606:4700:4700::1112";"2606:4700:4700::1002";"2606:4700:4700::1113";"2606:4700:4700::1003";"2001:4860:4860::8888";"2001:4860:4860::8844";"2620:fe::fe";"2620:fe::9";"2620:fe::11";"2620:119:35::35";"2620:119:53::53";"2a10:50c0::ad1:ff";"2a10:50c0::ad2:ff"} do={
+    add list=doh-servers address=$a comment="webfilter:doh-ip"
+}
+/ipv6 firewall filter
+remove [find comment~"^webfilter:"]
+add chain=forward in-interface-list=LAN protocol=udp dst-port=53 action=drop comment="webfilter: v6 direct DNS (use router)"
+add chain=forward in-interface-list=LAN protocol=tcp dst-port=53 action=reject reject-with=tcp-reset comment="webfilter: v6 direct DNS (use router)"
+add chain=forward in-interface-list=LAN protocol=tcp dst-port=853 action=reject reject-with=tcp-reset comment="webfilter: v6 DNS-over-TLS"
+add chain=forward in-interface-list=LAN protocol=udp dst-port=853 action=drop comment="webfilter: v6 DNS-over-QUIC"
+add chain=forward in-interface-list=LAN dst-address-list=doh-servers protocol=tcp dst-port=443 action=reject reject-with=tcp-reset comment="webfilter: v6 DNS-over-HTTPS"
+add chain=forward in-interface-list=LAN dst-address-list=doh-servers protocol=udp dst-port=443 action=drop comment="webfilter: v6 DNS-over-HTTP/3"
+move [find comment~"^webfilter:"] destination=0

@@ -123,6 +123,8 @@ Filtering MikroTik router ke DNS par hoti hai (RouterOS **7.15+**). Blocked site
 **Step 1 — base (zaroori, sab se pehle):** `webfilter-base.rsc`
 - LAN ke har device ko router ka DNS use karna padta hai (port 53 redirect) — 8.8.8.8 likh kar bypass nahi hota.
 - Encrypted DNS band: DoT (853), DoH servers (Google, Cloudflare, Quad9, AdGuard, NextDNS, ...), Firefox DoH, iCloud Private Relay.
+- DoH ko **naam (SNI)** se bhi rokta hai — DoH server kisi nayi IP par ho tab bhi `dns.google`, `cloudflare-dns.com` wagera band.
+- **IPv6** par bhi wohi rasta band (direct DNS, DoT, DoH) — warna IPv6 wala phone filter se nikal jata.
 - Address list `web-filter-exempt` wale devices par koi filter nahi (management, IT).
 
 **Step 2 — categories (jo chahiye woh import karein):**
@@ -177,11 +179,61 @@ Is liye keyword blocking 3 tareeqon se hoti hai:
 2. **Search mein word** ("sex video" Google/YouTube par) → `webfilter-safesearch.rsc`. SafeSearch / YouTube Restricted Mode zabardasti on, user off nahi kar sakta. Devices par koi certificate nahi chahiye.
 3. **Har page ke URL path / content mein word** → sirf SSL-inspection proxy (Squid ssl-bump + e2guardian) se mumkin hai. Is ke liye har device par apna CA certificate install karna padta hai; banking/WhatsApp jaisi certificate-pinning wali apps toot jati hain, aur sab users ka HTTPS traffic decrypt hota hai (privacy / legal zimmedari). MikroTik khud ye nahi kar sakta — alag Linux server chahiye.
 
-**Behtareen combination:** `webfilter-base` + `webfilter-adlists` (adult ~75k sites) + `webfilter-keywords` + `webfilter-safesearch`.
+**Behtareen combination:** `webfilter-base` + `webfilter-adlists` (adult ~75k sites) + `webfilter-keywords` + `webfilter-safesearch` + `webfilter-vpn-protocols`.
+
+### Sirf WhatsApp (baqi sab band) — `allow-only-whatsapp.rsc`
+
+Kisi user/device ko sirf WhatsApp dena ho (chat, voice/video call, photo/video, voice note, status, WhatsApp Web) aur **YouTube, Facebook, Instagram, TikTok, browser — sab band**:
+
+1. Router par `webfilter-base.rsc` aur phir `allow-only-whatsapp.rsc` import karein.
+2. Device ko address list `allow-only-whatsapp` mein daalein — jo tareeqa aap ke network par ho:
+
+| Kaise | Command |
+|---|---|
+| Ek device, MAC se (DHCP) | `/ip dhcp-server lease make-static [find mac-address=AA:BB:CC:DD:EE:FF]` phir `/ip dhcp-server lease set [find mac-address=AA:BB:CC:DD:EE:FF] address-lists=allow-only-whatsapp` |
+| Fixed IP / poora subnet | `/ip firewall address-list add list=allow-only-whatsapp address=192.168.88.50` |
+| Hotspot user (RADIUS) | `sudo radius-admin group add whatsapp-only --address-list allow-only-whatsapp` → `sudo radius-admin user add ahmed -g whatsapp-only` |
+| WPA-Enterprise user / MAC device | `sudo radius-admin group add whatsapp-only --vlan 50`, us VLAN ka subnet list mein: `/ip firewall address-list add list=allow-only-whatsapp address=192.168.50.0/24` |
+
+Wapas normal karna: address list se entry hata dein (ya lease se `address-lists` khali kar dein).
+
+**Ye kaise kaam karta hai** (WhatsApp ka apna chat protocol encrypted hai aur us mein website ka naam nahi hota, is liye sirf naam se allow karna kaam nahi karta):
+- WhatsApp ke servers Meta (AS32934) ke networks mein hain → sirf in networks ki taraf traffic allow (`webfilter/allowonly/meta-ipv4.txt`).
+- Facebook, Instagram, Messenger, Threads bhi **unhi** servers par hain → un ke HTTPS connections naam (SNI) se reset, aur QUIC (UDP 443) band taa ke woh apps TCP par aa kar pakri jayein.
+- Phone ko "Wi-Fi par internet nahi" na lage, is liye connectivity check (sirf HTTP) allow, aur notifications ke liye Android push (5228-5230) / iPhone push (5223).
+- Baqi har cheez reject.
+
+`tests/simulate-allowonly.py` 19 cases check karta hai (WhatsApp chat/media/call/Web allow; Facebook, Instagram, Messenger, YouTube, TikTok, QUIC, App Store block; normal users par asar nahi).
+
+**Dhyan rakhein:**
+- In devices ka **IPv6 band** hona chahiye (address lists IPv4 hain) — un ke network/VLAN par IPv6 address/RA na dein.
+- `webfilter-messaging.rsc` (jo WhatsApp block karti hai) is ke saath import **na** karein.
+- Meta naye networks laata rehta hai; mahine mein ek dafa `./webfilter/build.sh --update-meta` chala kar nayi `allow-only-whatsapp.rsc` import karein. Agar kabhi WhatsApp na chale to pehla qadam yahi hai.
+- Doosri apps ke liye bhi aisa profile ban sakta hai: `webfilter/allowonly/<naam>.txt` banayein (`whatsapp.txt` jaisa), `build.sh` chalayein → `mikrotik/allow-only-<naam>.rsc`.
+
+### VPN apps ko rokna — `webfilter-vpn-protocols.rsc`
+
+`webfilter-vpn-proxy.rsc` VPN ki **websites** band karti hai; ye script install shuda VPN apps ke **connections** rokti hai: OpenVPN, WireGuard, PPTP, L2TP, IPsec, Tor. `web-filter-exempt` (IT/manager) par asar nahi. Office ka IPsec VPN use hota ho to IPsec wale 2 rules hata dein. Jo VPN port 443 par HTTPS jaisa ban kar chalti hai (Psiphon) woh is se nahi rukti — aise users ke liye allow-only profile behtar hai.
+
+### Time ke hisaab se blocking (sirf office hours)
+
+```routeros
+/system scheduler
+add name=social-block-on  start-time=09:00:00 interval=1d on-event="/ip dns static enable [find comment=\"webfilter:social\"]; /ip dns cache flush"
+add name=social-block-off start-time=17:00:00 interval=1d on-event="/ip dns static disable [find comment=\"webfilter:social\"]; /ip dns cache flush"
+```
+Kisi bhi category ka naam badal kar (`webfilter:video-streaming`, `webfilter:gaming`, ...) yahi kaam karta hai.
+
+### Scripts check karna
+
+```bash
+python3 tests/lint-rsc.py             # har .rsc: quotes, braces, menu aur property names
+python3 tests/simulate-allowonly.py   # WhatsApp-only rules ka simulation
+```
 
 **Limitations (honestly):**
 - HTTPS mein poora URL path (`site.com/page`) router nahi dekh sakta — blocking **domain** level par hoti hai (upar dekhein).
-- Device par pehle se install VPN app DNS filter ko bypass kar sakti hai; `vpn-proxy` category sirf VPN websites band karti hai.
+- Port 443 par chhupi hui VPN (Psiphon jaisi) DNS filter bypass kar sakti hai; `vpn-protocols` baqi VPN band karta hai, sakhti chahiye to allow-only profile.
 - Naye DoH servers aate rehte hain; `webfilter/categories/doh.txt` aur `base.rsc.in` ki IP list update karte rahein.
 
 ## 6. Monitoring aur testing

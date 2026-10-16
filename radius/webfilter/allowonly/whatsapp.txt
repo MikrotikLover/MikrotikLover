@@ -1,0 +1,31 @@
+# Profile: WhatsApp only — chat, voice/video calls, photos/videos/voice notes, status, WhatsApp Web.
+# Devices in address list "allow-only-whatsapp" can use ONLY this; every other site/app is blocked.
+#
+# Directives:
+#   net @meta          allow the Meta networks from meta-ipv4.txt (WhatsApp chat + call relays)
+#   net CIDR           allow one more network
+#   host NAME          allow a hostname (router resolves it and keeps its IPs updated)
+#   deny-sni WORD      inside the allowed networks, reset HTTPS to names containing WORD
+#                      (Facebook, Instagram, Messenger share Meta's servers with WhatsApp)
+#   block-quic         drop UDP 443 to the allowed networks (forces the Facebook/Instagram
+#                      apps onto TCP, where deny-sni catches them; WhatsApp does not use QUIC)
+
+net @meta
+host g.whatsapp.net
+host web.whatsapp.com
+host mmg.whatsapp.net
+host pps.whatsapp.net
+host static.whatsapp.net
+host media.whatsapp.net
+
+deny-sni facebook
+deny-sni fbcdn
+deny-sni fbsbx
+deny-sni instagram
+deny-sni messenger
+deny-sni threads
+deny-sni oculus
+deny-sni meta.com
+deny-sni meta.ai
+deny-sni workplace
+block-quic
