@@ -41,6 +41,7 @@ const ICONS = {
   money: "M3 6h18v12H3zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6M6 9v.01M18 15v.01",
   print: "M6 9V3h12v6M6 18H4v-7h16v7h-2M7 14h10v7H7z",
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14m10 3-5.2-5.2",
+  apps: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
   ports: "M7 7h10v10H7zM3 9h4M3 15h4M17 9h4M17 15h4M9 3v4M15 3v4M9 17v4M15 17v4",
   plus: "M12 5v14M5 12h14",
   refresh: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7",
@@ -201,7 +202,7 @@ const NAV = [
   ["macs", "MAC devices", "mac"], ["routers", "Routers", "router"], "-",
   ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
-  ["data", "Data usage", "data"], ["ports", "Ports & protocols", "ports"], "-", ["settings", "Settings", "settings"],
+  ["data", "Data usage", "data"], ["apps", "Apps on network", "apps"], ["ports", "Ports & protocols", "ports"], "-", ["settings", "Settings", "settings"],
 ];
 
 function shell(title, content, actions) {
@@ -1003,6 +1004,44 @@ ROUTES.cdn = async (initial) => {
   loadUnknown().catch(() => unknown.replaceChildren(h("div", { class: "empty" }, "No traffic data.")));
   loadApps().catch((e) => appsBox.replaceChildren(h("div", { class: "note" }, e.message)));
   if (initial) await check(initial);
+};
+
+// ------------------------------------------------------------------ apps on the network (automatic list)
+ROUTES.apps = async (cat = "") => {
+  const holder = h("div", { class: "stack" });
+  const days = h("select", {}, [["1", "Today"], ["7", "7 days"], ["30", "30 days"], ["90", "90 days"]].map(([v, l]) => h("option", { value: v, selected: v === "7" }, l)));
+  const user = h("input", { type: "search", placeholder: "User" }), ip = h("input", { type: "search", placeholder: "Device IP" });
+  const srcBadge = (r) => r.source === "discovered" ? badge("auto-discovered", "warn") : null;
+  const showUsers = async (r) => {
+    const d = await api("GET", `/api/apps/users?${new URLSearchParams({ site: r.site, days: days.value })}`);
+    dialog(`${r.app} — who uses it`, table([{ label: "Device", render: (x) => h("span", {}, x.client_ip, x.username ? h("div", { class: "muted" }, x.username) : null) },
+      { label: "Lookups", key: "lookups", num: true }, { label: "Data", num: true, render: (x) => bytes(x.bytes) },
+      { label: "Days", render: (x) => x.first_day === x.last_day ? String(x.first_day) : `${x.first_day} → ${x.last_day}` }], d.rows, "Nobody in this period."), [{ label: "Close" }]);
+  };
+  const load = async () => {
+    const d = await api("GET", `/api/apps?${new URLSearchParams({ days: days.value, user: user.value.trim(), ip: ip.value.trim(), category: cat, top: 300 })}`);
+    const t = d.totals;
+    holder.replaceChildren(
+      h("div", { class: "grid g-tiles" }, tile("Apps seen (all time)", num(t.apps)), tile("In this period", num(d.rows.length), cat ? `category: ${cat}` : "all categories"),
+        tile("New this week", num(t.new_apps), "first seen in the last 7 days"), tile("Found automatically", num(t.discovered), "new apps, named from their website")),
+      h("div", { class: "tabs" }, h("a", { href: "#/apps", class: cat ? "" : "active" }, "All"),
+        d.categories.map((c) => h("a", { href: `#/apps/${c.category}`, class: c.category === cat ? "active" : "" }, `${c.category} (${c.n})`))),
+      h("div", { class: "card" }, table([
+        { label: "App", render: (r) => h("span", {}, h("b", {}, r.app), " ", Number(r.is_new) ? badge("NEW", "ok") : null, " ", srcBadge(r), h("div", { class: "muted" }, r.site)) },
+        { label: "Category", render: (r) => badge(r.category, "info") },
+        { label: "Devices", key: "devices", num: true }, { label: "Users", key: "users", num: true }, { label: "Lookups", key: "lookups", num: true },
+        { label: "Data", num: true, render: (r) => bytes(r.bytes) },
+        { label: "First / last seen", render: (r) => h("span", {}, String(r.first_seen).slice(0, 10), h("div", { class: "muted" }, String(r.last_seen).slice(0, 16))) },
+        { label: "", render: (r) => h("div", { class: "toolbar" }, h("button", { class: "small", onclick: () => showUsers(r).catch((e) => toast(e.message, true)) }, "Users"),
+          h("a", { class: "btn small", href: `#/cdn` }, "Domains"),
+          h("a", { class: "btn small", href: `/api/cdn/rsc?app=${encodeURIComponent(r.app)}`, title: "RouterOS script that blocks every known domain of this app" }, "⬇ Block")) },
+      ], d.rows, "No apps yet — the list fills itself every hour from the router's DNS log (radius-admin dnslog on).")));
+  };
+  shell("Apps on network", h("div", { class: "stack" },
+    h("div", { class: "note" }, "Built automatically every hour: every app any device used, with category, devices, users and data. New apps that are not in the catalog are discovered and named from their website."),
+    card(null, null, h("div", { class: "toolbar" }, days, user, ip, h("button", { class: "primary", onclick: () => load().catch((e) => toast(e.message, true)) }, "Show"))),
+    holder));
+  await load();
 };
 
 // ------------------------------------------------------------------ ports & protocols

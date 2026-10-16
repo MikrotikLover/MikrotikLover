@@ -144,3 +144,26 @@ CREATE TABLE IF NOT EXISTS ml_app_port (
   flows BIGINT UNSIGNED NOT NULL DEFAULT 0,
   PRIMARY KEY (site, proto, port, direction)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- App inventory: every app seen on the network (tools/appinv.py, hourly). Kept for good.
+CREATE TABLE IF NOT EXISTS ml_app (
+  site VARCHAR(253) NOT NULL PRIMARY KEY,
+  app VARCHAR(64) NOT NULL,
+  category VARCHAR(32) NOT NULL DEFAULT 'other',
+  source ENUM('builtin','local','discovered') NOT NULL DEFAULT 'builtin',
+  first_seen DATETIME NOT NULL,
+  last_seen DATETIME NOT NULL,
+  KEY idx_first (first_seen)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- App use per day and device (APP_DAYS, default 180 days)
+CREATE TABLE IF NOT EXISTS ml_app_day (
+  day DATE NOT NULL,
+  site VARCHAR(253) NOT NULL,
+  client_ip VARCHAR(45) NOT NULL,
+  username VARCHAR(64) NOT NULL DEFAULT '',
+  queries INT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, site, client_ip),
+  KEY idx_site (site, day),
+  KEY idx_user (username, day)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -236,6 +236,20 @@ try {
   await shot(page, "31-app-port-profiles");
   ok("ports & protocols: top ports, inbound, saved app profiles");
 
+  // apps on the network (automatic inventory)
+  await go(page, "#/apps", "Apps on network");
+  const waRow = page.locator("tr", { has: page.locator("b", { hasText: /^WhatsApp$/ }) }).first();
+  if (await waRow.count()) {
+    await shot(page, "32-apps");
+    await waRow.getByRole("button", { name: "Users", exact: true }).click();
+    await page.locator("dialog td", { hasText: "bilal" }).first().waitFor({ timeout: 15000 });
+    await shot(page, "33-app-users");
+    await dlgButton(page, "Close").click();
+    await go(page, "#/apps/video", "Apps on network");
+    await page.locator("b", { hasText: /^Netflix$/ }).first().waitFor({ timeout: 15000 });
+    ok("apps on network: list, who uses an app, category filter");
+  } else console.log("     (no app inventory on this server — skipped)");
+
   // business settings
   await go(page, "#/settings", "Settings");
   await page.fill("input[name=brand]", "Lover Net WiFi");

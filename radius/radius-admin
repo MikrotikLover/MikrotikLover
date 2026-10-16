@@ -1032,6 +1032,52 @@ cmd_ports() {
     [ "$by" != in ] || echo "IN = started from the internet towards a LAN device (port-forward, DVR/camera, server). Unknown ones deserve a look."
 }
 
+cmd_apps() {
+    local sub=list days=7 top=60 user="" ip="" cat="" app=""
+    case ${1:-} in update|new|users) sub=$1; shift ;; esac
+    if [ "$sub" = update ]; then
+        local out; out=$(python3 -I /usr/local/lib/mikrotiklover/appinv.py sql --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@" 2>&1 >"${TMPDIR:-/tmp}/appinv.$$.sql") \
+            || { rm -f "${TMPDIR:-/tmp}/appinv.$$.sql"; die "app inventory failed: $out"; }
+        db < "${TMPDIR:-/tmp}/appinv.$$.sql"; rm -f "${TMPDIR:-/tmp}/appinv.$$.sql"
+        ok "${out#appinv: }"; return
+    fi
+    if [ "$sub" = users ]; then app=${1:-}; [ -n "$app" ] || die "usage: radius-admin apps users APP [--days N]"; shift; fi
+    [ "$sub" != new ] || { [[ ${1:-} =~ ^[0-9]+$ ]] && { days=$1; shift; }; }
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --days) days=${2:-}; valid_int "$days" days; shift 2 ;;
+            --top)  top=${2:-}; valid_int "$top" top; shift 2 ;;
+            -u|--user) user=${2:-}; valid_name "$user" username; shift 2 ;;
+            --ip)   ip=${2:-}; valid_ip "$ip"; shift 2 ;;
+            --category) cat=${2:-}; [[ $cat =~ ^[a-z]{2,20}$ ]] || die "Invalid category"; shift 2 ;;
+            *) die "usage: radius-admin apps [--days N] [-u USER] [--ip IP] [--category C] [--top N] | apps new [DAYS] | apps users APP | apps update" ;;
+        esac
+    done
+    local w="d.day >= CURDATE() - INTERVAL $days DAY" tw="t.bucket >= CURDATE() - INTERVAL $days DAY"
+    [ -z "$user" ] || { w+=" AND d.username=$(q "$user")"; tw+=" AND t.username=$(q "$user")"; }
+    [ -z "$ip" ]   || { w+=" AND d.client_ip=$(q "$ip")"; tw+=" AND t.client_ip=$(q "$ip")"; }
+    [ -z "$cat" ]  || w+=" AND a.category=$(q "$cat")"
+    case $sub in
+        list) echo "SELECT a.app, a.category, a.site, COUNT(DISTINCT d.client_ip) AS devices, COUNT(DISTINCT NULLIF(d.username,'')) AS users,
+                           SUM(d.queries) AS lookups,
+                           (SELECT COALESCE(SUM(t.bytes_down+t.bytes_up),0) FROM traffic_site t WHERE t.site=a.site AND $tw) AS total,
+                           DATE(a.first_seen) AS first_seen, DATE_FORMAT(a.last_seen,'%Y-%m-%d %H:%i') AS last_seen,
+                           IF(a.first_seen >= NOW() - INTERVAL 7 DAY,'NEW','') AS new
+                    FROM ml_app a JOIN ml_app_day d ON d.site=a.site WHERE $w
+                    GROUP BY a.site ORDER BY devices DESC, lookups DESC LIMIT $top;" | dbh | python3 -I /usr/local/lib/mikrotiklover/ports.py table
+              echo "$(echo "SELECT COUNT(*) FROM ml_app" | db) apps seen on this network so far (radius-admin apps new — the latest ones)" ;;
+        new)  echo "SELECT app, category, site, source, first_seen, last_seen,
+                           (SELECT COUNT(DISTINCT client_ip) FROM ml_app_day d WHERE d.site=a.site) AS devices
+                    FROM ml_app a WHERE first_seen >= NOW() - INTERVAL $days DAY ORDER BY first_seen DESC;" | dbt ;;
+        users) echo "SELECT a.app, d.client_ip AS device, MAX(NULLIF(d.username,'')) AS user, SUM(d.queries) AS lookups,
+                            (SELECT COALESCE(SUM(t.bytes_down+t.bytes_up),0) FROM traffic_site t WHERE t.site=a.site AND t.client_ip=d.client_ip AND $tw) AS total,
+                            MIN(d.day) AS first_day, MAX(d.day) AS last_day
+                     FROM ml_app a JOIN ml_app_day d ON d.site=a.site
+                     WHERE $w AND (a.site=$(q "${app,,}") OR a.app=$(q "$app"))
+                     GROUP BY a.site, d.client_ip ORDER BY lookups DESC LIMIT $top;" | dbh | python3 -I /usr/local/lib/mikrotiklover/ports.py table ;;
+    esac
+}
+
 cmd_sales() {
     local days=${1:-30}; valid_int "$days" days
     echo "SELECT DATE(at) AS day, COUNT(*) AS sales, SUM(kind='voucher') AS vouchers, SUM(kind='renew') AS renewals,
@@ -1116,6 +1162,11 @@ Ports & protocols (traffic collector)
   ports --by device [--ip IP | -u USER] ports per device
   ports --by in                         connections started FROM the internet to LAN devices
   ports --by profile [--app SITE]       saved long-term port profile of every app
+  apps [--days 7] [-u USER] [--ip IP] [--category C]
+                                        every app used on the network (auto list): devices, users, data, first/last seen
+  apps new [DAYS]                       apps first seen in the last DAYS (default 7)
+  apps users APP                        which devices/users use an app (name or site, e.g. "PUBG Mobile")
+  apps update                           rebuild the list now (cron does it every hour)
 
 CDN detective
   cdn HOSTNAME|IP [--json]             which app/site is behind it (name, DNS evidence, IP owner, context)
@@ -1200,6 +1251,7 @@ case ${1:-help} in
     enforce) shift; cmd_enforce "$@" ;;
     cdn)     shift; cmd_cdn "$@" ;;
     ports)   shift; cmd_ports "$@" ;;
+    apps)    shift; cmd_apps "$@" ;;
     syslog-sync) syslog_sync ;;
     online)  cmd_online ;;
     log)     shift; cmd_log "$@" ;;

@@ -1136,6 +1136,50 @@ def ports_report():
     return jsonify(by=by, rows=out, totals=jsonable([totals])[0])
 
 
+# ------------------------------------------------------------------ app inventory (auto list of apps used on the network)
+@app.get("/api/apps")
+@login_required()
+def apps_inventory():
+    a = report_args()
+    cat = request.args.get("category", "")
+    if cat and not re.match(r"^[a-z]{2,20}$", cat):
+        abort(400, "invalid category")
+    days = int(max(a.days, 1))
+    w, tw, args, targs = ["d.day >= CURDATE() - INTERVAL %s DAY"], ["t.bucket >= CURDATE() - INTERVAL %s DAY"], [days], [days]
+    for col, val in (("username", a.user), ("client_ip", a.ip)):
+        if val:
+            w.append(f"d.{col}=%s"); args.append(val)
+            tw.append(f"t.{col}=%s"); targs.append(val)
+    if cat:
+        w.append("a.category=%s"); args.append(cat)
+    rows = q(f"""SELECT a.site, a.app, a.category, a.source, a.first_seen, a.last_seen,
+                        COUNT(DISTINCT d.client_ip) AS devices, COUNT(DISTINCT NULLIF(d.username,'')) AS users, SUM(d.queries) AS lookups,
+                        (SELECT COALESCE(SUM(t.bytes_down+t.bytes_up),0) FROM traffic_site t WHERE t.site=a.site AND {' AND '.join(tw)}) AS bytes,
+                        a.first_seen >= NOW() - INTERVAL 7 DAY AS is_new
+                 FROM ml_app a JOIN ml_app_day d ON d.site=a.site WHERE {' AND '.join(w)}
+                 GROUP BY a.site ORDER BY devices DESC, lookups DESC LIMIT %s""", targs + args + [a.top])
+    totals = q1("SELECT COUNT(*) AS apps, COALESCE(SUM(first_seen >= NOW() - INTERVAL 7 DAY),0) AS new_apps, "
+                "COALESCE(SUM(source='discovered'),0) AS discovered FROM ml_app")
+    cats = q("SELECT category, COUNT(*) AS n FROM ml_app GROUP BY category ORDER BY n DESC")
+    return jsonify(rows=jsonable(rows), totals=jsonable([totals])[0], categories=jsonable(cats))
+
+
+@app.get("/api/apps/users")
+@login_required()
+def app_users():
+    a = report_args()
+    site = request.args.get("site", "").lower()
+    if not re.match(r"^[a-z0-9.-]{1,253}$", site):
+        abort(400, "invalid site")
+    days = int(max(a.days, 1))
+    rows = q("""SELECT d.client_ip, MAX(NULLIF(d.username,'')) AS username, SUM(d.queries) AS lookups, MIN(d.day) AS first_day, MAX(d.day) AS last_day,
+                       (SELECT COALESCE(SUM(t.bytes_down+t.bytes_up),0) FROM traffic_site t
+                         WHERE t.site=%s AND t.client_ip=d.client_ip AND t.bucket >= CURDATE() - INTERVAL %s DAY) AS bytes
+                FROM ml_app_day d WHERE d.site=%s AND d.day >= CURDATE() - INTERVAL %s DAY
+                GROUP BY d.client_ip ORDER BY lookups DESC LIMIT 500""", (site, days, site, days))
+    return jsonify(rows=jsonable(rows))
+
+
 # ------------------------------------------------------------------ system / admins / audit
 def running(pattern):
     try:

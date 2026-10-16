@@ -529,6 +529,38 @@ Dashboard → **Ports & protocols**: Top ports · App → ports · Devices · **
 
 > IN/OUT andaza ports se hai: agar LAN par koi service ghair-maroof port par chal rahi ho to woh P2P dikh sakti hai. Unknown **IN** entries zaroor dekhein — ho sakta hai koi port-forward ya khula device ho.
 
+## 5e3. Apps on network — network par chalne wali har app ki list (khud banti hai)
+
+Har ghante (cron, `cdn learn` ke baad) router ke DNS log se **har app** ki list khud banti hai. Is ke liye kuch add nahi karna padta:
+
+- **Pehchani hui apps:** 49 apps catalog mein pehle se hain, jaise Facebook, WhatsApp, YouTube, TikTok, PUBG, Netflix, Daraz, Spotify waghera. In ke naye domains bhi khud seekhe jate hain (section 5g).
+- **Nayi apps:** jo app catalog mein nahi, woh bhi khud dhoondi jati hai (section 5g). Agar 3 ya zyada devices use karein to list mein **auto-discovered** ke nishan ke saath aati hai, aur us ka naam us ki website ke title se rakha jata hai.
+- **Har app ke liye save hota hai:** category, kitne devices, kaun se users, kitni lookups, kitna data (traffic collector se), **pehli dafa kab dekhi** aur **aakhri dafa kab dekhi**. Pichhle 7 din mein pehli baar dekhi gayi app par **NEW** likha aata hai.
+- **Kahan save hota hai:**
+  - `ml_app`: har app hamesha ke liye.
+  - `ml_app_day`: din, app aur device ke hisaab se, 180 din tak (`APP_DAYS` se badal sakte hain).
+  - Ek hi din ko dobara padhne par purani ginti badal di jati hai, is liye kuch do baar nahi ginta.
+
+```bash
+sudo radius-admin apps                      # 7 din: app, category, devices, users, data, first/last seen, NEW
+sudo radius-admin apps --days 30 -u ali     # ali ne kaun si apps chalayin
+sudo radius-admin apps --category gaming    # sirf games
+sudo radius-admin apps new                  # is hafte pehli dafa nazar aane wali apps
+sudo radius-admin apps users "PUBG Mobile"  # PUBG kaun kaun se device/user chala raha hai
+sudo radius-admin apps update               # abhi update karein (cron har ghante karta hai)
+```
+
+**Dashboard → Apps on network:**
+- Category tabs: video, social, gaming, messaging...
+- **Users**: kaun kaun se device ya user yeh app chala raha hai.
+- **Domains**: app ki domain list (CDN detective).
+- **⬇ Block**: is app ke tamam maloom domains band karne ka RouterOS script.
+
+> **Note:**
+> - Router par DNS logging on honi chahiye: `radius-admin dnslog on` aur `dns-logging.rsc`.
+> - Data (MB/GB) ke liye traffic collector bhi chahiye.
+> - Jo device DNS bypass kare, us ki apps is list mein nahi aatin. Misaal: exempt list wala device, ya family-DNS wali policy.
+
 ## 5f. PPPoE users (ISP style)
 
 Ghar/dukaan ke router PPPoE se username/password par chalte hain — wohi RADIUS, wohi plans, wohi dashboard.
