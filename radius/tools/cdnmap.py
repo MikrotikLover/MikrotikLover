@@ -199,6 +199,27 @@ def site_of(host):
 
 
 # ---------------------------------------------------------------- DNS evidence
+def recent_lines(path, since, max_bytes=400_000_000):
+    """Lines of a log written since `since`, rotated files included (dns.log.1, dns.log.2.gz ...),
+    oldest first. Hourly jobs rebuild "since yesterday" — after the nightly rotation that data is
+    in dns.log.1, so reading only the current file would wipe it from the database."""
+    import glob, gzip
+
+    def num(p):
+        m = re.search(r"\.(\d+)(?:\.gz)?$", p)
+        return int(m.group(1)) if m else 0
+    rotated = [f for f in sorted(glob.glob(path + ".*"), key=num, reverse=True)
+               if re.search(r"\.\d+(\.gz)?$", f) and os.path.getmtime(f) >= since - 60]
+    for f in rotated:
+        try:
+            with (gzip.open(f, "rt", encoding="utf-8", errors="replace") if f.endswith(".gz")
+                  else open(f, encoding="utf-8", errors="replace")) as fh:
+                yield from fh
+        except OSError:
+            continue
+    yield from tail_lines(path, max_bytes)
+
+
 def tail_lines(path, max_bytes=40_000_000):
     try:
         with open(path, "rb") as fh:

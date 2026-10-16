@@ -113,17 +113,20 @@ def ts_of(s):
         return None
 
 
-def log_files(path):
-    """Current log plus rotated ones (oldest first)."""
+def log_files(path, since=0):
+    """Current log plus rotated ones (oldest first). A rotated file last written before
+    `since` holds only older lines, so it is skipped (a 1-day report does not read 30 days)."""
     def num(p):
         m = re.search(r"\.(\d+)(?:\.gz)?$", p)
         return int(m.group(1)) if m else 0
     rotated = sorted(glob.glob(path + ".*"), key=num, reverse=True)
+    if since:
+        rotated = [f for f in rotated if os.path.getmtime(f) >= since - 60]
     return rotated + ([path] if os.path.exists(path) else [])
 
 
-def read_lines(path):
-    for f in log_files(path):
+def read_lines(path, since=0):
+    for f in log_files(path, since):
         opener = gzip.open if f.endswith(".gz") else open
         try:
             with opener(f, "rt", encoding="utf-8", errors="replace") as fh:
@@ -169,7 +172,7 @@ def sites_rows(a, s):
     """[(site, visits, users, last_visit, who)] most visited first."""
     since = time.time() - a.days * 86400
     count, users, last, seen = {}, {}, {}, {}
-    for ts, t, ip, name in dns_events(read_lines(DNS_LOG), since):
+    for ts, t, ip, name in dns_events(read_lines(DNS_LOG, since), since):
         user = s.who(ip, ts)
         if not match(user, ip, a):
             continue
@@ -192,7 +195,7 @@ def history_rows(a, s):
     """[(time, user, ip, site, hostname)] oldest first, last a.n."""
     since = time.time() - a.days * 86400
     rows, prev = [], {}
-    for ts, t, ip, name in dns_events(read_lines(DNS_LOG), since):
+    for ts, t, ip, name in dns_events(read_lines(DNS_LOG, since), since):
         user = s.who(ip, ts)
         if not match(user, ip, a):
             continue
@@ -224,7 +227,7 @@ def blocked_rows(a, s):
     """[(time, user, ip, mac, category, destination, router)] oldest first, last a.n."""
     since = time.time() - a.days * 86400
     rows = []
-    for line in read_lines(WF_LOG):
+    for line in read_lines(WF_LOG, since):
         r = wf_row(line, s)
         if r and r[0] >= since and match(r[2], r[3], a):
             rows.append(r[1:])
@@ -260,7 +263,7 @@ def dns_names(since):
     """(client, ip) -> the name that client looked up for that ip; and ip -> any name (for blocked HTTPS)."""
     import cdnlearn
     by_client, by_ip = {}, {}
-    for r in cdnlearn.parse(l for l in read_lines(DNS_LOG) if (ts_of(l.split(" ", 1)[0]) or 0) >= since - 3600):
+    for r in cdnlearn.parse(l for l in read_lines(DNS_LOG, since - 3600) if (ts_of(l.split(" ", 1)[0]) or 0) >= since - 3600):
         for ip in r["ips"]:
             by_client[(r["client"], ip)] = r["qname"]
             by_ip[ip] = r["qname"]
@@ -272,7 +275,7 @@ def blocked_detail(a, s, policies):
     since = time.time() - a.days * 86400
     by_client, by_ip = dns_names(since)
     out = []
-    for line in read_lines(WF_LOG):
+    for line in read_lines(WF_LOG, since):
         m = WF_RE.search(line)
         if not m:
             continue

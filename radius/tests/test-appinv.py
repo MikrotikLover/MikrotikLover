@@ -76,4 +76,17 @@ check("per day: lookups + devices", per_day[(d1, "g.whatsapp.net")] == [2, {ali,
 dsql = appinv.domain_sql(hosts, per_day, d1)
 check("domain SQL: days re-read are replaced, first_seen never later",
       f"DELETE FROM ml_domain_day WHERE day >= '{d1}';" in dsql and "first_seen=LEAST(first_seen" in dsql)
+# hourly rebuild reads the rotated log too: after the nightly rotation yesterday's lines are in dns.log.1
+import gzip
+d = tempfile.mkdtemp()
+open(f"{d}/dns.log", "w").write("today-1\ntoday-2\n")
+open(f"{d}/dns.log.1", "w").write("yesterday-1\n")
+with gzip.open(f"{d}/dns.log.2.gz", "wt") as fh:
+    fh.write("old-1\n")
+os.utime(f"{d}/dns.log.1", (time.time() - 7200, time.time() - 7200))
+os.utime(f"{d}/dns.log.2.gz", (time.time() - 3 * 86400, time.time() - 3 * 86400))
+got = [l.strip() for l in cdnmap.recent_lines(f"{d}/dns.log", time.time() - 2 * 86400)]
+check("recent_lines: rotated file of yesterday + today, old ones skipped, oldest first", got == ["yesterday-1", "today-1", "today-2"], got)
+got = [l.strip() for l in cdnmap.recent_lines(f"{d}/dns.log", time.time() - 5 * 86400)]
+check("recent_lines: older window also reads the .gz file", got == ["old-1", "yesterday-1", "today-1", "today-2"], got)
 sys.exit(1 if fail else 0)

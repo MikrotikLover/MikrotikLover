@@ -255,8 +255,8 @@ def main():
     lt = time.localtime()
     since = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday - 1, 0, 0, 0, 0, 0, -1))
     keep = lambda l: (cdnlearn.ts(l.split(" ", 1)[0]) or 0) >= since  # noqa: E731
-    dns = [l for l in cdnmap.tail_lines(os.path.join(LOGDIR, "dns.log"), 400_000_000) if keep(l)]
-    wf = [l for l in cdnmap.tail_lines(os.path.join(LOGDIR, "webfilter.log"), 100_000_000) if keep(l)]
+    dns = [l for l in cdnmap.recent_lines(os.path.join(LOGDIR, "dns.log"), since) if keep(l)]
+    wf = [l for l in cdnmap.recent_lines(os.path.join(LOGDIR, "webfilter.log"), since, 100_000_000) if keep(l)]
     who = lambda ip, t, mac="": ""  # noqa: E731
     if opt("--cnf", ""):
         import mlreport

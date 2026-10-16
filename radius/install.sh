@@ -219,10 +219,16 @@ install -m 755 "$SCRIPT_DIR/webfilter/build.sh" /usr/local/lib/mikrotiklover/web
 install -m 644 "$SCRIPT_DIR"/webfilter/*.in "$SCRIPT_DIR/webfilter/keywords.txt" /usr/local/lib/mikrotiklover/webfilter/
 install -m 644 "$SCRIPT_DIR"/webfilter/categories/*.txt /usr/local/lib/mikrotiklover/webfilter/categories/
 install -m 644 "$SCRIPT_DIR"/webfilter/allowonly/*.txt /usr/local/lib/mikrotiklover/webfilter/allowonly/
-# Policies are edited on the server (dashboard → Blocking): install the examples only once
+# Policies are edited on the server (dashboard → Blocking): each example is installed only once,
+# so a policy the admin deleted does not come back with the next update.
 install -d -m 755 /var/lib/mikrotiklover/policies /var/lib/mikrotiklover/router
+touch /var/lib/mikrotiklover/policies/.installed
 for f in "$SCRIPT_DIR"/webfilter/policies/*.txt; do
-    [ -e "/var/lib/mikrotiklover/policies/$(basename "$f")" ] || install -m 644 "$f" /var/lib/mikrotiklover/policies/
+    b=$(basename "$f")
+    [ "$b" = README.txt ] && continue
+    grep -qxF "$b" /var/lib/mikrotiklover/policies/.installed && continue
+    [ -e "/var/lib/mikrotiklover/policies/$b" ] || install -m 644 "$f" /var/lib/mikrotiklover/policies/
+    echo "$b" >> /var/lib/mikrotiklover/policies/.installed
 done
 install -m 644 "$SCRIPT_DIR/webfilter/policies/README.txt" /var/lib/mikrotiklover/policies/README.txt
 [ -s /var/lib/mikrotiklover/asn.json ] || python3 -I /usr/local/lib/mikrotiklover/cdnmap.py update >/dev/null 2>&1 \

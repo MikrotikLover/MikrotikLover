@@ -3,6 +3,8 @@
 # Installed to /usr/local/sbin by install.sh. Run "radius-admin help".
 set -euo pipefail
 export LC_ALL=C
+# cron runs us with PATH=/usr/bin:/bin; dnsmasq, freeradius, service ... live in sbin
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin${PATH:+:$PATH}
 
 CONF_DIR=/etc/mikrotiklover-radius
 [ -r "$CONF_DIR/radius.conf" ] || { echo "Not installed (missing $CONF_DIR/radius.conf). Run install.sh first." >&2; exit 1; }
@@ -46,7 +48,8 @@ read_pass() { # sets PASS: from -p, prompt (tty) or random
 }
 
 user_exists()  { [ -n "$(echo "SELECT 1 FROM radcheck WHERE username=$(q "$1") LIMIT 1" | db)" ]; }
-group_exists() { [ -n "$(echo "SELECT 1 FROM radgroupreply WHERE groupname=$(q "$1") UNION SELECT 1 FROM radgroupcheck WHERE groupname=$(q "$1") LIMIT 1" | db)" ]; }
+group_exists() { [ -n "$(echo "SELECT 1 FROM radgroupreply WHERE groupname=$(q "$1") UNION SELECT 1 FROM radgroupcheck WHERE groupname=$(q "$1")
+                                UNION SELECT 1 FROM radgroup_meta WHERE groupname=$(q "$1") LIMIT 1" | db)" ]; }
 
 password_sql() { # password_sql USER  (uses PASS, NT)
     local attr=Cleartext-Password val=$PASS
@@ -304,6 +307,7 @@ cmd_group() {
         ;;
     show)
         local g=${1:-}; valid_name "$g" group
+        group_exists "$g" || die "No such group '$g' (radius-admin group list)"
         echo "SELECT 'check' AS type, attribute, op, value FROM radgroupcheck WHERE groupname=$(q "$g")
               UNION ALL SELECT 'reply', attribute, op, value FROM radgroupreply WHERE groupname=$(q "$g");" | dbt
         ;;
@@ -639,6 +643,8 @@ EOF
 }
 
 # ======================================================================= web dashboard accounts
+web_exists() { [ "$(echo "SELECT COUNT(*) FROM web_admin WHERE username=$(q "$1")" | db)" != 0 ]; }
+
 cmd_web() {
     case ${1:-list} in
     passwd)
@@ -659,10 +665,14 @@ cmd_web() {
         ;;
     role)
         local u=${2:-} r=${3:-}; valid_name "$u" "dashboard user"; [[ $r =~ ^(admin|viewer)$ ]] || die "role: admin | viewer"
+        web_exists "$u" || die "No dashboard account '$u' (radius-admin web list)"
         echo "UPDATE web_admin SET role=$(q "$r") WHERE username=$(q "$u");" | db; ok "'$u' is now $r"
         ;;
     del)
         local u=${2:-}; valid_name "$u" "dashboard user"
+        web_exists "$u" || die "No dashboard account '$u' (radius-admin web list)"
+        [ "$(echo "SELECT COUNT(*) FROM web_admin WHERE role='admin' AND username<>$(q "$u")" | db)" != 0 ] \
+            || die "'$u' is the last admin account — make another admin first"
         echo "DELETE FROM web_admin WHERE username=$(q "$u");" | db; ok "Dashboard account '$u' deleted"
         ;;
     list)
@@ -755,6 +765,7 @@ cmd_plan() {
         ;;
     del|delete|rm)
         local p=${1:-} force=${2:-}; valid_name "$p" plan
+        [ "$(echo "SELECT COUNT(*) FROM ml_plan WHERE name=$(q "$p")" | db)" != 0 ] || die "No such plan '$p' (radius-admin plan list)"
         local n; n=$(echo "SELECT COUNT(*) FROM ml_account WHERE plan=$(q "$p")" | db)
         [ "$n" = 0 ] || [ "$force" = --force ] || die "$n account(s) use plan '$p' (add --force to delete anyway; they keep working without limits)"
         echo "DELETE FROM ml_plan WHERE name=$(q "$p"); UPDATE ml_account SET plan=NULL WHERE plan=$(q "$p");" | db
@@ -1043,7 +1054,11 @@ cmd_apps() {
         db < "${TMPDIR:-/tmp}/appinv.$$.sql"; rm -f "${TMPDIR:-/tmp}/appinv.$$.sql"
         ok "${out#appinv: }"; return
     fi
-    if [ "$sub" = users ]; then app=${1:-}; [ -n "$app" ] || die "usage: radius-admin apps users APP [--days N]"; shift; fi
+    if [ "$sub" = users ]; then
+        app=${1:-}; [ -n "$app" ] || die "usage: radius-admin apps users APP [--days N]"; shift
+        [ "$(echo "SELECT COUNT(*) FROM ml_app WHERE site=$(q "${app,,}") OR app=$(q "$app")" | db)" != 0 ] \
+            || die "No app '$app' seen on the network yet (radius-admin apps)"
+    fi
     [ "$sub" != new ] || { [[ ${1:-} =~ ^[0-9]+$ ]] && { days=$1; shift; }; }
     while [ $# -gt 0 ]; do
         case $1 in
@@ -1149,12 +1164,12 @@ cmd_policy() {
             echo "remove [find list=vpn-servers comment~\"^mlsync\"]"
             { echo "SELECT ip, kind FROM ml_vpn_server WHERE ip REGEXP '^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+\$' ORDER BY ip" | db 2>/dev/null || true
               [ ! -f /var/lib/mikrotiklover/vpn-public.txt ] || cat /var/lib/mikrotiklover/vpn-public.txt
-            } | awk -F'\t' '$1 ~ /^[0-9.]+(\/[0-9]+)?$/ && !seen[$1]++ { gsub(/["\\$]/, "", $2); printf "add list=vpn-servers address=%s comment=\"mlsync: %s\"\n", $1, substr($2, 1, 60) }'
+            } | awk -F'\t' '$1 ~ /^[0-9.]+(\/[0-9]+)?$/ && !seen[$1]++ { gsub(/["\\$]/, "", $2); printf ":do { /ip firewall address-list add list=vpn-servers address=%s comment=\"mlsync: %s\" } on-error={}\n", $1, substr($2, 1, 60) }'
         } > "$lists/vpn-servers.rsc"
         {
             echo "# Security lists (mikrotik/security.rsc uses them): threat networks + attackers found by the server"
             echo "/ip firewall address-list"
-            echo "remove [find list=ml-threats comment~\"^mlsync\"]"
+            echo "remove [find list=ml-threats]"
             [ ! -f /var/lib/mikrotiklover/threat-ips.txt ] || awk -F'\t' '$1 ~ /^[0-9.]+(\/[0-9]+)?$/ && !seen[$1]++ { gsub(/["\\$]/, "", $2); printf "add list=ml-threats address=%s comment=\"mlsync: %s\"\n", $1, substr($2, 1, 60) }' /var/lib/mikrotiklover/threat-ips.txt
             echo "remove [find list=ml-attackers comment~\"^mlsync\"]"
             if [ "$(setting_get security_autoblock)" = 1 ]; then
@@ -1168,7 +1183,7 @@ cmd_policy() {
                               OR INET_ATON(src_ip) BETWEEN INET_ATON('127.0.0.0') AND INET_ATON('127.255.255.255'))
                         AND src_ip NOT IN (SELECT nasname FROM nas)
                       GROUP BY src_ip ORDER BY src_ip" | db 2>/dev/null \
-                  | awk -F'\t' '$1 ~ /^[0-9.]+$/ { gsub(/["\\$]/, "", $2); printf "add list=ml-attackers address=%s timeout=1d comment=\"mlsync: %s\"\n", $1, substr($2, 1, 60) }'
+                  | awk -F'\t' '$1 ~ /^[0-9.]+$/ { gsub(/["\\$]/, "", $2); printf ":do { /ip firewall address-list add list=ml-attackers address=%s timeout=1d comment=\"mlsync: %s\" } on-error={}\n", $1, substr($2, 1, 60) }'
             fi
         } > "$lists/security.rsc"
         {
@@ -1185,7 +1200,7 @@ cmd_policy() {
         [ -s "$ROUTER_DIR/key" ] || gen_pass 32 > "$ROUTER_DIR/key"
         router_key_perms
         local nsrv npol
-        nsrv=$(grep -c '^add list=vpn-servers' "$ROUTER_DIR/vpn-servers.rsc" || true)
+        nsrv=$(grep -c 'list=vpn-servers address=' "$ROUTER_DIR/vpn-servers.rsc" || true)
         npol=$(find "$POLICY_DIR" -maxdepth 1 -name '*.txt' ! -name README.txt | wc -l)
         rm -rf "${lists:?}"
         ok "Router rules built: $npol policies, $nsrv VPN servers, version $(cat "$ROUTER_DIR/version")" ;;
@@ -1546,6 +1561,7 @@ cmd_sales() {
 
 cmd_usage() {
     local u=${1:-}; valid_name "$u" username
+    user_exists "$u" || [ "$(echo "SELECT COUNT(*) FROM radacct WHERE username=$(q "$u")" | db)" != 0 ] || die "No such user '$u'"
     echo "SELECT DATE(acctstarttime) AS day, COUNT(*) AS sessions,
                  SEC_TO_TIME(SUM(acctsessiontime)) AS online,
                  ROUND(SUM(acctinputoctets)/1048576,1) AS MB_up, ROUND(SUM(acctoutputoctets)/1048576,1) AS MB_down
@@ -1581,7 +1597,9 @@ EOF
     else
         local out; out=$(radtest -t mschap "$u" "$p" 127.0.0.1 0 "$LOCAL_SECRET" 2>&1 || true)
         if grep -q 'Received Access-Accept' <<<"$out"; then
-            ok "MSCHAPv2 login OK for '$u'"; grep -E '^\s+(Mikrotik|Tunnel|Session|Idle)' <<<"$out" || true
+            ok "MSCHAPv2 login OK for '$u'"
+            # the server's answer only (radtest also echoes the request, password included)
+            sed -n '/Received Access-Accept/,$p' <<<"$out" | grep -E '^\s+[A-Za-z0-9-]+ = ' | grep -vE '^\s+(MS-|Message-Authenticator)' || true
         else
             echo "$out" | tail -4; die "Login FAILED for '$u'"
         fi
@@ -1613,6 +1631,7 @@ Hotspot business (plans, vouchers, expiry, data quota, daily time)
   user ip NAME 10.20.0.5|-             static IP (PPPoE)          group add NAME --pool POOL   (PPPoE IP pool)
   plan add NAME ... --fup 1M/1M        after the quota: slower instead of cut off (FUP)
   enforce [-v]                         cut expired / slow FUP sessions now (cron runs it every 5 min)
+  sales [DAYS]                         money in per day
 
 Ports & protocols (traffic collector)
   ports                                 top ports today: protocol, port, service, OUT/IN/P2P, data, devices, apps
@@ -1620,32 +1639,43 @@ Ports & protocols (traffic collector)
   ports --by device [--ip IP | -u USER] ports per device
   ports --by in                         connections started FROM the internet to LAN devices
   ports --by profile [--app SITE]       saved long-term port profile of every app
+
+Apps & website names (built every hour from the DNS log)
   apps [--days 7] [-u USER] [--ip IP] [--category C]
                                         every app used on the network (auto list): devices, users, data, first/last seen
   apps new [DAYS]                       apps first seen in the last DAYS (default 7)
   apps users APP                        which devices/users use an app (name or site, e.g. "PUBG Mobile")
   apps update                           rebuild the list now (cron does it every hour)
+  domains [SEARCH] [--days 30]          every website name seen (domains + subdomains), saved for good
+  domains tree DOMAIN                   all subdomains of a domain: first/last seen, lookups, IPs
+  domains export > names.csv            everything as CSV
 
+Blocking policies + router auto-sync (dashboard → Blocking)
   policy list | show NAME               web-filter policies (who is in them, what they block)
   policy set NAME < file                create / change a policy (directives: webfilter/policies/README.txt)
   policy del NAME                       delete an unused policy
   policy build                          rebuild the router rules (+ VPN server list); cron does it every hour
   policy sync                           URL + key for the router auto-sync script (dashboard → Blocking)
+  policy new-key                        new router sync key (then re-import the script on every router)
+  blocked [--days 1] [-u USER] [--policy NAME] [--summary]
+                                        blocking logs: which policy blocked which user, what, site name
+
+VPN & proxy watch
   vpn [--days 7] [-u USER]              VPN attempts: who, when, which VPN, blocked or not
   vpn users | servers | domains         per user / the automatic VPN server and name lists
   vpn scan                              read the DNS + router logs now (cron: every hour)
   vpn update                            add the public VPN-provider + Tor lists (then weekly)
   vpn ignore NAME|IP                    not a VPN (e.g. your office VPN): never list or block it
 
-  domains [SEARCH] [--days 30]          every website name seen (domains + subdomains), saved for good
-  domains tree DOMAIN                   all subdomains of a domain: first/last seen, lookups, IPs
-  domains export > names.csv            everything as CSV
+Security detective (virus, hacker attacks, DDoS)
   security [--days 7] [--type virus|attack|ddos] [--high]
                                         security detective: infected devices, hacker attacks, DDoS (by type)
   security summary                      counts per type
   security scan | update                read the logs now (hourly) | download threat lists (weekly)
   security autoblock on|off             attackers -> router list ml-attackers (auto-sync, mikrotik/security.rsc)
   security dns-block on|off             malware / phishing / mining names answer 0.0.0.0 (DNS logger)
+
+Backup, restore, automatic updates
   backup [--encrypt] [--with-logs]      complete backup: database, settings, certificates, FreeRADIUS, policies
   backups                               list backups (/var/backups/mikrotiklover; every night, 14 kept)
   restore FILE [--yes]                  restore everything from a backup (a safety copy is made first)
@@ -1663,7 +1693,6 @@ CDN detective
   cdn rsc 'APP'                        RouterOS script blocking all domains of an app
   cdn discovered                       NEW apps found automatically (name + category guessed)
   cdn app-rename ID 'Name' [category] | app-merge ID 'Known App' | app-drop ID
-  sales [DAYS]                         money in per day
 
 Groups (speed limit, VLAN, timeouts, devices per user)
   group add NAME [--rate 10M/10M] [--vlan 20] [--session-timeout 86400]
@@ -1675,7 +1704,7 @@ Policies / blocking (per user, group, IP range — see webfilter/policies/)
   user policy NAME POLICY|-            this user only (overrides group); kicks to apply
   group add NAME --policy POLICY       whole group
   kick USER|MAC                        disconnect now (re-login applies changes)
-  blocked [N] [-u USER]                who tried to open blocked sites (router log)
+  blocked [N] [-u USER]                who tried to open blocked sites (router log, with the policy)
 
 Visited sites / live log (needs: radius-admin dnslog on ROUTER_IP + mikrotik/dns-logging.rsc)
   sites [-u USER] [--ip IP] [--days 7] [--top 30]   most visited sites
@@ -1752,5 +1781,5 @@ case ${1:-help} in
     restart) restart_radius; ok "FreeRADIUS restarted" ;;
     status)  svc status freeradius || true ;;
     help|-h|--help) usage ;;
-    *) usage; exit 1 ;;
+    *) echo "ERROR: unknown command '$1'" >&2; usage >&2; exit 1 ;;
 esac

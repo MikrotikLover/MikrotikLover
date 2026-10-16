@@ -7,7 +7,7 @@
 #   subnet / VLAN       : /ip firewall address-list add list=policy-staff address=192.168.20.0/24
 #   hotspot user        : radius-admin user policy ali students
 #   hotspot group       : radius-admin group add class-9 --policy students
-# Policies: guests night-off no-internet no-tiktok-pubg no-video-day no-video no-vpn staff students whatsapp-only 
+# Policies: guests kids-night night-off no-internet no-tiktok-pubg no-video-day no-video no-vpn staff students whatsapp-only 
 # Checks the HTTPS site name (SNI), so it works per device even when DNS answers are cached.
 
 /ip firewall filter
@@ -504,6 +504,17 @@ add chain=forward src-address-list=policy-guests protocol=udp dst-port=443 actio
 add chain=dstnat src-address-list=policy-guests protocol=udp dst-port=53 action=dst-nat to-addresses=1.1.1.3 comment="wfpolicy:guests dns family"
 add chain=dstnat src-address-list=policy-guests protocol=tcp dst-port=53 action=dst-nat to-addresses=1.1.1.3 comment="wfpolicy:guests dns family"
 /ip firewall filter
+# --- policy kids-night: Kids night: no internet 22:00-06:00 on school nights, games blocked 21:00-07:00
+add chain=forward src-address-list=policy-kids-night connection-state=new action=log log-prefix="WF-noinet" limit=20/1m,10:packet time=22h-23h59m59s,sun,mon,tue,wed,thu comment="wfpolicy:kids-night no internet (log)"
+add chain=forward src-address-list=policy-kids-night protocol=tcp action=reject reject-with=tcp-reset time=22h-23h59m59s,sun,mon,tue,wed,thu comment="wfpolicy:kids-night no internet"
+add chain=forward src-address-list=policy-kids-night action=reject reject-with=icmp-admin-prohibited time=22h-23h59m59s,sun,mon,tue,wed,thu comment="wfpolicy:kids-night no internet"
+add chain=forward src-address-list=policy-kids-night connection-state=new action=log log-prefix="WF-noinet" limit=20/1m,10:packet time=0s-6h,mon,tue,wed,thu,fri comment="wfpolicy:kids-night no internet (log)"
+add chain=forward src-address-list=policy-kids-night protocol=tcp action=reject reject-with=tcp-reset time=0s-6h,mon,tue,wed,thu,fri comment="wfpolicy:kids-night no internet"
+add chain=forward src-address-list=policy-kids-night action=reject reject-with=icmp-admin-prohibited time=0s-6h,mon,tue,wed,thu,fri comment="wfpolicy:kids-night no internet"
+add chain=forward src-address-list=policy-kids-night protocol=tcp dst-port=443 action=jump jump-target=wf-gaming time=21h-23h59m59s,mon,tue,wed,thu,fri,sat,sun comment="wfpolicy:kids-night gaming"
+add chain=forward src-address-list=policy-kids-night protocol=tcp dst-port=443 action=jump jump-target=wf-gaming time=0s-7h,tue,wed,thu,fri,sat,sun,mon comment="wfpolicy:kids-night gaming"
+add chain=forward src-address-list=policy-kids-night protocol=udp dst-port=443 action=drop time=0s-7h,tue,wed,thu,fri,sat,sun,mon comment="wfpolicy:kids-night no QUIC"
+add chain=forward src-address-list=policy-kids-night protocol=udp dst-port=443 action=drop time=21h-23h59m59s,mon,tue,wed,thu,fri,sat,sun comment="wfpolicy:kids-night no QUIC"
 # --- policy night-off: Internet off at night (00:00–06:00), otherwise like guests
 add chain=forward src-address-list=policy-night-off connection-state=new action=log log-prefix="WF-noinet" limit=20/1m,10:packet time=0s-6h,sun,mon,tue,wed,thu,fri,sat comment="wfpolicy:night-off no internet (log)"
 add chain=forward src-address-list=policy-night-off protocol=tcp action=reject reject-with=tcp-reset time=0s-6h,sun,mon,tue,wed,thu,fri,sat comment="wfpolicy:night-off no internet"

@@ -269,7 +269,11 @@ class Tail:
             st = os.stat(self.path)
         except OSError:
             return []
+        if self.fh is not None and st.st_ino == self.ino and st.st_size < self.fh.tell():
+            self.fh.seek(0)                 # truncated in place (copytruncate): read from the start
         if self.fh is None or st.st_ino != self.ino:
+            if self.fh is not None:
+                self.fh.close()             # rotated: follow the new file
             self.fh = open(self.path, encoding="utf-8", errors="replace")
             self.ino = st.st_ino
             if self.prime:  # start with the recent past so existing connections get names

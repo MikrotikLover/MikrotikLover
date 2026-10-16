@@ -44,4 +44,16 @@ with tempfile.TemporaryDirectory() as d:
     check("history: only that IP, youtube collapsed", "bbc" not in out and sum(1 for l in out.splitlines() if " youtube.com " in l) == 2, out)
     out = run("blocked")
     check("blocked: social block parsed", "social" in out and "157.240.1.35:443" in out, out)
+    # rotated logs older than the report window are not read (a 1-day report must not read 30 days)
+    import importlib.util, tempfile as _tf, time as _t
+    spec = importlib.util.spec_from_file_location("mlreport", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "mlreport.py"))
+    mlr = importlib.util.module_from_spec(spec); spec.loader.exec_module(mlr)
+    d = _tf.mkdtemp()
+    base = os.path.join(d, "dns.log")
+    for name, age in (("dns.log", 0), ("dns.log.1", 86400 * 0.5), ("dns.log.2.gz", 86400 * 3), ("dns.log.9.gz", 86400 * 20)):
+        open(os.path.join(d, name), "w").close()
+        os.utime(os.path.join(d, name), (_t.time() - age, _t.time() - age))
+    got = [os.path.basename(f) for f in mlr.log_files(base, _t.time() - 86400)]
+    check("1-day report reads only today's log + yesterday's rotated file", got == ["dns.log.1", "dns.log"], got)
+    check("no window: every file, oldest first", [os.path.basename(f) for f in mlr.log_files(base)] == ["dns.log.9.gz", "dns.log.2.gz", "dns.log.1", "dns.log"], "")
     sys.exit(1 if fail else 0)

@@ -1028,8 +1028,8 @@ ROUTES.cdn = async (initial) => {
 // ------------------------------------------------------------------ blocking: policies (what is blocked, for whom) + router sync
 const DAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 function timeSpec(t) {             // {from, to, days} -> RouterOS time= value
-  const f = Number(t.from), e = Number(t.to);
-  return `${f ? f + "h" : "0s"}-${e >= 24 ? "23h59m59s" : e + "h"},${t.days.join(",")}`;
+  const f = Number(t.from), e = Number(t.to);    // e.g. 22 -> 6 crosses midnight: the server splits it in two
+  return `${f ? f + "h" : "0s"}-${e >= 24 || e === 0 ? "23h59m59s" : e + "h"},${t.days.join(",")}`;
 }
 function parseTime(s) {            // "9h-17h,mon,tue" | "0s-6h,..." | "8h-23h59m59s,..." -> {from, to, days}
   const m = /^(\d+)[hs]-(\d+)h(59m59s)?,([a-z,]+)$/.exec(s || "");

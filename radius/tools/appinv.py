@@ -135,7 +135,7 @@ def main():
         since = time.time() - float(opt("--hours", 48)) * 3600
         lt = time.localtime(since)
         since = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))      # whole days only
-    lines = [l for l in cdnmap.tail_lines(cdnmap.DNS_LOG, 400_000_000) if (cdnlearn.ts(l.split(" ", 1)[0]) or 0) >= since]
+    lines = [l for l in cdnmap.recent_lines(cdnmap.DNS_LOG, since) if (cdnlearn.ts(l.split(" ", 1)[0]) or 0) >= since]
     recs = cdnlearn.parse(lines)
     who = lambda ip, t: ""  # noqa: E731
     cnf = opt("--cnf", "")

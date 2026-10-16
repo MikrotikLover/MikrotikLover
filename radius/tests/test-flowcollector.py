@@ -84,4 +84,15 @@ check("inbound to a DVR: tcp 37777 in", ports.service(r[5], r[6], r[7]) == ("in"
 
 # 7) garbage does not crash
 check("garbage packet ignored", dec.decode(b"\x00\x0a\xff\xff" + b"\x00" * 30, "x") == [], "")
+
+# 8) the DNS log follower survives rotation and truncation (site names keep coming)
+import tempfile
+d = tempfile.mkdtemp(); lp = os.path.join(d, "dns.log")
+open(lp, "w").write("a\nb\n")
+t = fc.Tail(lp, prime_bytes=0)
+t.lines()
+open(lp, "w").write("c\n")
+check("log truncated in place -> new lines read", t.lines() == ["c\n"], "")
+os.rename(lp, lp + ".1"); open(lp, "w").write("d\n")
+check("log rotated -> follows the new file", t.lines() == ["d\n"], "")
 sys.exit(1 if fail else 0)

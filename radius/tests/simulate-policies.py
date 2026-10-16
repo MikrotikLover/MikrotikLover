@@ -126,6 +126,14 @@ CASES = [
     ("no-tiktok-pubg: tiktok",             F("policy-no-tiktok-pubg", "v16.tiktokcdn.com"),  "reject"),
     ("no-tiktok-pubg: pubg",               F("policy-no-tiktok-pubg", "api.pubgmobile.com"), "reject"),
     ("no-tiktok-pubg: youtube",            F("policy-no-tiktok-pubg", "www.youtube.com"),    "allow"),
+    # time ranges over midnight are split in two (RouterOS ranges cannot cross 00:00)
+    ("kids-night: Tue 23:00 no internet",  F("policy-kids-night", "www.google.com", hour=23, day="tue"), "reject"),
+    ("kids-night: Wed 03:00 no internet",  F("policy-kids-night", "www.google.com", hour=3, day="wed"),  "reject"),
+    ("kids-night: Tue 12:00 internet ok",  F("policy-kids-night", "www.google.com", hour=12, day="tue"), "allow"),
+    ("kids-night: Fri 23:00 (weekend) ok", F("policy-kids-night", "www.google.com", hour=23, day="fri"), "allow"),
+    ("kids-night: Sat 03:00 (weekend) ok", F("policy-kids-night", "www.google.com", hour=3, day="sat"),  "allow"),
+    ("kids-night: games Sat 05:00 blocked",F("policy-kids-night", "api.pubgmobile.com", hour=5, day="sat"), "reject"),
+    ("kids-night: games Sat 15:00 ok",     F("policy-kids-night", "api.pubgmobile.com", hour=15, day="sat"), "allow"),
 ]
 fail = 0
 for desc, f, exp in CASES:

@@ -239,6 +239,33 @@ vpn_chain() {
     done
 }
 
+# ---------------------------------------------------------------- time ranges over midnight
+tsecs() { # 22h / 6h30m / 0s -> seconds
+    local x=$1 n=0
+    while [[ $x =~ ^([0-9]+)([hms])(.*)$ ]]; do
+        case ${BASH_REMATCH[2]} in h) n=$((n + BASH_REMATCH[1] * 3600)) ;; m) n=$((n + BASH_REMATCH[1] * 60)) ;; s) n=$((n + BASH_REMATCH[1])) ;; esac
+        x=${BASH_REMATCH[3]}
+    done
+    echo "$n"
+}
+split_time() { # " time=22h-6h,mon,fri" -> " time=22h-23h59m59s,mon,fri" + " time=0s-6h,tue,sat" (RouterOS ranges cannot cross midnight)
+    local t=$1
+    [ -n "$t" ] || { echo ""; return; }
+    local spec=${t# time=} range days="" a b nd="" d
+    range=${spec%%,*}; [[ $spec == *,* ]] && days=${spec#*,}
+    a=${range%-*}; b=${range#*-}
+    if [ "$(tsecs "$a")" -gt "$(tsecs "$b")" ]; then
+        for d in ${days//,/ }; do
+            case $d in mon) d=tue ;; tue) d=wed ;; wed) d=thu ;; thu) d=fri ;; fri) d=sat ;; sat) d=sun ;; sun) d=mon ;; esac
+            nd+=${nd:+,}$d
+        done
+        echo " time=$a-23h59m59s${days:+,$days}"
+        echo " time=0s-$b${nd:+,$nd}"
+    else
+        echo "$t"
+    fi
+}
+
 # ---------------------------------------------------------------- per user / group / range POLICIES
 declare -A DNS_IP=( [family]=1.1.1.3 [adguard-family]=94.140.14.15 [cleanbrowsing-family]=185.228.168.168 [cleanbrowsing-adult]=185.228.168.10 )
 used_cats=() used_apps=() used_ao=()
@@ -259,13 +286,18 @@ for pf in $(policy_files); do
             for x in $line; do
                 if [[ $x =~ ^time=([0-9a-z,:-]+)$ ]]; then t=" time=${BASH_REMATCH[1]}"; fi
             done
+            if [ -n "$t" ]; then
+                r=${t# time=}; r=${r%%,*}
+                [ "$(tsecs "${r%-*}")" != "$(tsecs "${r#*-}")" ] || { echo "build.sh: empty time range '$r' in $pf (start = end)" >&2; exit 1; }
+            fi
+            mapfile -t TT < <(split_time "$t")
             case $key in
                 block)
                     [[ $val =~ ^[a-z0-9-]+$ ]] || { echo "build.sh: bad category '$val' in $pf" >&2; exit 1; }
                     [ "$val" = keywords ] || [ -f "categories/$val.txt" ] || { echo "build.sh: unknown category '$val' in $pf" >&2; exit 1; }
                     used_cats+=("$val"); any=1
-                    if [ -z "$t" ]; then untimed=1; else qtimes+=("$t"); fi
-                    echo "add chain=forward src-address-list=$L protocol=tcp dst-port=443 action=jump jump-target=wf-$val$t comment=\"$C $val\"" ;;
+                    if [ -z "$t" ]; then untimed=1; else qtimes+=("${TT[@]}"); fi
+                    for tt in "${TT[@]}"; do echo "add chain=forward src-address-list=$L protocol=tcp dst-port=443 action=jump jump-target=wf-$val$tt comment=\"$C $val\""; done ;;
                 block-app)
                     # block-app PUBG Mobile [time=...]   (an app of the CDN detective catalog, learned domains included)
                     name=$(sed -E 's/^[[:space:]]*block-app[[:space:]]+//; s/[[:space:]]+time=[^[:space:]]+//; s/[[:space:]]+$//' <<<"$line")
@@ -273,21 +305,23 @@ for pf in $(policy_files); do
                     python3 -I "$CDNMAP" domains "$name" >/dev/null || { echo "build.sh: unknown app '$name' in $pf" >&2; exit 1; }
                     slug=$(app_slug "$name")
                     used_apps+=("$name"); any=1
-                    if [ -z "$t" ]; then untimed=1; else qtimes+=("$t"); fi
-                    echo "add chain=forward src-address-list=$L protocol=tcp action=jump jump-target=wf-app-$slug$t comment=\"$C app $slug\"" ;;
+                    if [ -z "$t" ]; then untimed=1; else qtimes+=("${TT[@]}"); fi
+                    for tt in "${TT[@]}"; do echo "add chain=forward src-address-list=$L protocol=tcp action=jump jump-target=wf-app-$slug$tt comment=\"$C app $slug\""; done ;;
                 block-vpn)
                     [[ -z $val || $val == time=* ]] || { echo "build.sh: bad block-vpn in $pf" >&2; exit 1; }
                     used_cats+=(vpn-all); any=1
-                    if [ -z "$t" ]; then untimed=1; else qtimes+=("$t"); fi
-                    echo "add chain=forward src-address-list=$L action=jump jump-target=wf-vpn$t comment=\"$C vpn\"" ;;
+                    if [ -z "$t" ]; then untimed=1; else qtimes+=("${TT[@]}"); fi
+                    for tt in "${TT[@]}"; do echo "add chain=forward src-address-list=$L action=jump jump-target=wf-vpn$tt comment=\"$C vpn\""; done ;;
                 allow-only)
                     [[ $val =~ ^[a-z0-9-]+$ && -f allowonly/$val.txt && $val != meta-ipv4 ]] || { echo "build.sh: unknown allow-only profile '$val' in $pf" >&2; exit 1; }
                     ao=$val; used_ao+=("$val") ;;
                 block-all)
                     [[ -z $val || $val == time=* ]] || { echo "build.sh: bad block-all in $pf" >&2; exit 1; }
-                    echo "add chain=forward src-address-list=$L connection-state=new action=log log-prefix=\"WF-noinet\" limit=20/1m,10:packet$t comment=\"$C no internet (log)\""
-                    echo "add chain=forward src-address-list=$L protocol=tcp action=reject reject-with=tcp-reset$t comment=\"$C no internet\""
-                    echo "add chain=forward src-address-list=$L action=reject reject-with=icmp-admin-prohibited$t comment=\"$C no internet\"" ;;
+                    for tt in "${TT[@]}"; do
+                        echo "add chain=forward src-address-list=$L connection-state=new action=log log-prefix=\"WF-noinet\" limit=20/1m,10:packet$tt comment=\"$C no internet (log)\""
+                        echo "add chain=forward src-address-list=$L protocol=tcp action=reject reject-with=tcp-reset$tt comment=\"$C no internet\""
+                        echo "add chain=forward src-address-list=$L action=reject reject-with=icmp-admin-prohibited$tt comment=\"$C no internet\""
+                    done ;;
                 dns)
                     [ "$val" = router ] || [ -n "${DNS_IP[$val]:-}" ] || { echo "build.sh: unknown dns '$val' in $pf" >&2; exit 1; }
                     dns=$val ;;

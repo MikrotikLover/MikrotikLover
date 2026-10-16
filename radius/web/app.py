@@ -633,7 +633,7 @@ def online():
 @app.get("/api/auth-log")
 @login_required()
 def auth_log():
-    n = min(int(request.args.get("n", 100) or 100), 1000)
+    n = int_arg("n", 100, 1, 1000)
     user = request.args.get("user", "")
     if user and not NAME_RE.match(user):
         abort(400, "invalid user")
@@ -642,6 +642,15 @@ def auth_log():
     else:
         rows = q("SELECT username, reply, authdate FROM radpostauth ORDER BY id DESC LIMIT %s", (n,))
     return jsonify(log=jsonable(rows))
+
+
+def int_arg(name, default, lo, hi):
+    """Whole-number query parameter, clamped to lo..hi; 400 when it is not a number."""
+    try:
+        v = int(request.args.get(name, default) or default)
+    except ValueError:
+        abort(400, f"{name} must be a number")
+    return min(max(v, lo), hi)
 
 
 def report_args():
@@ -654,8 +663,8 @@ def report_args():
         abort(400, "invalid ip")
     try:
         a.days = min(max(float(request.args.get("days", 1)), 0.01), 90)
-        a.top = min(int(request.args.get("top", 50)), 500)
-        a.n = min(int(request.args.get("n", 200)), 2000)
+        a.top = min(max(int(request.args.get("top", 50)), 1), 500)
+        a.n = min(max(int(request.args.get("n", 200)), 1), 2000)
     except ValueError:
         abort(400, "invalid number")
     return a
@@ -951,7 +960,7 @@ def sales():
 def traffic_user_sites():
     """Top users by data, each with their top sites."""
     a = report_args()
-    per_user = min(int(request.args.get("per_user", 5) or 5), 20)
+    per_user = int_arg("per_user", 5, 1, 20)
     hours = int(a.days * 24)
     users_ = q("""SELECT IF(username='',client_ip,username) AS who, MAX(username) AS username,
                     SUM(bytes_down) AS down, SUM(bytes_up) AS up, COUNT(DISTINCT site) AS site_count
@@ -1237,7 +1246,7 @@ def router_info():
     try:
         info["version"] = open(os.path.join(ROUTER_DIR, "version")).read().strip()
         info["built"] = datetime.fromtimestamp(os.path.getmtime(os.path.join(ROUTER_DIR, "sync.rsc"))).strftime("%Y-%m-%d %H:%M")
-        info["vpn_servers"] = sum(1 for l in open(os.path.join(ROUTER_DIR, "vpn-servers.rsc")) if l.startswith("add list=vpn-servers"))
+        info["vpn_servers"] = sum(1 for l in open(os.path.join(ROUTER_DIR, "vpn-servers.rsc")) if "list=vpn-servers address=" in l)
     except OSError:
         pass
     info["has_key"] = os.path.exists(os.path.join(ROUTER_DIR, "key"))

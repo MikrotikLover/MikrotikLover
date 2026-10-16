@@ -185,7 +185,7 @@ def main():
     if cmd == "run":
         hours = float(args[args.index("--hours") + 1]) if "--hours" in args else 48
         since = time.time() - hours * 3600
-        lines = (l for l in cdnmap.tail_lines(cdnmap.DNS_LOG, 200_000_000) if (ts(l.split(" ", 1)[0]) or 0) >= since)
+        lines = (l for l in cdnmap.recent_lines(cdnmap.DNS_LOG, since, 200_000_000) if (ts(l.split(" ", 1)[0]) or 0) >= since)
         lines = list(lines)
         data, added = learn(lines, load())
         print(f"learned domains: {len(data['domains'])} total, {len(added)} new")
