@@ -114,7 +114,13 @@ cmd_user() {
         ;;
     enable)
         local u=${1:-}; valid_name "$u" username
-        echo "DELETE FROM radcheck WHERE username=$(q "$u") AND attribute='Auth-Type' AND value='Reject';" | db
+        # MAC devices authenticate with Auth-Type := Accept — restore it.
+        echo "START TRANSACTION;
+              DELETE FROM radcheck WHERE username=$(q "$u") AND attribute='Auth-Type' AND value='Reject';
+              INSERT INTO radcheck (username,attribute,op,value)
+                SELECT $(q "$u"),'Auth-Type',':=','Accept' FROM radcheck
+                WHERE username=$(q "$u") AND attribute='Calling-Station-Id' LIMIT 1;
+              COMMIT;" | db
         ok "User '$u' enabled"
         ;;
     group)
@@ -133,7 +139,8 @@ cmd_user() {
         echo "SELECT c.username AS user,
                      COALESCE(GROUP_CONCAT(DISTINCT g.groupname),'-') AS \`group\`,
                      IF(SUM(c.attribute='Auth-Type' AND c.value='Reject'),'DISABLED','active') AS status,
-                     IF(SUM(c.attribute='NT-Password'),'nt-hash','cleartext') AS password
+                     CASE WHEN SUM(c.attribute='Calling-Station-Id') THEN 'mac-device'
+                          WHEN SUM(c.attribute='NT-Password') THEN 'nt-hash' ELSE 'cleartext' END AS login
               FROM radcheck c LEFT JOIN radusergroup g ON g.username=c.username
               GROUP BY c.username ORDER BY c.username;" | dbt
         ;;
@@ -178,6 +185,10 @@ cmd_group() {
                 local a=Session-Timeout; [ "$1" = --idle-timeout ] && a=Idle-Timeout
                 sql+="DELETE FROM radgroupreply WHERE groupname=$(q "$g") AND attribute='$a';
                       INSERT INTO radgroupreply (groupname,attribute,op,value) VALUES ($(q "$g"),'$a',':=','$v');" ;;
+            --address-list)
+                valid_name "$v" "address list"
+                sql+="DELETE FROM radgroupreply WHERE groupname=$(q "$g") AND attribute='Mikrotik-Address-List';
+                      INSERT INTO radgroupreply (groupname,attribute,op,value) VALUES ($(q "$g"),'Mikrotik-Address-List',':=',$(q "$v"));" ;;
             --max-sessions)
                 valid_int "$v" "max-sessions"
                 sql+="DELETE FROM radgroupcheck WHERE groupname=$(q "$g") AND attribute='Simultaneous-Use';
@@ -252,6 +263,67 @@ cmd_nas() {
 }
 
 # ======================================================================= monitoring / tests
+# ======================================================================= MAC devices
+norm_mac() { # any common MAC format -> AA-BB-CC-DD-EE-FF
+    local m=${1//[-:. ]/}
+    [[ $m =~ ^[0-9A-Fa-f]{12}$ ]] || die "Invalid MAC address '$1'"
+    m=${m^^}
+    printf '%s-%s-%s-%s-%s-%s' "${m:0:2}" "${m:2:2}" "${m:4:2}" "${m:6:2}" "${m:8:2}" "${m:10:2}"
+}
+
+cmd_mac() {
+    local sub=${1:-list}; shift || true
+    case $sub in
+    add)
+        local m=${1:-}; [ -n "$m" ] || die "usage: radius-admin mac add MAC [-g GROUP] [-d DESCRIPTION]"
+        shift; m=$(norm_mac "$m")
+        local g="" d=""
+        while [ $# -gt 0 ]; do
+            case $1 in
+                -g|--group) g=${2:-}; valid_name "$g" group; shift 2 ;;
+                -d|--description) d=${2:-}; shift 2 ;;
+                *) die "Unknown option $1" ;;
+            esac
+        done
+        [[ ${#d} -le 128 && $d =~ ^[[:print:]]*$ ]] || die "Description: max 128 printable characters"
+        user_exists "$m" && die "MAC $m already exists"
+        # Calling-Station-Id "==" ties the entry to the real device MAC, so nobody can log in
+        # by typing the MAC as a username on another device (hotspot) or via WPA-Enterprise.
+        { echo "START TRANSACTION;
+                INSERT INTO radcheck (username,attribute,op,value) VALUES
+                  ($(q "$m"),'Calling-Station-Id','==',$(q "$m")),
+                  ($(q "$m"),'Auth-Type',':=','Accept');
+                REPLACE INTO macdevice (mac,description) VALUES ($(q "$m"),$(q "$d"));"
+          [ -z "$g" ] || echo "INSERT INTO radusergroup (username,groupname,priority) VALUES ($(q "$m"),$(q "$g"),1);"
+          echo "COMMIT;"; } | db
+        ok "MAC $m allowed${g:+ (group '$g')}${d:+ — $d}"
+        ;;
+    del|delete|rm)
+        local m; m=$(norm_mac "${1:-}")
+        user_exists "$m" || die "No such MAC $m"
+        echo "DELETE FROM radcheck WHERE username=$(q "$m"); DELETE FROM radreply WHERE username=$(q "$m");
+              DELETE FROM radusergroup WHERE username=$(q "$m"); DELETE FROM macdevice WHERE mac=$(q "$m");" | db
+        ok "MAC $m removed"
+        ;;
+    disable|enable)
+        cmd_user "$sub" "$(norm_mac "${1:-}")" ;;
+    group)
+        cmd_user group "$(norm_mac "${1:-}")" "${2:-}" ;;
+    list|ls)
+        echo "SELECT c.username AS mac, COALESCE(MAX(d.description),'') AS description,
+                     COALESCE(MAX(g.groupname),'-') AS \`group\`,
+                     IF(SUM(c.attribute='Auth-Type' AND c.value='Reject'),'DISABLED','active') AS status,
+                     (SELECT MAX(authdate) FROM radpostauth p WHERE p.username=c.username AND p.reply='Access-Accept') AS last_seen
+              FROM radcheck c
+              LEFT JOIN macdevice d ON d.mac=c.username
+              LEFT JOIN radusergroup g ON g.username=c.username
+              WHERE c.username IN (SELECT username FROM radcheck WHERE attribute='Calling-Station-Id')
+              GROUP BY c.username ORDER BY c.username;" | dbt
+        ;;
+    *) die "Unknown: mac $sub (add|del|disable|enable|group|list)" ;;
+    esac
+}
+
 cmd_online() {
     echo "SELECT username AS user, nasipaddress AS router, framedipaddress AS ip, callingstationid AS mac,
                  acctstarttime AS since, SEC_TO_TIME(TIMESTAMPDIFF(SECOND,acctstarttime,NOW())) AS duration,
@@ -323,7 +395,12 @@ Users
 Groups (speed limit, VLAN, timeouts, devices per user)
   group add NAME [--rate 10M/10M] [--vlan 20] [--session-timeout 86400]
                  [--idle-timeout 900] [--max-sessions 2]
+                 [--address-list web-filter-exempt]   (hotspot: user's IP joins this list)
   group del NAME | group show NAME | group list
+
+MAC authentication (devices without username/password: printers, CCTV, TVs, POS)
+  mac add MAC [-g GROUP] [-d "Reception printer"]   any format: aa:bb:.., AABB.CCDD.EEFF
+  mac del|disable|enable MAC | mac group MAC GROUP|- | mac list
 
 Routers (MikroTik = NAS)
   nas add IP[/PREFIX] [SECRET] [NAME]   (no SECRET: random one is generated)
@@ -345,6 +422,7 @@ case ${1:-help} in
     user)    shift; cmd_user "$@" ;;
     group)   shift; cmd_group "$@" ;;
     nas)     shift; cmd_nas "$@" ;;
+    mac)     shift; cmd_mac "$@" ;;
     online)  cmd_online ;;
     log)     shift; cmd_log "$@" ;;
     usage)   shift; cmd_usage "$@" ;;

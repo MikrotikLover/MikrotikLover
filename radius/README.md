@@ -4,6 +4,8 @@ FreeRADIUS 3.2 + MariaDB par bana hua RADIUS server, MikroTik Wi-Fi ke liye:
 
 - **WPA2/WPA3-Enterprise** — har user ka apna username/password (PEAP-MSCHAPv2 / EAP-TTLS). Ek password leak ho to sirf us user ko band karein, poore office ka Wi-Fi password badalne ki zaroorat nahi.
 - **Hotspot (captive portal)** login bhi isi user database se.
+- **MAC authentication** — printer, CCTV, smart TV, POS jaise devices sirf MAC address se connect hon.
+- **Website blocking by category** — social media, video, gaming, VPN, torrent, adult, gambling, ya apni list (MikroTik DNS par).
 - **Groups**: speed limit (`Mikrotik-Rate-Limit`), VLAN, session/idle timeout, ek user ke kitne devices (`Simultaneous-Use`).
 - **Accounting**: kaun online hai, kis ne kitna data use kiya, login/reject log.
 - `radius-admin` command se sab kuch manage hota hai — users, groups, routers, tests.
@@ -72,6 +74,22 @@ sudo radius-admin user show ali
 
 `--rate` MikroTik ka `rx/tx` format hai (router ki taraf se: upload/download), burst bhi chalta hai: `"4M/8M 6M/12M 3M/6M 10/10"`.
 
+## 3b. MAC authentication (devices bina username/password)
+
+```bash
+sudo radius-admin mac add aa:bb:cc:dd:ee:ff -g staff -d "Reception printer"   # koi bhi format: AABB.CCDD.EEFF, aabbccddeeff
+sudo radius-admin mac list               # description, group, last seen
+sudo radius-admin mac disable AA-BB-CC-DD-EE-FF
+sudo radius-admin mac enable  AA-BB-CC-DD-EE-FF
+sudo radius-admin mac group   AA-BB-CC-DD-EE-FF guests
+sudo radius-admin mac del     AA-BB-CC-DD-EE-FF
+```
+
+- MikroTik MAC kisi bhi format mein bheje (`AA:BB:..`, `aabbcc..`), server khud `AA-BB-CC-DD-EE-FF` bana leta hai.
+- Har MAC entry sirf tab accept hoti hai jab request ka **Calling-Station-Id** (device ka asli MAC) bhi wohi ho. Is liye koi MAC address ko username bana kar hotspot ya WPA-Enterprise par login nahi kar sakta.
+- Group ki speed limit / VLAN MAC devices par bhi lagti hai.
+- **Yaad rakhein:** MAC address copy (spoof) ho sakta hai. MAC auth ko akela security na samjhein; devices ke liye alag SSID (WPA2-PSK + MAC check) aur alag VLAN rakhein — `mikrotik/mac-auth.rsc` yahi karta hai.
+
 ## 4. MikroTik configuration
 
 `mikrotik/` folder mein ready scripts hain. File mein `RADIUS_SERVER_IP`, `RADIUS_SECRET` aur SSID replace karein, Winbox → Files mein upload karein, phir Terminal mein `/import file-name=...`.
@@ -81,6 +99,8 @@ sudo radius-admin user show ali
 | `wpa-enterprise-wifi-ros7.rsc` | RouterOS 7 **wifi** package (hAP ax², ax³, cAP ax, …) |
 | `wpa-enterprise-wireless-legacy.rsc` | Purana **wireless** package (RouterOS 6, hAP ac lite, cAP ac, SXT, …) |
 | `hotspot.rsc` | Hotspot captive portal login |
+| `mac-auth.rsc` | MAC authentication: (A) wifi package `query-radius`, (B) legacy wireless, (C) hotspot `login-by=mac` |
+| `webfilter-*.rsc` | Website category blocking — section 5b |
 
 Wi-Fi aur hotspot dono ek router par hain to ek hi entry kafi hai: `/radius add address=... secret=... service=wireless,hotspot`.
 
@@ -95,6 +115,51 @@ Wi-Fi aur hotspot dono ek router par hain to ek hi entry kafi hai: `/radius add 
 | iPhone / macOS | username/password → certificate par **Trust** |
 
 CA file: `/etc/freeradius/3.0/certs/mikrotiklover/ca.der` (Android/Windows) ya `ca.pem`. Android par: Settings → Security → Encryption & credentials → Install a certificate → Wi-Fi certificate.
+
+## 5b. Website / URL blocking by category
+
+Filtering MikroTik router ke DNS par hoti hai (RouterOS **7.15+**). Blocked site browser mein "site can't be reached" dikhati hai.
+
+**Step 1 — base (zaroori, sab se pehle):** `webfilter-base.rsc`
+- LAN ke har device ko router ka DNS use karna padta hai (port 53 redirect) — 8.8.8.8 likh kar bypass nahi hota.
+- Encrypted DNS band: DoT (853), DoH servers (Google, Cloudflare, Quad9, AdGuard, NextDNS, ...), Firefox DoH, iCloud Private Relay.
+- Address list `web-filter-exempt` wale devices par koi filter nahi (management, IT).
+
+**Step 2 — categories (jo chahiye woh import karein):**
+
+| File | Category | Kaise |
+|---|---|---|
+| `webfilter-social.rsc` | Facebook, Instagram, TikTok, Snapchat, X, LinkedIn, Reddit, Likee, ... | static list |
+| `webfilter-video-streaming.rsc` | YouTube, Netflix, Prime, Hotstar, Tamasha, Tapmad, Twitch, ... | static list |
+| `webfilter-gaming.rsc` | PUBG, Free Fire, Roblox, Steam, Epic, Supercell, browser games | static list |
+| `webfilter-vpn-proxy.rsc` | VPN / web-proxy websites | static list |
+| `webfilter-torrent-piracy.rsc` | Torrent sites, clients, trackers | static list |
+| `webfilter-messaging.rsc` | WhatsApp, Telegram, Signal, Viber, IMO, Discord | static list |
+| `webfilter-custom.rsc` | Aap ki apni list | static list |
+| `webfilter-adlists.rsc` | **Adult** (~75k), **Gambling** (~7k), Ads+Malware, Fake news (optional) | adlist, router khud download/update karta hai |
+
+Har static domain ke **saare subdomains** bhi block hote hain (`facebook.com` → `m.facebook.com`, `web.facebook.com`).
+
+**Apni list / list badalna:** `webfilter/categories/*.txt` edit karein (ek line = ek domain), phir `./webfilter/build.sh` chalayein — `mikrotik/webfilter-*.rsc` dobara ban jayengi. Router par dobara import karna safe hai (purani entries pehle remove hoti hain).
+
+```routeros
+# Category hatana
+/ip dns static remove [find comment="webfilter:social"]
+# Ek site turant block / allow
+/ip dns static add name=example.com type=NXDOMAIN match-subdomain=yes comment="webfilter:custom"
+/ip dns static add name=example.com type=FWD forward-to=1.1.1.1 match-subdomain=yes comment="webfilter:allow"
+# Kisi PC ko filter se bahar rakhna
+/ip firewall address-list add list=web-filter-exempt address=192.168.88.10 comment="Manager PC"
+```
+
+**User/group ke hisaab se filter (RADIUS):**
+- **Hotspot users**: `sudo radius-admin group add managers --address-list web-filter-exempt` — login hote hi user ka IP exempt list mein chala jata hai, baqi sab filtered.
+- **WPA-Enterprise users**: group ko VLAN dein (`--vlan 10`) aur us VLAN ka subnet exempt list mein daalein: `/ip firewall address-list add list=web-filter-exempt address=192.168.10.0/24`.
+
+**Limitations (honestly):**
+- HTTPS mein poora URL path (`site.com/page`) router nahi dekh sakta — blocking **domain** level par hoti hai. Path-level blocking ke liye SSL interception proxy chahiye jo har device par certificate maangta hai.
+- Device par pehle se install VPN app DNS filter ko bypass kar sakti hai; `vpn-proxy` category sirf VPN websites band karti hai.
+- Naye DoH servers aate rehte hain; `webfilter/categories/doh.txt` aur `base.rsc.in` ki IP list update karte rahein.
 
 ## 6. Monitoring aur testing
 

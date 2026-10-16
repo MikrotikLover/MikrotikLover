@@ -91,6 +91,7 @@ FLUSH PRIVILEGES;
 EOF
 # Official FreeRADIUS schema (CREATE TABLE IF NOT EXISTS → safe to re-run)
 mysql "$DB_NAME" < "$RADDB/mods-config/sql/main/mysql/schema.sql"
+mysql "$DB_NAME" < "$SCRIPT_DIR/templates/schema-extra.sql"
 
 # ---------------------------------------------------------------- certificates
 make_ca() {
@@ -156,6 +157,12 @@ cp -a "$RADDB/sites-available/default.mikrotiklover.orig" "$RADDB/sites-availabl
 
 # Simultaneous-Use (max sessions per user) needs SQL in the session section.
 sed -i '/^session {/,/^}/ s/^#[[:space:]]*sql$/\tsql/' "$RADDB/sites-available/default"
+
+# MAC authentication: normalise MAC user names before the SQL lookup and in accounting.
+install -m 644 "$SCRIPT_DIR/templates/policy" "$RADDB/policy.d/mikrotiklover"
+sed -i -e '/^authorize {/,/^}/ s/^\tpreprocess$/\tpreprocess\n\tmikrotiklover_mac_normalize/' \
+       -e '/^preacct {/,/^}/ s/^\tpreprocess$/\tpreprocess\n\tmikrotiklover_mac_normalize/' \
+       "$RADDB/sites-available/default"
 
 # Hosts/containers with IPv6 disabled cannot bind "::" — keep only the IPv4 listeners there.
 if [ ! -e /proc/net/if_inet6 ]; then
