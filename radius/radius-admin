@@ -1,0 +1,356 @@
+#!/usr/bin/env bash
+# radius-admin — manage MikrotikLover RADIUS users, groups and MikroTik routers (NAS).
+# Installed to /usr/local/sbin by install.sh. Run "radius-admin help".
+set -euo pipefail
+export LC_ALL=C
+
+CONF_DIR=/etc/mikrotiklover-radius
+[ -r "$CONF_DIR/radius.conf" ] || { echo "Not installed (missing $CONF_DIR/radius.conf). Run install.sh first." >&2; exit 1; }
+# shellcheck source=/dev/null
+. "$CONF_DIR/radius.conf"
+
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+ok()  { printf '\033[1;32m✔\033[0m %s\n' "$*"; }
+
+svc() { if [ -d /run/systemd/system ]; then systemctl "$1" "$2"; else service "$2" "$1" >/dev/null; fi; }
+
+db()   { mysql --defaults-extra-file="$CONF_DIR/my.cnf" -N -B "$DB_NAME"; }   # raw output
+dbt()  { mysql --defaults-extra-file="$CONF_DIR/my.cnf" -t "$DB_NAME"; }      # table output
+
+# SQL string literal. Inputs are validated first; this escapes what remains.
+q() { local s=${1//\\/\\\\}; s=${s//\'/\\\'}; printf "'%s'" "$s"; }
+
+valid_name()   { [[ $1 =~ ^[A-Za-z0-9._@+-]{1,64}$ ]] || die "Invalid ${2:-name} '$1' (letters, digits, . _ @ + - ; max 64)"; }
+valid_pass()   { [[ ${#1} -ge 4 && ${#1} -le 128 && $1 =~ ^[[:print:]]+$ ]] || die "Password must be 4–128 printable characters"; }
+valid_secret() { [[ $1 =~ ^[A-Za-z0-9._@#%+=-]{8,64}$ ]] || die "Secret must be 8–64 chars of A-Z a-z 0-9 . _ @ # % + = -"; }
+valid_int()    { [[ $1 =~ ^[0-9]{1,9}$ ]] || die "$2 must be a number"; }
+valid_ip() {
+    [[ $1 =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(/([0-9]{1,2}))?$ ]] || die "Invalid IPv4 address '$1'"
+    local i; for i in 1 2 3 4; do (( BASH_REMATCH[i] <= 255 )) || die "Invalid IPv4 address '$1'"; done
+    [ -z "${BASH_REMATCH[6]}" ] || (( BASH_REMATCH[6] <= 32 )) || die "Invalid prefix in '$1'"
+}
+
+gen_pass() { local s; s=$(openssl rand -base64 96 | tr -dc 'A-HJ-NP-Za-km-z2-9'); printf '%s' "${s:0:${1:-10}}"; }
+
+nt_hash() { printf '%s' "$1" | iconv -f UTF-8 -t UTF-16LE | openssl dgst -md4 -provider legacy -provider default -r | cut -d' ' -f1 | tr a-f A-F; }
+
+read_pass() { # sets PASS: from -p, prompt (tty) or random
+    if [ -n "${PASS:-}" ]; then return; fi
+    if [ -t 0 ]; then
+        local p2
+        read -r -s -p "Password (empty = random): " PASS; echo >&2
+        if [ -n "$PASS" ]; then read -r -s -p "Repeat password: " p2; echo >&2; [ "$PASS" = "$p2" ] || die "Passwords do not match"; fi
+    fi
+    if [ -z "$PASS" ]; then PASS=$(gen_pass 10); GENERATED=1; fi
+}
+
+user_exists()  { [ -n "$(echo "SELECT 1 FROM radcheck WHERE username=$(q "$1") LIMIT 1" | db)" ]; }
+group_exists() { [ -n "$(echo "SELECT 1 FROM radgroupreply WHERE groupname=$(q "$1") UNION SELECT 1 FROM radgroupcheck WHERE groupname=$(q "$1") LIMIT 1" | db)" ]; }
+
+password_sql() { # password_sql USER  (uses PASS, NT)
+    local attr=Cleartext-Password val=$PASS
+    if [ "${NT:-0}" = 1 ]; then attr=NT-Password; val="0x$(nt_hash "$PASS")"; fi
+    echo "DELETE FROM radcheck WHERE username=$(q "$1") AND attribute IN ('Cleartext-Password','NT-Password');"
+    echo "INSERT INTO radcheck (username,attribute,op,value) VALUES ($(q "$1"),'$attr',':=',$(q "$val"));"
+}
+
+parse_pass_opts() { # common options: -p PASS, -g GROUP, --nt-hash
+    PASS="" GROUP="" NT=0 GENERATED=0
+    while [ $# -gt 0 ]; do
+        case $1 in
+            -p|--password) PASS=${2:-}; shift 2 ;;
+            -g|--group)    GROUP=${2:-}; shift 2 ;;
+            --nt-hash)     NT=1; shift ;;
+            *) die "Unknown option $1" ;;
+        esac
+    done
+    if [ -n "$PASS" ]; then valid_pass "$PASS"; fi
+    if [ -n "$GROUP" ]; then valid_name "$GROUP" group; fi
+    return 0
+}
+
+restart_radius() {
+    freeradius -C -lstdout >/dev/null 2>&1 || die "FreeRADIUS config check failed (run: freeradius -XC)"
+    svc restart freeradius >/dev/null 2>&1
+}
+
+# ======================================================================= users
+cmd_user() {
+    local sub=${1:-list}; shift || true
+    case $sub in
+    add)
+        local u=${1:-}; [ -n "$u" ] || die "usage: radius-admin user add NAME [-p PASS] [-g GROUP] [--nt-hash]"
+        shift; valid_name "$u" username; parse_pass_opts "$@"
+        user_exists "$u" && die "User '$u' already exists (use: user passwd)"
+        [ -z "$GROUP" ] || group_exists "$GROUP" || echo "Note: group '$GROUP' has no attributes yet (radius-admin group add $GROUP ...)" >&2
+        read_pass
+        { echo "START TRANSACTION;"; password_sql "$u"
+          [ -z "$GROUP" ] || echo "INSERT INTO radusergroup (username,groupname,priority) VALUES ($(q "$u"),$(q "$GROUP"),1);"
+          echo "COMMIT;"; } | db
+        ok "User '$u' created${GROUP:+ in group '$GROUP'}"
+        [ "$GENERATED" = 0 ] || echo "   Password: $PASS"
+        ;;
+    passwd)
+        local u=${1:-}; [ -n "$u" ] || die "usage: radius-admin user passwd NAME [-p PASS] [--nt-hash]"
+        shift; valid_name "$u" username; parse_pass_opts "$@"
+        user_exists "$u" || die "No such user '$u'"
+        read_pass
+        { echo "START TRANSACTION;"; password_sql "$u"; echo "COMMIT;"; } | db
+        ok "Password changed for '$u'"
+        [ "$GENERATED" = 0 ] || echo "   Password: $PASS"
+        ;;
+    del|delete|rm)
+        local u=${1:-}; valid_name "$u" username
+        user_exists "$u" || die "No such user '$u'"
+        echo "DELETE FROM radcheck WHERE username=$(q "$u"); DELETE FROM radreply WHERE username=$(q "$u"); DELETE FROM radusergroup WHERE username=$(q "$u");" | db
+        ok "User '$u' deleted"
+        ;;
+    disable)
+        local u=${1:-}; valid_name "$u" username
+        user_exists "$u" || die "No such user '$u'"
+        echo "DELETE FROM radcheck WHERE username=$(q "$u") AND attribute='Auth-Type';
+              INSERT INTO radcheck (username,attribute,op,value) VALUES ($(q "$u"),'Auth-Type',':=','Reject');" | db
+        ok "User '$u' disabled (already-connected devices drop at next re-authentication)"
+        ;;
+    enable)
+        local u=${1:-}; valid_name "$u" username
+        echo "DELETE FROM radcheck WHERE username=$(q "$u") AND attribute='Auth-Type' AND value='Reject';" | db
+        ok "User '$u' enabled"
+        ;;
+    group)
+        local u=${1:-} g=${2:-}; valid_name "$u" username; [ -n "$g" ] || die "usage: radius-admin user group NAME GROUP|-"
+        user_exists "$u" || die "No such user '$u'"
+        if [ "$g" = - ]; then
+            echo "DELETE FROM radusergroup WHERE username=$(q "$u");" | db; ok "User '$u' removed from all groups"
+        else
+            valid_name "$g" group
+            echo "START TRANSACTION; DELETE FROM radusergroup WHERE username=$(q "$u");
+                  INSERT INTO radusergroup (username,groupname,priority) VALUES ($(q "$u"),$(q "$g"),1); COMMIT;" | db
+            ok "User '$u' moved to group '$g'"
+        fi
+        ;;
+    list|ls)
+        echo "SELECT c.username AS user,
+                     COALESCE(GROUP_CONCAT(DISTINCT g.groupname),'-') AS \`group\`,
+                     IF(SUM(c.attribute='Auth-Type' AND c.value='Reject'),'DISABLED','active') AS status,
+                     IF(SUM(c.attribute='NT-Password'),'nt-hash','cleartext') AS password
+              FROM radcheck c LEFT JOIN radusergroup g ON g.username=c.username
+              GROUP BY c.username ORDER BY c.username;" | dbt
+        ;;
+    show)
+        local u=${1:-}; valid_name "$u" username
+        user_exists "$u" || die "No such user '$u'"
+        echo "SELECT 'check' AS type, attribute, op, IF(attribute LIKE '%Password','********',value) AS value FROM radcheck WHERE username=$(q "$u")
+              UNION ALL SELECT 'reply', attribute, op, value FROM radreply WHERE username=$(q "$u")
+              UNION ALL SELECT 'group', groupname, '', priority FROM radusergroup WHERE username=$(q "$u");" | dbt
+        echo "Last logins:"
+        echo "SELECT authdate, reply FROM radpostauth WHERE username=$(q "$u") ORDER BY id DESC LIMIT 5;" | dbt
+        ;;
+    *) die "Unknown: user $sub (add|passwd|del|disable|enable|group|list|show)" ;;
+    esac
+}
+
+# ======================================================================= groups
+cmd_group() {
+    local sub=${1:-list}; shift || true
+    case $sub in
+    add|set)
+        local g=${1:-}; [ -n "$g" ] || die "usage: radius-admin group add NAME [--rate RX/TX] [--vlan ID] [--session-timeout SEC] [--idle-timeout SEC] [--max-sessions N]"
+        shift; valid_name "$g" group
+        local sql="" n=0
+        while [ $# -gt 0 ]; do
+            local v=${2:-}
+            case $1 in
+            --rate)
+                [[ $v =~ ^[0-9A-Za-z/\ ]{1,64}$ ]] || die "Rate must look like 10M/10M (MikroTik rx/tx[ burst...] syntax)"
+                sql+="DELETE FROM radgroupreply WHERE groupname=$(q "$g") AND attribute='Mikrotik-Rate-Limit';
+                      INSERT INTO radgroupreply (groupname,attribute,op,value) VALUES ($(q "$g"),'Mikrotik-Rate-Limit',':=',$(q "$v"));" ;;
+            --vlan)
+                valid_int "$v" "VLAN"; (( v >= 1 && v <= 4094 )) || die "VLAN must be 1–4094"
+                sql+="DELETE FROM radgroupreply WHERE groupname=$(q "$g") AND attribute IN ('Tunnel-Type','Tunnel-Medium-Type','Tunnel-Private-Group-Id','Mikrotik-Wireless-VLANID');
+                      INSERT INTO radgroupreply (groupname,attribute,op,value) VALUES
+                        ($(q "$g"),'Tunnel-Type',':=','VLAN'),
+                        ($(q "$g"),'Tunnel-Medium-Type',':=','IEEE-802'),
+                        ($(q "$g"),'Tunnel-Private-Group-Id',':=','$v'),
+                        ($(q "$g"),'Mikrotik-Wireless-VLANID',':=','$v');" ;;
+            --session-timeout|--idle-timeout)
+                valid_int "$v" "$1"
+                local a=Session-Timeout; [ "$1" = --idle-timeout ] && a=Idle-Timeout
+                sql+="DELETE FROM radgroupreply WHERE groupname=$(q "$g") AND attribute='$a';
+                      INSERT INTO radgroupreply (groupname,attribute,op,value) VALUES ($(q "$g"),'$a',':=','$v');" ;;
+            --max-sessions)
+                valid_int "$v" "max-sessions"
+                sql+="DELETE FROM radgroupcheck WHERE groupname=$(q "$g") AND attribute='Simultaneous-Use';
+                      INSERT INTO radgroupcheck (groupname,attribute,op,value) VALUES ($(q "$g"),'Simultaneous-Use',':=','$v');" ;;
+            *) die "Unknown option $1" ;;
+            esac
+            shift 2; n=$((n+1))
+        done
+        [ "$n" -gt 0 ] || echo "Note: no limits given — members of '$g' get no speed/VLAN/time limits" >&2
+        [ -z "$sql" ] || echo "START TRANSACTION; $sql COMMIT;" | db
+        ok "Group '$g' saved"
+        cmd_group show "$g"
+        ;;
+    del|delete|rm)
+        local g=${1:-}; valid_name "$g" group
+        local members; members=$(echo "SELECT COUNT(*) FROM radusergroup WHERE groupname=$(q "$g")" | db)
+        echo "DELETE FROM radgroupreply WHERE groupname=$(q "$g"); DELETE FROM radgroupcheck WHERE groupname=$(q "$g"); DELETE FROM radusergroup WHERE groupname=$(q "$g");" | db
+        ok "Group '$g' deleted ($members user(s) are now without a group)"
+        ;;
+    show)
+        local g=${1:-}; valid_name "$g" group
+        echo "SELECT 'check' AS type, attribute, op, value FROM radgroupcheck WHERE groupname=$(q "$g")
+              UNION ALL SELECT 'reply', attribute, op, value FROM radgroupreply WHERE groupname=$(q "$g");" | dbt
+        ;;
+    list|ls)
+        echo "SELECT g.groupname AS \`group\`,
+                     (SELECT COUNT(*) FROM radusergroup u WHERE u.groupname=g.groupname) AS users,
+                     COALESCE(MAX(IF(g.attribute='Mikrotik-Rate-Limit',g.value,NULL)),'-') AS rate,
+                     COALESCE(MAX(IF(g.attribute='Tunnel-Private-Group-Id',g.value,NULL)),'-') AS vlan,
+                     COALESCE(MAX(IF(g.attribute='Session-Timeout',g.value,NULL)),'-') AS session_timeout,
+                     COALESCE((SELECT value FROM radgroupcheck c WHERE c.groupname=g.groupname AND c.attribute='Simultaneous-Use' LIMIT 1),'-') AS max_sessions
+              FROM (SELECT groupname,attribute,value FROM radgroupreply
+                    UNION ALL SELECT groupname,'',NULL FROM radgroupcheck
+                    UNION ALL SELECT groupname,'',NULL FROM radusergroup) g
+              GROUP BY g.groupname ORDER BY g.groupname;" | dbt
+        ;;
+    *) die "Unknown: group $sub (add|del|show|list)" ;;
+    esac
+}
+
+# ======================================================================= NAS (MikroTik routers)
+cmd_nas() {
+    local sub=${1:-list}; shift || true
+    case $sub in
+    add)
+        local ip=${1:-} secret=${2:-} name=${3:-}
+        [ -n "$ip" ] || die "usage: radius-admin nas add IP[/PREFIX] [SECRET] [NAME]"
+        valid_ip "$ip"
+        local generated=0
+        if [ -z "$secret" ]; then secret=$(gen_pass 20); generated=1; fi
+        valid_secret "$secret"
+        name=${name:-mikrotik-${ip%%/*}}; valid_name "$name" "NAS name"
+        echo "START TRANSACTION; DELETE FROM nas WHERE nasname=$(q "$ip");
+              INSERT INTO nas (nasname,shortname,type,secret,description) VALUES ($(q "$ip"),$(q "$name"),'other',$(q "$secret"),'MikroTik');
+              COMMIT;" | db
+        restart_radius
+        ok "Router $ip ($name) added — FreeRADIUS restarted"
+        [ "$generated" = 0 ] || echo "   Secret: $secret"
+        echo "   On the MikroTik:  /radius add address=<this-server-ip> secret=$secret service=wireless,hotspot,login timeout=3s"
+        ;;
+    del|delete|rm)
+        local ip=${1:-}; valid_ip "$ip"
+        echo "DELETE FROM nas WHERE nasname=$(q "$ip");" | db
+        restart_radius
+        ok "Router $ip removed"
+        ;;
+    list|ls)
+        echo "SELECT nasname AS address, shortname AS name, CONCAT(LEFT(secret,3),'…') AS secret, description FROM nas ORDER BY nasname;" | dbt
+        ;;
+    *) die "Unknown: nas $sub (add|del|list)" ;;
+    esac
+}
+
+# ======================================================================= monitoring / tests
+cmd_online() {
+    echo "SELECT username AS user, nasipaddress AS router, framedipaddress AS ip, callingstationid AS mac,
+                 acctstarttime AS since, SEC_TO_TIME(TIMESTAMPDIFF(SECOND,acctstarttime,NOW())) AS duration,
+                 CONCAT(ROUND(acctinputoctets/1048576,1),'/',ROUND(acctoutputoctets/1048576,1)) AS 'MB up/down'
+          FROM radacct WHERE acctstoptime IS NULL ORDER BY acctstarttime DESC;" | dbt
+}
+
+cmd_log() {
+    local n=${1:-30}; valid_int "$n" "count"
+    echo "SELECT authdate AS time, username AS user, reply AS result FROM radpostauth ORDER BY id DESC LIMIT $n;" | dbt
+}
+
+cmd_usage() {
+    local u=${1:-}; valid_name "$u" username
+    echo "SELECT DATE(acctstarttime) AS day, COUNT(*) AS sessions,
+                 SEC_TO_TIME(SUM(acctsessiontime)) AS online,
+                 ROUND(SUM(acctinputoctets)/1048576,1) AS MB_up, ROUND(SUM(acctoutputoctets)/1048576,1) AS MB_down
+          FROM radacct WHERE username=$(q "$u") AND acctstarttime >= NOW() - INTERVAL 30 DAY
+          GROUP BY DATE(acctstarttime) ORDER BY day DESC;" | dbt
+}
+
+cmd_test() {
+    local u=${1:-}; [ -n "$u" ] || die "usage: radius-admin test USER [PASS] [--peap]"
+    shift; local p="" peap=0
+    while [ $# -gt 0 ]; do case $1 in --peap) peap=1 ;; *) p=$1 ;; esac; shift; done
+    if [ -z "$p" ]; then read -r -s -p "Password for $u: " p; echo >&2; fi
+    if [ "$peap" = 1 ]; then
+        command -v eapol_test >/dev/null || die "eapol_test not installed (apt install eapoltest)"
+        local cfg log; cfg=$(mktemp); log=$(mktemp); trap 'rm -f "$cfg" "$log"' RETURN
+        cat > "$cfg" <<EOF
+network={
+    key_mgmt=WPA-EAP
+    eap=PEAP
+    identity="$u"
+    anonymous_identity="anonymous"
+    password="$p"
+    phase2="auth=MSCHAPV2"
+    ca_cert="/etc/freeradius/3.0/certs/mikrotiklover/ca.pem"
+    domain_match="$RADIUS_DOMAIN"
+}
+EOF
+        if eapol_test -c "$cfg" -a 127.0.0.1 -s "$LOCAL_SECRET" -t 10 >"$log" 2>&1; then
+            ok "PEAP-MSCHAPv2 login OK for '$u' (Wi-Fi clients will work)"
+        else
+            tail -5 "$log"; die "PEAP login FAILED for '$u'"
+        fi
+    else
+        local out; out=$(radtest -t mschap "$u" "$p" 127.0.0.1 0 "$LOCAL_SECRET" 2>&1 || true)
+        if grep -q 'Received Access-Accept' <<<"$out"; then
+            ok "MSCHAPv2 login OK for '$u'"; grep -E '^\s+(Mikrotik|Tunnel|Session|Idle)' <<<"$out" || true
+        else
+            echo "$out" | tail -4; die "Login FAILED for '$u'"
+        fi
+    fi
+}
+
+usage() {
+    cat <<'EOF'
+radius-admin — MikrotikLover RADIUS management
+
+Users
+  user add NAME [-p PASS] [-g GROUP] [--nt-hash]   create user (no -p: prompt / random)
+  user passwd NAME [-p PASS] [--nt-hash]           change password
+  user group NAME GROUP|-                          set or remove the user's group
+  user disable|enable NAME                         block / unblock
+  user del NAME                                    delete
+  user list | user show NAME
+
+Groups (speed limit, VLAN, timeouts, devices per user)
+  group add NAME [--rate 10M/10M] [--vlan 20] [--session-timeout 86400]
+                 [--idle-timeout 900] [--max-sessions 2]
+  group del NAME | group show NAME | group list
+
+Routers (MikroTik = NAS)
+  nas add IP[/PREFIX] [SECRET] [NAME]   (no SECRET: random one is generated)
+  nas del IP | nas list
+
+Monitoring
+  online               users connected now
+  log [N]              last N login attempts (accept/reject)
+  usage USER           daily usage, last 30 days
+  test USER [PASS] [--peap]   test a login against this server
+  restart | status
+
+--nt-hash stores an NT hash instead of the password. It works for WPA2-Enterprise
+(PEAP/TTLS-MSCHAPv2) but NOT for hotspot CHAP logins.
+EOF
+}
+
+case ${1:-help} in
+    user)    shift; cmd_user "$@" ;;
+    group)   shift; cmd_group "$@" ;;
+    nas)     shift; cmd_nas "$@" ;;
+    online)  cmd_online ;;
+    log)     shift; cmd_log "$@" ;;
+    usage)   shift; cmd_usage "$@" ;;
+    test)    shift; cmd_test "$@" ;;
+    restart) restart_radius; ok "FreeRADIUS restarted" ;;
+    status)  svc status freeradius || true ;;
+    help|-h|--help) usage ;;
+    *) usage; exit 1 ;;
+esac
