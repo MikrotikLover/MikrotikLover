@@ -36,7 +36,7 @@ command -v apt-get >/dev/null || die "Only Debian/Ubuntu are supported"
 log "Installing FreeRADIUS + MariaDB"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq freeradius freeradius-mysql freeradius-utils mariadb-server openssl rsyslog python3 >/dev/null
+apt-get install -y -qq freeradius freeradius-mysql freeradius-utils mariadb-server openssl rsyslog python3 dnsmasq-base >/dev/null
 # eapol_test lets "radius-admin test --peap" simulate a real Wi-Fi client (optional package)
 apt-get install -y -qq eapoltest >/dev/null 2>&1 || warn "eapoltest not available; PEAP self-test disabled"
 [ -d "$RADDB" ] || die "$RADDB not found — unexpected FreeRADIUS layout"
@@ -186,7 +186,8 @@ grep -q "$LOCAL_SECRET" "$RADDB/clients.conf" || warn "Could not set the localho
 # ---------------------------------------------------------------- admin tool
 install -m 750 "$SCRIPT_DIR/radius-admin" /usr/local/sbin/radius-admin
 install -d -m 755 /usr/local/lib/mikrotiklover
-install -m 644 "$SCRIPT_DIR/tools/wf-report.py" /usr/local/lib/mikrotiklover/wf-report.py
+install -m 644 "$SCRIPT_DIR/tools/mlreport.py" /usr/local/lib/mikrotiklover/mlreport.py
+rm -f /usr/local/lib/mikrotiklover/wf-report.py
 
 # ---------------------------------------------------------------- router logs (blocked-site report)
 log "Configuring rsyslog for router web-filter logs (UDP 514)"
@@ -198,6 +199,17 @@ cat > /etc/logrotate.d/mikrotiklover-webfilter <<'EOF'
     weekly
     rotate 8
     compress
+    missingok
+    notifempty
+    postrotate
+        /usr/lib/rsyslog/rsyslog-rotate 2>/dev/null || true
+    endscript
+}
+/var/log/mikrotik/dns.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
     missingok
     notifempty
     postrotate

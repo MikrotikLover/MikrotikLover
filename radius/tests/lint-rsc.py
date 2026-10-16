@@ -32,6 +32,7 @@ PROPS = {
         "unicast-ciphers", "group-ciphers", "radius-eap-accounting", "wpa2-pre-shared-key",
         "radius-mac-authentication", "radius-mac-accounting", "radius-mac-mode", "radius-mac-format"},
     "/interface wireless": {"security-profile", "ssid", "mode", "disabled", "master-interface", "name", "vlan-mode"},
+    "/tool netwatch": {"host", "interval", "timeout", "comment", "up-script", "down-script", "type"},
     "/system logging action": {"name", "target", "remote", "remote-port"},
     "/system logging": {"topics", "action", "prefix"},
     "/ip hotspot profile": {"use-radius", "radius-accounting", "radius-interim-update", "login-by", "mac-auth-mode"},
@@ -60,7 +61,9 @@ def lint(path):
         if depth < 0:
             errs.append(f"{n}: unbalanced braces")
         if s.startswith("/"):
-            menu = s.split(" add ")[0].split(" set ")[0].strip()
+            words = s.split()
+            cut = next((i for i, w in enumerate(words) if w in ("add", "set", "remove", "move")), len(words))
+            menu = " ".join(words[:cut])
             if menu not in PROPS:
                 errs.append(f"{n}: unknown menu {menu}")
             if " " not in s.strip() or menu == s:

@@ -103,6 +103,7 @@ sudo radius-admin mac del     AA-BB-CC-DD-EE-FF
 | `webfilter-*.rsc` | Website category blocking — section 5b |
 | `webfilter-policies.rsc` | Single user / group / IP range ki alag policies, time ke saath |
 | `webfilter-logging.rsc` | Blocked attempts server par (`radius-admin blocked`) |
+| `dns-logging.rsc` | Visited sites + live log (`radius-admin sites / history / live`) |
 | `allow-only-whatsapp.rsc` | Sirf WhatsApp |
 
 Wi-Fi aur hotspot dono ek router par hain to ek hi entry kafi hai: `/radius add address=... secret=... service=wireless,hotspot`.
@@ -243,6 +244,38 @@ Router ko RADIUS Disconnect-Request (port 3799) bhejta hai. `user disable` aur `
    ```
    IP/MAC se RADIUS session dhoond kar **username** dikhata hai. Logs `/var/log/mikrotik/webfilter.log` (8 hafte rotate).
 
+### Visited sites report aur live log
+
+Har user ne kaunsi site kholi — username ke saath. Router ka DNS server par ek chhote DNS logger (dnsmasq) se guzarta hai; woh har query client IP ke saath likhta hai aur wapas router ko bhej deta hai (router ki saari DNS filtering waisi hi chalti hai). IP → username RADIUS session (radacct) se.
+
+**Setup (ek dafa):**
+1. Server par: `sudo radius-admin dnslog on 192.168.88.1` (MikroTik ka IP jo filtering karta hai)
+2. Router par: `mikrotik/dns-logging.rsc` (`RADIUS_SERVER_IP` badal kar) — `webfilter-base.rsc` ke baad import.
+3. Server ka UDP/TCP 53 sirf routers/LAN ke liye kholein.
+
+> **Zaroori:** server clients wale subnet mein **na** ho — alag VLAN/subnet ya WireGuard tunnel (bina masquerade) se, warna server ko asal client IP nahi milta aur DNS toot jata hai. Server band ho to router ka netwatch 30 second mein DNS wapas router par kar deta hai.
+
+**Reports:**
+```bash
+sudo radius-admin live                    # LIVE: har visit aur har block, sab users (Ctrl+C)
+sudo radius-admin live -u ali             # sirf ali live
+sudo radius-admin sites                   # 7 din ki top 30 sites, kitne users, kaun
+sudo radius-admin sites -u ali --days 30 --top 50
+sudo radius-admin sites --ip 192.168.88.23
+sudo radius-admin history -u ali          # aaj ali ne kya kya khola, time ke saath
+sudo radius-admin history -u ali --days 7 200
+sudo radius-admin blocked -u ali          # ali ki blocked koshishein
+```
+```
+2026-10-16 18:06:22  ali   192.168.88.23  instagram.com     www.instagram.com
+2026-10-16 18:06:24  ali   192.168.88.23  BLOCKED social → 157.240.1.174:443
+```
+- CDN ke naam asal site mein jor diye jate hain (`googlevideo.com`, `ytimg.com` → youtube.com; `fbcdn.net` → facebook.com; `cdninstagram.com` → instagram.com ...). Ek device ki ek site 5 minute mein **1 visit** ginti hai.
+- Logs: `/var/log/mikrotik/dns.log` (30 din), `webfilter.log` (8 hafte), purane compress ho jate hain.
+- `radius-admin dnslog status | off`
+- **Limitation:** sirf site ka naam (domain) aata hai, page/URL nahi (HTTPS). Jo users DNS bypass karte hain (exempt list, policy ki family DNS) woh `sites` mein nahi aate — `blocked` mein aate hain.
+- **Privacy / qanoon:** users ki browsing record ho rahi hai — unhein pehle bata dein (Wi-Fi terms / office policy). Pakistan mein PECA 2016 ke tehat data sirf zaroorat tak rakhein aur mehfooz rakhein; log files sirf root/adm parh sakte hain.
+
 ### Sirf WhatsApp (baqi sab band) — `allow-only-whatsapp.rsc`
 
 Kisi user/device ko sirf WhatsApp dena ho (chat, voice/video call, photo/video, voice note, status, WhatsApp Web) aur **YouTube, Facebook, Instagram, TikTok, browser — sab band**:
@@ -292,6 +325,7 @@ Kisi bhi category ka naam badal kar (`webfilter:video-streaming`, `webfilter:gam
 python3 tests/lint-rsc.py             # har .rsc: quotes, braces, menu aur property names
 python3 tests/simulate-allowonly.py   # WhatsApp-only rules ka simulation
 python3 tests/simulate-policies.py    # policies: user/group/range, office time, raat
+python3 tests/test-mlreport.py        # sites / history / blocked reports (sample logs)
 ```
 
 **Limitations (honestly):**

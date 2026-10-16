@@ -87,6 +87,13 @@ ruleset(name="mikrotiklover") {
     stop
 }
 input(type="imudp" port="514" ruleset="mikrotiklover")
+# DNS logger (dnsmasq on this server): keep only the "query[...]" lines
+if (\$programname == "dnsmasq") then {
+    if (\$msg contains "query[") then {
+        action(type="omfile" file="/var/log/mikrotik/dns.log" template="mikrotiklover_wf" fileCreateMode="0640" fileGroup="adm")
+    }
+    stop
+}
 EOF
     svc restart rsyslog >/dev/null 2>&1 || true
 }
@@ -406,22 +413,84 @@ cmd_kick() {
     kick_user "$u"
 }
 
-# Blocked-site report from the routers' firewall log (webfilter-logging.rsc → rsyslog on this server).
+# Reports from the router logs (rsyslog on this server) — see tools/mlreport.py
 WF_LOG=/var/log/mikrotik/webfilter.log
-cmd_blocked() {
-    local n=30 user=""
-    while [ $# -gt 0 ]; do
-        case $1 in
-            -u|--user) user=${2:-}; valid_name "$user" username; shift 2 ;;
-            *) valid_int "$1" count; n=$1; shift ;;
-        esac
-    done
-    [ -r "$WF_LOG" ] || die "No log yet ($WF_LOG). Import mikrotik/webfilter-logging.rsc on the router."
-    local sessions; sessions=$(mktemp); trap 'rm -f "$sessions"' RETURN
-    echo "SELECT username, IFNULL(framedipaddress,''), IFNULL(callingstationid,''),
-                 UNIX_TIMESTAMP(acctstarttime), UNIX_TIMESTAMP(IFNULL(acctstoptime, NOW() + INTERVAL 1 DAY))
-          FROM radacct WHERE acctstarttime >= NOW() - INTERVAL 8 DAY" | db > "$sessions"
-    tail -n 20000 "$WF_LOG" | python3 -I /usr/local/lib/mikrotiklover/wf-report.py "$sessions" "$n" "$user"
+report() { python3 -I /usr/local/lib/mikrotiklover/mlreport.py --db "$DB_NAME" "$@"; }
+
+report_args() { # validate the common report options before passing them on
+    local a
+    for a in "$@"; do [[ $a =~ ^[A-Za-z0-9._@+:/-]{1,64}$ ]] || die "Invalid argument '$a'"; done
+}
+
+cmd_blocked() { report_args "$@"; report blocked "$@"; }
+cmd_sites()   { report_args "$@"; [ -r /var/log/mikrotik/dns.log ] || die "No DNS log yet — run: radius-admin dnslog on ROUTER_IP"; report sites "$@"; }
+cmd_history() { report_args "$@"; [ -r /var/log/mikrotik/dns.log ] || die "No DNS log yet — run: radius-admin dnslog on ROUTER_IP"; report history "$@"; }
+cmd_live()    { report_args "$@"; report live "$@"; }
+
+# DNS logger: dnsmasq on this server logs every DNS query with the client IP and forwards
+# it to the MikroTik (so the router's DNS filters still apply). Router side: mikrotik/dns-logging.rsc
+DNSLOG_CONF=$CONF_DIR/dnsmasq.conf
+DNSLOG_UNIT=/etc/systemd/system/mikrotiklover-dnslog.service
+cmd_dnslog() {
+    case ${1:-status} in
+    on)
+        local up=${2:-}; [ -n "$up" ] || die "usage: radius-admin dnslog on ROUTER_IP   (the MikroTik that does the filtering)"
+        valid_ip "$up"; [[ $up != */* ]] || die "ROUTER_IP must be a single address"
+        cat > "$DNSLOG_CONF" <<EOF
+# Managed by radius-admin (MikrotikLover) — DNS query logger
+port=53
+bind-dynamic
+except-interface=lo
+no-resolv
+no-hosts
+server=$up
+cache-size=1000
+log-queries
+log-async=50
+log-facility=DAEMON
+user=$(id dnsmasq >/dev/null 2>&1 && echo dnsmasq || echo nobody)
+pid-file=/run/mikrotiklover-dnslog.pid
+EOF
+        if [ -d /run/systemd/system ]; then
+            cat > "$DNSLOG_UNIT" <<EOF
+[Unit]
+Description=MikrotikLover DNS query logger (dnsmasq)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/sbin/dnsmasq -k --conf-file=$DNSLOG_CONF
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+            systemctl daemon-reload
+            systemctl enable --now mikrotiklover-dnslog >/dev/null 2>&1
+            systemctl restart mikrotiklover-dnslog
+        else
+            [ -f /run/mikrotiklover-dnslog.pid ] && kill "$(cat /run/mikrotiklover-dnslog.pid)" 2>/dev/null && sleep 1
+            dnsmasq --conf-file="$DNSLOG_CONF"
+        fi
+        ok "DNS logger on (UDP/TCP 53) — forwards to $up. Now import mikrotik/dns-logging.rsc on the router."
+        ;;
+    off)
+        if [ -d /run/systemd/system ]; then systemctl disable --now mikrotiklover-dnslog >/dev/null 2>&1 || true
+        elif [ -f /run/mikrotiklover-dnslog.pid ]; then kill "$(cat /run/mikrotiklover-dnslog.pid)" 2>/dev/null || true; fi
+        rm -f "$DNSLOG_CONF"
+        ok "DNS logger off (remove the dnslog rules on the router, or netwatch disables them)"
+        ;;
+    status)
+        if [ -f "$DNSLOG_CONF" ]; then
+            echo "DNS logger: configured, upstream $(sed -n 's/^server=//p' "$DNSLOG_CONF")"
+            ss -lunp 2>/dev/null | grep -q 'dnsmasq' && echo "Listening : yes" || echo "Listening : NO (check: journalctl -u mikrotiklover-dnslog)"
+            [ -r /var/log/mikrotik/dns.log ] && echo "Queries today: $(grep -c "^$(date +%F)" /var/log/mikrotik/dns.log || true)"
+        else
+            echo "DNS logger: off  (radius-admin dnslog on ROUTER_IP)"
+        fi
+        ;;
+    *) die "usage: radius-admin dnslog on ROUTER_IP | off | status" ;;
+    esac
 }
 
 cmd_online() {
@@ -503,6 +572,12 @@ Policies / blocking (per user, group, IP range — see webfilter/policies/)
   group add NAME --policy POLICY       whole group
   kick USER|MAC                        disconnect now (re-login applies changes)
   blocked [N] [-u USER]                who tried to open blocked sites (router log)
+
+Visited sites / live log (needs: radius-admin dnslog on ROUTER_IP + mikrotik/dns-logging.rsc)
+  sites [-u USER] [--ip IP] [--days 7] [--top 30]   most visited sites
+  history -u USER [--days 1] [N]                     what a user opened, in order
+  live [-u USER] [--ip IP]                            live log: visits + blocks (Ctrl+C)
+  dnslog on ROUTER_IP | off | status                  DNS query logger on this server
   IP range / single device: on the router — see README "Policies"
 
 MAC authentication (devices without username/password: printers, CCTV, TVs, POS)
@@ -532,6 +607,10 @@ case ${1:-help} in
     mac)     shift; cmd_mac "$@" ;;
     kick)    shift; cmd_kick "$@" ;;
     blocked) shift; cmd_blocked "$@" ;;
+    sites)   shift; cmd_sites "$@" ;;
+    history) shift; cmd_history "$@" ;;
+    live)    shift; cmd_live "$@" ;;
+    dnslog)  shift; cmd_dnslog "$@" ;;
     syslog-sync) syslog_sync ;;
     online)  cmd_online ;;
     log)     shift; cmd_log "$@" ;;
