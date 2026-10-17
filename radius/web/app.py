@@ -113,7 +113,7 @@ def audit(action, result, admin=None):
         print(f"audit failed: {e}", file=sys.stderr)
 
 
-def radius_admin(args, stdin=None, action=None, timeout=120):
+def radius_admin(args, stdin=None, action=None, timeout=120, log=True):
     """Run radius-admin; returns (ok, message). Audited (without secrets)."""
     cmd = ([] if os.geteuid() == 0 else ["sudo", "-n"]) + [RADIUS_ADMIN] + args
     try:
@@ -124,7 +124,8 @@ def radius_admin(args, stdin=None, action=None, timeout=120):
     out = out.replace("ERROR: ", "")
     # keep the message lines, drop the CLI's tables
     out = "\n".join(l for l in out.splitlines() if l.strip() and not l.lstrip().startswith(("+", "|"))).replace("✔ ", "")
-    audit(action or " ".join(args), "ok" if ok else "failed")
+    if log:
+        audit(action or " ".join(args), "ok" if ok else "failed")
     return ok, out
 
 
@@ -1607,7 +1608,61 @@ def backups():
     except OSError:
         pass
     rows.sort(key=lambda r: r["time"], reverse=True)
-    return jsonify(backups=rows, dir=BACKUP_DIR, updates=updates_status())
+    return jsonify(backups=rows, dir=BACKUP_DIR, updates=updates_status(), offsite=offsite_status())
+
+
+def offsite_status():
+    ok, out = radius_admin(["backup", "offsite", "status"], log=False, timeout=20)
+    st = {"type": "off"}
+    for line in out.splitlines() if ok else []:
+        k, _, v = line.partition("=")
+        if k in ("type", "target", "port", "keep", "public_key", "last"):
+            st[k] = v.replace("\t", " ")
+    return st
+
+
+def body_int(d, key, default, lo, hi):
+    try:
+        v = int(str(d.get(key) or default).strip())
+    except ValueError:
+        abort(400, f"{key} must be a number")
+    if not lo <= v <= hi:
+        abort(400, f"{key} must be {lo}..{hi}")
+    return v
+
+
+SSH_TARGET_RE = re.compile(r"^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[A-Za-z0-9._/~-]*$")
+RCLONE_TARGET_RE = re.compile(r"^[A-Za-z0-9_-]+:[A-Za-z0-9._/ -]*$")
+
+
+@app.post("/api/backups/offsite")
+@login_required("admin")
+def offsite_setup():
+    d = body()
+    kind = field(d, "type", re.compile(r"^(ssh|rclone|off)$"), required=True)
+    if kind == "off":
+        return result(*radius_admin(["backup", "offsite", "off"]))
+    target = field(d, "target", SSH_TARGET_RE if kind == "ssh" else RCLONE_TARGET_RE, required=True, maxlen=200)
+    args = ["backup", "offsite", kind, target]
+    if kind == "ssh":
+        args += ["--port", str(body_int(d, "port", 22, 1, 65535))]
+    ok, msg = radius_admin(args, timeout=60)
+    if ok and d.get("keep") not in (None, ""):
+        ok2, msg2 = radius_admin(["backup", "offsite", "keep", str(body_int(d, "keep", 30, 1, 1000))])
+        ok, msg = ok and ok2, msg + "\n" + msg2
+    return result(ok, msg, offsite=offsite_status())
+
+
+@app.post("/api/backups/offsite/<action>")
+@login_required("admin")
+def offsite_action(action):
+    if action not in ("test", "send", "password"):
+        abort(404)
+    ok, msg = radius_admin(["backup", "offsite", action], timeout=900 if action == "send" else 60,
+                           action=f"backup offsite {action}")
+    if ok and action == "password":
+        return jsonify(ok=True, password=msg.strip())
+    return result(ok, msg)
 
 
 @app.post("/api/backups")

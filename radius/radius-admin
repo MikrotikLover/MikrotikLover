@@ -1302,6 +1302,7 @@ backup_perms() { # the dashboard may list / download backups (it can already run
 }
 
 cmd_backup() {
+    [ "${1:-}" != offsite ] || { shift; cmd_offsite "$@"; return; }
     local enc=0 logs=0 quiet=0 keep=${BACKUP_KEEP:-14} tag=manual
     while [ $# -gt 0 ]; do
         case $1 in
@@ -1353,6 +1354,9 @@ cmd_backup() {
     # keep the newest $keep backups of this kind
     local old
     ls -1t "$BACKUP_DIR"/mikrotiklover-"$tag"-*.tar.gz* 2>/dev/null | tail -n +"$((keep + 1))" | while IFS= read -r old; do rm -f "${old:?}"; done
+    if [ "$tag" = auto ] && offsite_load; then
+        run_update "Off-site backup" offsite_send "$out" >/dev/null
+    fi
     [ "$quiet" = 1 ] || ok "Backup: $out ($(du -h "$out" | cut -f1))"
     [ "$quiet" = 1 ] || echo "Copy it OFF this server too (USB / another PC / cloud). Restore: radius-admin restore $out"
 }
@@ -1662,6 +1666,160 @@ cmd_quarantine() {
     esac
 }
 
+# ---------------------------------------------------------------- off-site backup (another server over SSH, or rclone: Google Drive ...)
+OFFSITE_CONF=$CONF_DIR/offsite.conf
+OFFSITE_KEY=$CONF_DIR/offsite_ed25519
+OFFSITE_HOSTS=$CONF_DIR/offsite_known_hosts
+
+offsite_load() { # sets OFFSITE_TYPE OFFSITE_TARGET OFFSITE_PORT OFFSITE_KEEP OFFSITE_PASS
+    OFFSITE_TYPE="" OFFSITE_TARGET="" OFFSITE_PORT=22 OFFSITE_KEEP=30 OFFSITE_PASS=""
+    [ -r "$OFFSITE_CONF" ] || return 1
+    local k v
+    while IFS='=' read -r k v; do
+        case $k in OFFSITE_TYPE|OFFSITE_TARGET|OFFSITE_PORT|OFFSITE_KEEP|OFFSITE_PASS) printf -v "$k" '%s' "$v" ;; esac
+    done < "$OFFSITE_CONF"
+    [ -n "$OFFSITE_TYPE" ]
+}
+offsite_save() {
+    umask 077
+    printf 'OFFSITE_TYPE=%s\nOFFSITE_TARGET=%s\nOFFSITE_PORT=%s\nOFFSITE_KEEP=%s\nOFFSITE_PASS=%s\n' \
+        "$OFFSITE_TYPE" "$OFFSITE_TARGET" "$OFFSITE_PORT" "$OFFSITE_KEEP" "$OFFSITE_PASS" > "$OFFSITE_CONF"
+    chmod 600 "$OFFSITE_CONF"; umask 022
+}
+offsite_ssh() { # offsite_ssh COMMAND...  (on the backup server)
+    ssh -i "$OFFSITE_KEY" -p "$OFFSITE_PORT" -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+        -o UserKnownHostsFile="$OFFSITE_HOSTS" "${OFFSITE_TARGET%%:*}" "$@"
+}
+offsite_dir() { local d=${OFFSITE_TARGET#*:}; echo "${d:-.}"; }
+
+offsite_put() { # offsite_put LOCALFILE NAME
+    local f=$1 name=$2
+    case $OFFSITE_TYPE in
+        ssh)    scp -q -i "$OFFSITE_KEY" -P "$OFFSITE_PORT" -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+                    -o UserKnownHostsFile="$OFFSITE_HOSTS" "$f" "${OFFSITE_TARGET%%:*}:$(offsite_dir)/$name.part" \
+                  && offsite_ssh "mv -f '$(offsite_dir)/$name.part' '$(offsite_dir)/$name'" ;;
+        rclone) rclone copyto --retries 3 "$f" "$OFFSITE_TARGET/$name" ;;
+    esac
+}
+offsite_list() { # newest first, file names only
+    case $OFFSITE_TYPE in
+        ssh)    offsite_ssh "ls -1t '$(offsite_dir)'" 2>/dev/null | grep -E '^mikrotiklover-.*\.tar\.gz\.enc$' || true ;;
+        rclone) rclone lsf --format tp --separator '	' "$OFFSITE_TARGET" 2>/dev/null | sort -r | cut -f2 | grep -E '^mikrotiklover-.*\.tar\.gz\.enc$' || true ;;
+    esac
+}
+offsite_prune() { # keep the newest OFFSITE_KEEP copies there
+    local old
+    offsite_list | tail -n +"$((OFFSITE_KEEP + 1))" | while IFS= read -r old; do
+        [[ $old =~ ^mikrotiklover-[A-Za-z0-9.-]+\.tar\.gz\.enc$ ]] || continue
+        case $OFFSITE_TYPE in
+            ssh)    offsite_ssh "rm -f '$(offsite_dir)/$old'" </dev/null ;;
+            rclone) rclone deletefile "$OFFSITE_TARGET/$old" </dev/null ;;
+        esac
+    done
+}
+
+offsite_send() { # offsite_send [LOCAL BACKUP]  -> encrypted copy off this server
+    offsite_load || die "Off-site backup is not set up (radius-admin backup offsite ssh|rclone ...)"
+    local f=${1:-} name tmp
+    [ -n "$f" ] || f=$(ls -1t "$BACKUP_DIR"/mikrotiklover-*.tar.gz* 2>/dev/null | head -1)
+    [ -f "$f" ] || { [ -f "$BACKUP_DIR/$f" ] && f="$BACKUP_DIR/$f"; } || true
+    [ -f "$f" ] || die "No backup to send (radius-admin backup)"
+    name=$(basename "$f")
+    if [[ $name == *.enc ]]; then
+        # an encrypted backup with its own password is sent as it is
+        offsite_put "$f" "$name" || die "upload failed"
+    else
+        tmp=$(mktemp)
+        printf '%s' "$OFFSITE_PASS" | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass stdin -in "$f" -out "$tmp" \
+            || { rm -f "${tmp:?}"; die "encryption failed"; }
+        name+=".enc"
+        offsite_put "$tmp" "$name" || { rm -f "${tmp:?}"; die "upload to $OFFSITE_TARGET failed"; }
+        rm -f "${tmp:?}"
+    fi
+    offsite_prune
+    ok "Off-site: $name -> $OFFSITE_TARGET ($(offsite_list | wc -l) copies there, newest $OFFSITE_KEEP kept)"
+}
+
+cmd_offsite() {
+    local sub=${1:-status}; shift || true
+    case $sub in
+    ssh)
+        local target=${1:-} port=22; shift || true
+        [ "${1:-}" = --port ] && { port=${2:-}; valid_int "$port" port; }
+        [[ $target =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[A-Za-z0-9._/~-]*$ ]] || die "usage: radius-admin backup offsite ssh USER@HOST:/folder [--port 22]"
+        [ -f "$OFFSITE_KEY" ] || ssh-keygen -q -t ed25519 -N "" -C "mikrotiklover-backup@$(hostname -s)" -f "$OFFSITE_KEY"
+        offsite_load || true
+        OFFSITE_TYPE=ssh OFFSITE_TARGET=$target OFFSITE_PORT=$port
+        [ -n "$OFFSITE_PASS" ] || OFFSITE_PASS=$(gen_pass 24)
+        offsite_save
+        echo "Public key — add this line to ~/.ssh/authorized_keys of '${target%%@*}' on ${target#*@} (once):"
+        echo; cat "$OFFSITE_KEY.pub"; echo
+        if offsite_ssh "mkdir -p '$(offsite_dir)' && test -w '$(offsite_dir)'" </dev/null 2>/dev/null; then
+            ok "Connected to ${target%%:*}; nightly backups go to $(offsite_dir) (encrypted)"
+        else
+            echo "! Not connected yet — add the key above, then run: radius-admin backup offsite test"
+        fi
+        echo "Backup password (needed to restore from there — write it down): $OFFSITE_PASS" ;;
+    rclone)
+        local target=${1:-}
+        command -v rclone >/dev/null || die "rclone is not installed (apt install rclone), then: rclone config"
+        local rre='^[A-Za-z0-9_-]+:[A-Za-z0-9._/ -]*$'
+        [[ $target =~ $rre ]] || die "usage: radius-admin backup offsite rclone REMOTE:folder   (make the remote first: rclone config)"
+        rclone listremotes 2>/dev/null | grep -qx "${target%%:*}:" || die "No rclone remote '${target%%:*}' — create it first: rclone config (Google Drive, Dropbox, OneDrive, S3 ...)"
+        offsite_load || true
+        OFFSITE_TYPE=rclone OFFSITE_TARGET=$target OFFSITE_PORT=22
+        [ -n "$OFFSITE_PASS" ] || OFFSITE_PASS=$(gen_pass 24)
+        offsite_save
+        rclone mkdir "$target" 2>/dev/null || true
+        ok "Nightly backups go to $target (encrypted)"
+        echo "Backup password (needed to restore from there — write it down): $OFFSITE_PASS" ;;
+    keep)
+        local n=${1:-}; valid_int "$n" keep; [ "$n" -ge 1 ] || die "keep at least 1"
+        offsite_load || die "Off-site backup is not set up"; OFFSITE_KEEP=$n; offsite_save; ok "Off-site: newest $n copies kept" ;;
+    off)
+        rm -f "${OFFSITE_CONF:?}"; ok "Off-site backup off (the copies already there are kept)" ;;
+    test)
+        offsite_load || die "Off-site backup is not set up"
+        local t; t=$(mktemp); echo "MikrotikLover off-site test $(date)" > "$t"
+        offsite_put "$t" "mikrotiklover-test.txt" && rm -f "${t:?}" || { rm -f "${t:?}"; die "Cannot write to $OFFSITE_TARGET"; }
+        case $OFFSITE_TYPE in ssh) offsite_ssh "rm -f '$(offsite_dir)/mikrotiklover-test.txt'" ;; rclone) rclone deletefile "$OFFSITE_TARGET/mikrotiklover-test.txt" ;; esac
+        ok "Off-site works: $OFFSITE_TYPE $OFFSITE_TARGET" ;;
+    send)
+        local o
+        if o=$(offsite_send "${1:-}" 2>&1); then
+            update_stamp "Off-site backup" "ok: $(tail -1 <<<"$o" | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-120)"; echo "$o"
+        else
+            update_stamp "Off-site backup" "failed: $(tail -1 <<<"$o" | cut -c1-120)"; echo "$o" >&2; return 1
+        fi ;;
+    list)
+        offsite_load || die "Off-site backup is not set up"
+        offsite_list ;;
+    fetch)
+        offsite_load || die "Off-site backup is not set up"
+        local name=${1:-}; [ -n "$name" ] || name=$(offsite_list | head -1)
+        [[ $name =~ ^mikrotiklover-[A-Za-z0-9.-]+\.tar\.gz\.enc$ ]] || die "usage: radius-admin backup offsite fetch [NAME]   (radius-admin backup offsite list)"
+        backup_perms
+        case $OFFSITE_TYPE in
+            ssh)    scp -q -i "$OFFSITE_KEY" -P "$OFFSITE_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$OFFSITE_HOSTS" \
+                        "${OFFSITE_TARGET%%:*}:$(offsite_dir)/$name" "$BACKUP_DIR/$name" ;;
+            rclone) rclone copyto "$OFFSITE_TARGET/$name" "$BACKUP_DIR/$name" ;;
+        esac || die "download failed"
+        chmod 640 "$BACKUP_DIR/$name"
+        ok "Downloaded $BACKUP_DIR/$name — restore: radius-admin restore $name   (password: radius-admin backup offsite password)" ;;
+    password)
+        offsite_load || die "Off-site backup is not set up"; echo "$OFFSITE_PASS" ;;
+    status)
+        if offsite_load; then
+            echo "type=$OFFSITE_TYPE"; echo "target=$OFFSITE_TARGET"; echo "port=$OFFSITE_PORT"; echo "keep=$OFFSITE_KEEP"
+            [ "$OFFSITE_TYPE" != ssh ] || echo "public_key=$(cat "$OFFSITE_KEY.pub" 2>/dev/null)"
+            grep "^Off-site backup	" /var/lib/mikrotiklover/updates.txt 2>/dev/null | cut -f2,3 | sed 's/^/last=/' || true
+        else
+            echo "type=off"
+        fi ;;
+    *) die "usage: radius-admin backup offsite ssh USER@HOST:/dir [--port N] | rclone REMOTE:dir | test | send [FILE] | list | fetch [NAME] | keep N | password | status | off" ;;
+    esac
+}
+
 cmd_sales() {
     local days=${1:-30}; valid_int "$days" days
     echo "SELECT DATE(at) AS day, COUNT(*) AS sales, SUM(kind='voucher') AS vouchers, SUM(kind='renew') AS renewals,
@@ -1794,6 +1952,11 @@ Security detective (virus, hacker attacks, DDoS)
 Backup, restore, automatic updates
   backup [--encrypt] [--with-logs]      complete backup: database, settings, certificates, FreeRADIUS, policies
   backups                               list backups (/var/backups/mikrotiklover; every night, 14 kept)
+  backup offsite ssh USER@HOST:/dir     nightly ENCRYPTED copy to another server (prints the SSH key to add there)
+  backup offsite rclone REMOTE:dir      ... or to Google Drive / Dropbox / OneDrive / S3 (after: rclone config)
+  backup offsite test | send | list     check / send the newest backup now / what is there
+  backup offsite fetch [NAME]           download from there, then: restore NAME (password: backup offsite password)
+  backup offsite keep N | status | off
   restore FILE [--yes]                  restore everything from a backup (a safety copy is made first)
   update                                all automatic updates now (weekly cron): app catalog, IP owners,
                                         new app names, threat lists, VPN lists, router rules

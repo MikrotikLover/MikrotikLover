@@ -887,6 +887,31 @@ sudo radius-admin restore FILE                 # sab wapas (pehle maujooda haala
 - Naye server par le jana ho to `docs/INSTALL.md` section 9 dekhein: wahan install kar ke restore karein, database passwords khud theek ho jate hain.
 - **Tested:** encrypted backup banaya, user aur policy badle, galat password par restore ruk gaya, aur sahi password se sab wapas aa gaya (login OK).
 
+### Off-site copy (doosri jagah khud)
+
+Har raat ka backup khud **doosre server (SSH)** ya **cloud (Google Drive / Dropbox / OneDrive / S3 — rclone se)** par bhi chala jata hai. Har copy password se encrypted hoti hai (AES-256), is liye wahan koi parh nahi sakta. Server ki disk mar jaye ya server chori ho jaye, data phir bhi bacha rahta hai.
+
+```bash
+# A) doosra Linux server / PC / NAS (SSH)
+sudo radius-admin backup offsite ssh backup@192.168.1.20:/srv/backups [--port 22]
+#    -> jo key dikhe, us server par ~/.ssh/authorized_keys mein daal dein (aik baar)
+# B) cloud: pehle aik baar `sudo rclone config` (e.g. naam "gdrive"), phir
+sudo radius-admin backup offsite rclone gdrive:mikrotiklover
+
+sudo radius-admin backup offsite test          # connection check
+sudo radius-admin backup offsite send          # abhi naya backup bhejein
+sudo radius-admin backup offsite list          # wahan kaun si copies hain
+sudo radius-admin backup offsite keep 30       # wahan aakhri 30 copies rakhein (purani khud mitti hain)
+sudo radius-admin backup offsite password      # restore ke liye password (likh kar rakhein!)
+sudo radius-admin backup offsite status | off
+# server kharab ho gaya? naye server par install, phir:
+sudo radius-admin backup offsite fetch         # newest copy wapas lao
+sudo radius-admin restore mikrotiklover-....tar.gz.enc    # password puchega
+```
+- Dashboard → **Settings → Off-site copy**: SSH ya cloud chunein, target, kitni copies, **Test connection**, **Send newest backup now**, **Show password**, aur aakhri copy ka nateeja (ok / failed).
+- Raat ki copy fail ho (server band, internet nahi) to backup phir bhi server par mehfooz rehta hai, aur **Automatic updates** list mein "Off-site backup: failed" dikhta hai.
+- **Tested:** SSH (alag user + key) aur rclone (Google Drive jaisa remote): copy encrypted pahunchi, `keep 2` ne purani mitayin, server "kho" diya → `fetch` + `restore` se sab wapas, galat password par restore ruk gaya, backup server band par "failed" darj hua.
+
 ## 7c. Automatic updates (har hafte, khud)
 
 `sudo radius-admin update` (cron: Tuesday raat) yeh sab update karta hai:

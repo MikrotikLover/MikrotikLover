@@ -36,7 +36,7 @@ command -v apt-get >/dev/null || die "Only Debian/Ubuntu are supported"
 log "Installing FreeRADIUS + MariaDB"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq freeradius freeradius-mysql freeradius-utils mariadb-server openssl rsyslog python3 python3-pymysql dnsmasq-base >/dev/null
+apt-get install -y -qq freeradius freeradius-mysql freeradius-utils mariadb-server openssl rsyslog python3 python3-pymysql dnsmasq-base openssh-client >/dev/null
 # eapol_test lets "radius-admin test --peap" simulate a real Wi-Fi client (optional package)
 apt-get install -y -qq eapoltest >/dev/null 2>&1 || warn "eapoltest not available; PEAP self-test disabled"
 [ -d "$RADDB" ] || die "$RADDB not found — unexpected FreeRADIUS layout"

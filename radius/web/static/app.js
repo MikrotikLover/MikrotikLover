@@ -685,6 +685,7 @@ ROUTES.settings = async () => {
         { label: "Size", num: true, render: (b) => bytes(b.size) }, { label: "Made", key: "time" },
         { label: "", render: (b) => h("a", { class: "btn small", href: `/api/backups/${encodeURIComponent(b.name)}` }, "⬇ Download") }], bk.backups, "No backup yet."),
       h("div", { class: "toolbar" }, h("button", { class: "primary", onclick: async (e) => { e.target.disabled = true; await act(api("POST", "/api/backups")); route(); } }, "Backup now"))));
+    wide.push(offsiteCard(bk.offsite || { type: "off" }));
     wide.push(card("Automatic updates", "every week (Tuesday night) + hourly lists",
       h("div", { class: "muted" }, "App catalog, IP owner lists, names of newly found apps, threat lists (virus / attacks), VPN lists and the router rules update themselves. Hourly: app inventory, website names, VPN watch, security scan, learned app domains."),
       table([{ label: "Job", key: "name" }, { label: "Last run", key: "when" },
@@ -715,6 +716,42 @@ ROUTES.settings = async () => {
       { label: "Action", key: "action", wrap: true }, { label: "Result", render: (a) => a.result === "ok" ? badge("ok", "ok") : badge(a.result, "bad") }], audit)));
   }
   shell("Settings", h("div", { class: "stack" }, h("div", { class: "grid g-2" }, parts), wide));
+};
+
+// Off-site copy of the nightly backup: a backup server over SSH, or Google Drive / Dropbox / S3 ... via rclone
+const offsiteCard = (o) => {
+  const on = o.type && o.type !== "off";
+  const last = o.last || "";
+  const f = h("form", { class: "form cols", onsubmit: async (e) => {
+    e.preventDefault();
+    const v = formValues(f);
+    let r = null;
+    try { r = await api("POST", "/api/backups/offsite", v); } catch (err) { if (err.message !== "login required") toast(err.message, true); }
+    if (r) { if (r.message) dialog("Off-site backup", h("pre", { class: "code-box" }, r.message), [{ label: "OK", class: "primary", action: () => route() }]); }
+  } },
+    h("label", { class: "field" }, "Where", h("select", { name: "type", onchange: (e) => { f.querySelector(".port").hidden = e.target.value !== "ssh"; f.querySelector(".hint").textContent = hints[e.target.value]; } },
+      h("option", { value: "ssh", selected: o.type !== "rclone" }, "Another server (SSH)"),
+      h("option", { value: "rclone", selected: o.type === "rclone" }, "Cloud: Google Drive, Dropbox, S3 … (rclone)"))),
+    h("label", { class: "field" }, "Target", h("input", { name: "target", required: true, value: o.target || "", placeholder: "backup@192.168.1.20:/srv/backups  or  gdrive:mikrotiklover" })),
+    h("label", { class: "field port", hidden: o.type === "rclone" }, "SSH port", h("input", { name: "port", type: "number", min: 1, max: 65535, value: o.port || 22 })),
+    h("label", { class: "field" }, "Copies to keep there", h("input", { name: "keep", type: "number", min: 1, max: 1000, value: o.keep || 30 })),
+    h("div", { class: "full muted hint" }, ""),
+    h("div", { class: "full toolbar" }, h("button", { class: "primary", type: "submit" }, on ? "Save" : "Turn on"),
+      on ? h("button", { type: "button", onclick: async (e) => { e.target.disabled = true; await act(api("POST", "/api/backups/offsite/test")); e.target.disabled = false; } }, "Test connection") : null,
+      on ? h("button", { type: "button", onclick: async (e) => { e.target.disabled = true; e.target.textContent = "Sending …"; await act(api("POST", "/api/backups/offsite/send")); route(); } }, "Send newest backup now") : null,
+      on ? h("button", { type: "button", onclick: async () => { const r = await act(api("POST", "/api/backups/offsite/password")); if (r) dialog("Off-site backup password", h("div", {}, h("p", {}, "Needed to restore a copy from there. Write it down and keep it safe:"), h("pre", { class: "code-box" }, r.password)), [{ label: "OK", class: "primary" }]); } }, "Show password") : null,
+      on ? h("button", { type: "button", class: "danger", onclick: async () => { if (await confirmDlg("Off-site backup", "Stop sending copies? The copies already there are kept.", "Turn off")) if (await act(api("POST", "/api/backups/offsite", { type: "off" }))) route(); } }, "Turn off") : null));
+  const hints = {
+    ssh: "Any Linux PC/server (or NAS with SSH). Save, then add the key shown above to ~/.ssh/authorized_keys of that user there (once), then Test connection.",
+    rclone: "Make the cloud remote once on this server: sudo rclone config (e.g. name it gdrive), then enter gdrive:folder here.",
+  };
+  f.querySelector(".hint").textContent = hints[o.type === "rclone" ? "rclone" : "ssh"];
+  return card("Off-site copy", on ? `${o.type === "ssh" ? "SSH" : "rclone"} → ${o.target}` : "off — backups only on this server",
+    h("div", { class: "muted" }, "Every nightly backup is also copied to another place, encrypted with a password, so a dead disk or a stolen server never loses your data. Restore from there: sudo radius-admin backup offsite fetch, then radius-admin restore FILE."),
+    on ? h("div", { class: "toolbar" }, "Last copy: ", last ? badge(last.slice(0, 120), /\bok:/.test(last) ? "ok" : "bad") : badge("not sent yet", "")) : null,
+    on && o.public_key ? h("label", { class: "field" }, "This server's key (put it in ~/.ssh/authorized_keys on the backup server)",
+      h("textarea", { readonly: true, rows: 2, class: "mono", onclick: (e) => e.target.select() }, o.public_key)) : null,
+    f);
 };
 
 // ------------------------------------------------------------------ start

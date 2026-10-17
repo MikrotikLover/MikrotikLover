@@ -49,3 +49,11 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
   - asal internet se threat lists ke kuch sources (yahan sirf GitHub khulta hai);
   - app catalog ka update (PR merge hone ke baad chalega).
 | 04:17 | NAYA: Quarantine (infected device) | ✅ user/IP quarantine, warning page (phone par), release se purani policy wapas, auto mode (sirf HIGH, release ke baad 24 ghante nahi), router list + rules. 2 bugs mile aur theek: release ke waqt khali IP par fields khisakti thin; aur PURANA bug — IP/MAC ke baghair session ka kick fail hota tha |
+| 04:22 | Off-site SSH: setup, key, test, send, list | OK — copy encrypted (Salted__ header), file 600 on the backup server |
+| 04:22 | Off-site keep 2 / prune | OK — 4 copies → 2 newest kept |
+| 04:22 | Off-site fetch + restore (server lost) | OK — user added after the backup is gone after restore; wrong password refused |
+| 04:22 | Off-site rclone (local remote as Google Drive) | OK — test, send, keep 1, fetch; bad/missing remote refused |
+| 04:22 | Nightly backup → off-site; backup server down | OK — copy sent; when down: 'failed' recorded, backup itself still kept (rc 0) |
+| 04:33 | Dashboard Settings → Off-site copy | OK — status, key, Test/Send/Show password/Turn off; switch to cloud; bad target refused; phone fits (fixed: form was wider than phone screen) |
+| 04:33 | Fix: manual 'offsite send' did not update 'Last copy'; SSH port showed 22 | Fixed + re-tested |
+| 04:33 | UI suite (41 checks) + 10 automatic suites after off-site | All pass (UI test: 2 locators made exact, expected 400 allowed) |

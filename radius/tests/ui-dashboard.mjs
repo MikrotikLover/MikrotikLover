@@ -10,13 +10,14 @@ const URL = process.env.URL || "https://127.0.0.1:8443";
 const SHOTS = process.env.SHOTS || "";
 const errors = [];
 let step = "";
+let expect400 = false;   // set while a test sends bad input on purpose
 const ok = (msg) => console.log(`ok   ${msg}`);
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || undefined });
 async function newPage(opts = {}) {
   const ctx = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1366, height: 900 }, ...opts });
   const page = await ctx.newPage();
-  page.on("console", (m) => { if (m.type() === "error" && !/401/.test(m.text())) errors.push(`[${step}] console: ${m.text()}`); });
+  page.on("console", (m) => { if (m.type() === "error" && !/401/.test(m.text()) && !(expect400 && /400/.test(m.text()))) errors.push(`[${step}] console: ${m.text()}`); });
   page.on("pageerror", (e) => errors.push(`[${step}] pageerror: ${e.message}`));
   return page;
 }
@@ -316,10 +317,28 @@ try {
   await page.locator("h2", { hasText: "Who is blocked by which policy" }).waitFor({ timeout: 30000 });
   ok("blocking logs: policy per user");
   await go(page, "#/settings", "Settings");
-  await page.locator("h2", { hasText: "Backups" }).waitFor({ timeout: 15000 });
-  await clickToast(page, page.getByRole("button", { name: "Backup now" }));
+  await page.locator("h2", { hasText: /^Backups/ }).waitFor({ timeout: 15000 });
+  await clickToast(page, page.getByRole("button", { name: "Backup now", exact: true }));
   await page.locator("h2", { hasText: "Automatic updates" }).waitFor({ timeout: 30000 });
   ok("settings: backup made from the dashboard, automatic updates listed");
+  {
+    const oc = page.locator(".card", { has: page.locator("h2", { hasText: "Off-site copy" }) });
+    await oc.waitFor({ timeout: 30000 });
+    // the form always offers SSH and rclone; the port field is only for SSH
+    await oc.locator("select[name=type]").selectOption("rclone");
+    if (!(await oc.locator(".port").isHidden())) throw new Error("off-site: SSH port shown for rclone");
+    await oc.locator("select[name=type]").selectOption("ssh");
+    if (await oc.locator(".port").isHidden()) throw new Error("off-site: SSH port hidden for SSH");
+    await oc.locator("input[name=target]").fill("bad target;x");
+    await page.evaluate(() => document.querySelectorAll(".toast").forEach((t) => t.setAttribute("data-seen", "1")));
+    expect400 = true;
+    await oc.getByRole("button", { name: /^(Save|Turn on)$/ }).click();
+    const bt = page.locator(".toast:not([data-seen])").last();
+    await bt.waitFor({ timeout: 15000 });
+    if (!/invalid target/.test(await bt.textContent())) throw new Error(`off-site: bad target not refused: ${await bt.textContent()}`);
+    expect400 = false;
+  }
+  ok("settings: off-site copy form (SSH / cloud), bad target refused");
 
   // business settings
   await go(page, "#/settings", "Settings");

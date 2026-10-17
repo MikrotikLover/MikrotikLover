@@ -206,7 +206,21 @@ sudo radius-admin restore /var/backups/mikrotiklover/mikrotiklover-manual-....ta
    - services dobara chalti hain.
 4. Server ka IP badla ho to routers mein `RADIUS_SERVER_IP` badlein, aur auto-sync script dobara import karein.
 
-Backup ki ek copy **hamesha server se bahar** rakhein.
+Backup ki ek copy **hamesha server se bahar** rakhein — yeh khud ho sakta hai:
+
+**Off-site copy (har raat khud, encrypted):**
+```bash
+# doosra Linux server / NAS par:  sudo adduser backup ; sudo mkdir -p /srv/backups ; sudo chown backup /srv/backups
+sudo radius-admin backup offsite ssh backup@192.168.1.20:/srv/backups     # key dikhegi
+#   us server par: key ko /home/backup/.ssh/authorized_keys mein daalein
+sudo radius-admin backup offsite test
+# ya Google Drive / Dropbox / OneDrive / S3:
+sudo apt install rclone ; sudo rclone config        # remote banayein, e.g. "gdrive"
+sudo radius-admin backup offsite rclone gdrive:mikrotiklover
+sudo radius-admin backup offsite password           # yeh password likh kar mehfooz rakhein
+```
+Server kharab ho jaye: naya server install karein, `offsite ssh|rclone ...` dobara set karein (wahi target), phir
+`sudo radius-admin backup offsite fetch` aur `sudo radius-admin restore FILE.tar.gz.enc` (purana password). Dashboard: **Settings → Off-site copy**.
 
 ---
 
@@ -259,6 +273,7 @@ Log files: `/var/log/mikrotik/` (`dns.log`, `webfilter.log`, `router.log`, `traf
 | UDP 514 | Router → server | Router logs |
 | TCP 8443 | Browser / router → server | Dashboard, connect guide, router auto-sync |
 | TCP 8081 | Quarantined device → server | Warning page for infected devices (plain HTTP) |
+| TCP 22 (ya jo port diya) | Server → backup server | Off-site backup (SSH), sirf jab set ho |
 
 | Path | Kya |
 |---|---|
