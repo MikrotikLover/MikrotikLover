@@ -43,6 +43,7 @@ const ICONS = {
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14m10 3-5.2-5.2",
   block: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M5.6 5.6l12.8 12.8",
   shield: "M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6zM12 8v5m0 3h.01",
+  pulse: "M3 12h4l2-6 4 12 2-6h6",
   globe: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M3 12h18M12 3c2.5 2.5 3.8 5.5 3.8 9s-1.3 6.5-3.8 9c-2.5-2.5-3.8-5.5-3.8-9s1.3-6.5 3.8-9",
   vpn: "M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6zM9 12l2 2 4-4",
   apps: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
@@ -207,7 +208,7 @@ const NAV = [
   ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
   ["data", "Data usage", "data"], ["apps", "Apps on network", "apps"], ["ports", "Ports & protocols", "ports"], "-",
-  ["blocking", "Blocking", "block"], ["vpn", "VPN & proxy watch", "vpn"], ["security", "Security", "shield"], ["domains", "Website names", "globe"], "-", ["settings", "Settings", "settings"],
+  ["blocking", "Blocking", "block"], ["vpn", "VPN & proxy watch", "vpn"], ["security", "Security", "shield"], ["domains", "Website names", "globe"], "-", ["health", "Health check", "pulse"], ["settings", "Settings", "settings"],
 ];
 
 function shell(title, content, actions) {
@@ -646,6 +647,27 @@ ROUTES.data = async (by = "site") => {
 };
 
 // ------------------------------------------------------------------ settings
+// ------------------------------------------------------------------ health check
+ROUTES.health = async () => {
+  shell("Health check", h("div", { class: "empty" }, "Checking every part of the server …"));
+  const r = await api("GET", "/api/health");
+  const n = { ok: 0, warn: 0, fail: 0 };
+  r.checks.forEach((c) => n[c.status]++);
+  const mark = { ok: "✔", warn: "!", fail: "✘" };
+  const groups = [...new Set(r.checks.map((c) => c.group))];
+  const head = h("div", { class: "grid g-tiles" },
+    tile("Overall", h("span", { class: `health-dot ${r.status}` }, { ok: "All good", warn: "Needs a look", fail: "Problem" }[r.status]), `checked ${r.checked.slice(11, 16)} on ${r.host}`),
+    tile("OK", String(n.ok), "green"), tile("Warnings", String(n.warn), "yellow"), tile("Problems", String(n.fail), "red"));
+  const body = groups.map((g) => card(g, null, h("div", { class: "health-list" }, r.checks.filter((c) => c.group === g).map((c) =>
+    h("div", { class: `health-row ${c.status}` }, h("span", { class: "health-mark", "aria-label": c.status }, mark[c.status]),
+      h("div", { class: "grow" }, h("b", {}, c.name), h("div", { class: "muted" }, c.detail),
+        c.fix ? h("div", { class: "health-fix" }, "How to fix: ", h("code", {}, c.fix)) : null))))));
+  shell("Health check", h("div", { class: "stack" }, head,
+    h("div", { class: "toolbar" }, h("span", { class: "muted grow" }, "Green = working · yellow = check when you can · red = fix now. Same on the server: sudo radius-admin doctor"),
+      h("button", { onclick: () => route() }, "Check again")),
+    h("div", { class: "grid g-2" }, body)));
+};
+
 ROUTES.settings = async () => {
   const sys = await api("GET", "/api/system");
   const parts = [

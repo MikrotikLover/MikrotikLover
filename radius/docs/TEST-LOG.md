@@ -63,3 +63,7 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 04:43 | Bug: emoji broken in alert history (database charset) | Fixed — utf8mb4 for the alerts DB connection |
 | 04:43 | Dashboard Settings → Alerts | OK — per-channel test/off, find chat, events, summary hour, history; secrets never sent to browser; phone fits |
 | 04:43 | Suites: test-alerts (38) + UI (42) + 10 other suites | All pass |
+| 04:58 | Health check: container restarted, all services down | doctor showed every service red with the fix — correct |
+| 04:58 | Health check after services started | 13 green, 6 yellow (no router traffic in sandbox, catalog 404 until merge), 1 red (office-hap router not reachable here) |
+| 04:58 | Fixes during build | fix text now matches the actual problem; disk warning only when <10% AND <10 GB |
+| 04:58 | test-health (25) + UI (43) | All pass |

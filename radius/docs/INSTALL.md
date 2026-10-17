@@ -240,6 +240,8 @@ Update se pehle `sudo radius-admin backup` chala lein.
 
 ## 11. Masle aur hal (troubleshooting)
 
+**Sab se pehle:** `sudo radius-admin doctor` (ya dashboard → **Health check**). Har hissa sabz / peela / laal dikhta hai, aur jo kharab ho us ke saath hal (command) likha hota hai: services, database, DNS logger, router logs, cron, hourly jobs, updates, backup, off-site copy, disk, memory, certificate ki expiry, clock, alerts, aur har router (ping + aakhri login).
+
 | Masla | Check |
 |---|---|
 | Login fail | `sudo radius-admin log` (aakhri logins), `sudo radius-admin test USER PASS`; debug: `sudo systemctl stop freeradius && sudo freeradius -X` |

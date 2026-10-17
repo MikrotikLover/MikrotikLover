@@ -2024,6 +2024,9 @@ Backup, restore, automatic updates
   update                                all automatic updates now (weekly cron): app catalog, IP owners,
                                         new app names, threat lists, VPN lists, router rules
 
+Health check
+  doctor [--json]                       every part of the server: green / yellow / red, and how to fix it
+
 Alerts (Telegram / WhatsApp / email)
   alerts                                what is on: channels, events, last check
   alerts telegram BOT_TOKEN [CHAT_ID]   Telegram bot (from @BotFather); no chat id: found after you press Start
@@ -2124,6 +2127,7 @@ case ${1:-help} in
     domains) shift; cmd_domains "$@" ;;
     backup)  shift; cmd_backup "$@" ;;
     alerts)  shift; cmd_alerts "$@" ;;
+    doctor|health) shift; python3 -I /usr/local/lib/mikrotiklover/health.py --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@" ;;
     backups) cmd_backups ;;
     restore) shift; cmd_restore "$@" ;;
     update)  cmd_update ;;

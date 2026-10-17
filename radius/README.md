@@ -912,6 +912,15 @@ sudo radius-admin restore mikrotiklover-....tar.gz.enc    # password puchega
 - Raat ki copy fail ho (server band, internet nahi) to backup phir bhi server par mehfooz rehta hai, aur **Automatic updates** list mein "Off-site backup: failed" dikhta hai.
 - **Tested:** SSH (alag user + key) aur rclone (Google Drive jaisa remote): copy encrypted pahunchi, `keep 2` ne purani mitayin, server "kho" diya → `fetch` + `restore` se sab wapas, galat password par restore ruk gaya, backup server band par "failed" darj hua.
 
+## 7e. Health check — sab theek hai?
+
+`sudo radius-admin doctor` ya dashboard → **Health check**: server ka har hissa **sabz** (theek), **peela** (dekh lein) ya **laal** (abhi theek karein), aur kharabi ke saath us ka hal likha hota hai.
+
+Kya check hota hai: FreeRADIUS (chal raha hai + 1812/1813 par sun raha hai), database aur us ki tables, dashboard (web + nginx), DNS logger (aakhri lookup kab aaya), traffic collector, router logs, cron, hourly jobs aur weekly updates (fail hue?), aakhri backup kitna purana, off-site copy, disk, memory, CPU, certificate kitne din valid, clock sync, alerts on hain ya nahi, aur har router (ping + aakhri login / accounting).
+
+- `sudo radius-admin doctor --json` scripts / monitoring ke liye; masla ho to exit code 2.
+- **Tested:** container restart ke baad sab services band thin to doctor ne har aik ko laal dikhaya; services chalane ke baad sabz. Router jo ping na de laal, range wala peela. `tests/test-health.py` (25 checks) har check ko nakli haalat mein chalata hai.
+
 ## 7d. Alerts — Telegram / WhatsApp / Email
 
 Server khud aap ke phone par message bhejta hai jab kuch gadbad ho. Har 5 minute check hota hai (cron), aik waqt ke kai masle **aik hi message** mein aate hain, aur koi baat **do baar nahi** bheji jati.

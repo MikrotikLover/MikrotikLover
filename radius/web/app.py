@@ -1680,6 +1680,20 @@ def backup_download(name):
     return send_from_directory(BACKUP_DIR, name, as_attachment=True)
 
 
+# ------------------------------------------------------------------ health check
+@app.get("/api/health")
+@login_required()
+def health():
+    ok, out = radius_admin(["doctor", "--json"], log=False, timeout=120)
+    for line in out.splitlines():
+        if line.startswith("{"):
+            try:
+                return jsonify(json.loads(line))
+            except ValueError:
+                break
+    abort(500, "health check failed: " + out[-200:])
+
+
 # ------------------------------------------------------------------ alerts (Telegram / WhatsApp / email)
 ALERT_FIELDS = ("TELEGRAM_TOKEN", "TELEGRAM_CHAT", "WHATSAPP_PHONE", "WHATSAPP_APIKEY", "EMAIL_TO", "EMAIL_FROM",
                 "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "SMTP_TLS", "SUMMARY_HOUR")

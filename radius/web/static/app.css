@@ -220,3 +220,18 @@ dialog:has(.policy-editor) { width: min(780px, calc(100vw - 32px)); }
 label.field.inline { flex-direction: row; align-items: center; gap: 10px; }
 label.field.inline select { width: auto; }
 details > summary { cursor: pointer; font-weight: 600; margin: 4px 0 8px; }
+/* health check */
+.health-list { display: flex; flex-direction: column; gap: 8px; }
+.health-row { display: flex; gap: 12px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-left-width: 4px; border-radius: 10px; min-width: 0; }
+.health-row.ok { border-left-color: var(--ok); }
+.health-row.warn { border-left-color: var(--warn); background: var(--warn-soft); }
+.health-row.fail { border-left-color: var(--bad); background: var(--bad-soft); }
+.health-row .grow { min-width: 0; }
+.health-mark { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; color: #fff; flex: none; font-size: 13px; }
+.health-row.ok .health-mark { background: var(--ok); }
+.health-row.warn .health-mark { background: var(--warn); }
+.health-row.fail .health-mark { background: var(--bad); }
+.health-fix { font-size: 12.5px; margin-top: 4px; }
+.health-fix code { white-space: normal; word-break: break-word; }
+.health-dot { font-size: 20px; font-weight: 700; }
+.health-dot.ok { color: var(--ok); } .health-dot.warn { color: var(--warn); } .health-dot.fail { color: var(--bad); }
