@@ -89,3 +89,8 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 05:28 | Anomaly alert + weekly report (fake Telegram) | OK — sent once; weekly text without double title |
 | 05:28 | Bug: alerts.py could not import insights under python3 -I | Fixed — path added; a failing check no longer stops the other alerts |
 | 05:28 | test-insights (20) + alerts (49) + UI (46) | All pass |
+| 05:34 | Monthly security report: PDF for October (test data) | OK — 3 pages, tiles, words, chart, tables, advice; pdftotext reads it |
+| 05:34 | Report sending (fake servers) | OK — Telegram PDF document, email PDF attachment, WhatsApp summary |
+| 05:34 | Dashboard Security → Monthly reports | OK — make, list, open, download; traversal 404 |
+| 05:34 | Bug found: 'security report' not recognised by the CLI dispatcher | Fixed before commit |
+| 05:34 | test-secreport (19) + alerts + UI (47) + all suites + rsc lint | All pass |

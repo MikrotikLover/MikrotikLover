@@ -13,6 +13,7 @@ Common options: --cnf FILE --db NAME (database), --conf FILE (settings), --state
 
 Events (EVENTS=, comma separated): security quarantine router service jobs disk expiring anomaly summary weekly
   alerts.py weekly                       this week's report (sent by check on Monday at SUMMARY_HOUR)
+  alerts.py monthly [--month YYYY-MM]    security report PDF (sent by check on the 1st at SUMMARY_HOUR)
 Settings live in /etc/mikrotiklover-radius/alerts.conf (root only, mode 600).
 """
 import json, os, re, shutil, smtplib, socket, ssl, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
@@ -23,8 +24,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # insights.py (
 CONF = "/etc/mikrotiklover-radius/alerts.conf"
 STATE = "/var/lib/mikrotiklover/alerts-state.json"
 UPDATES = "/var/lib/mikrotiklover/updates.txt"
-EVENTS = ("security", "quarantine", "router", "service", "jobs", "disk", "expiring", "anomaly", "summary", "weekly")
-DEFAULT_EVENTS = "security,quarantine,router,service,jobs,disk,anomaly,summary,weekly"
+EVENTS = ("security", "quarantine", "router", "service", "jobs", "disk", "expiring", "anomaly", "summary", "weekly", "monthly")
+DEFAULT_EVENTS = "security,quarantine,router,service,jobs,disk,anomaly,summary,weekly,monthly"
 KEYS = {
     "TELEGRAM_TOKEN": r"^\d{3,15}:[A-Za-z0-9_-]{20,100}$",
     "TELEGRAM_CHAT": r"^-?\d{1,20}$|^@[A-Za-z0-9_]{4,64}$",
@@ -154,6 +155,29 @@ def send_telegram(c, text):
         raise RuntimeError(f"Telegram: {out[:200]}")
 
 
+def send_telegram_file(c, path, caption):
+    """sendDocument (multipart/form-data)."""
+    api = c.get("TELEGRAM_API", "https://api.telegram.org").rstrip("/")
+    b = "----mlboundary" + os.urandom(8).hex()
+    parts = []
+    for k, v in (("chat_id", c["TELEGRAM_CHAT"]), ("caption", caption[:1000])):
+        parts.append(f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode())
+    with open(path, "rb") as f:
+        data = f.read()
+    parts.append(f'--{b}\r\nContent-Disposition: form-data; name="document"; filename="{os.path.basename(path)}"\r\n'
+                 f'Content-Type: application/pdf\r\n\r\n'.encode() + data + b"\r\n")
+    parts.append(f"--{b}--\r\n".encode())
+    req = urllib.request.Request(f"{api}/bot{c['TELEGRAM_TOKEN']}/sendDocument", data=b"".join(parts),
+                                 headers={"Content-Type": f"multipart/form-data; boundary={b}", "User-Agent": "MikrotikLover-alerts"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            out = r.read(4096).decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"Telegram: {e.code} {e.read(300).decode('utf-8', 'replace')}") from None
+    if '"ok":true' not in out.replace(" ", ""):
+        raise RuntimeError(f"Telegram: {out[:200]}")
+
+
 def send_whatsapp(c, text):
     api = c.get("WHATSAPP_API", "https://api.callmebot.com/whatsapp.php")
     q = urllib.parse.urlencode({"phone": c["WHATSAPP_PHONE"], "text": text[:1500], "apikey": c["WHATSAPP_APIKEY"]})
@@ -165,11 +189,14 @@ def send_whatsapp(c, text):
         raise RuntimeError("WhatsApp: " + re.sub(r"<[^>]+>", " ", out)[:200].strip())
 
 
-def send_email(c, subject, text):
+def send_email(c, subject, text, attach=None):
     m = EmailMessage()
     m["Subject"], m["From"], m["To"] = subject, c.get("EMAIL_FROM") or c.get("SMTP_USER") or f"mikrotiklover@{socket.gethostname()}", c["EMAIL_TO"]
     m["Date"], m["Message-ID"] = formatdate(localtime=True), make_msgid("alert")
     m.set_content(text)
+    if attach:
+        with open(attach, "rb") as f:
+            m.add_attachment(f.read(), maintype="application", subtype="pdf", filename=os.path.basename(attach))
     tls, port = c.get("SMTP_TLS", "starttls"), int(c.get("SMTP_PORT") or (465 if c.get("SMTP_TLS") == "ssl" else 587))
     ctx = ssl.create_default_context()
     try:
@@ -219,6 +246,47 @@ def send_sms(c, phone, text):
     if c.get("SMS_OK") and not re.search(c["SMS_OK"], out, re.I):
         raise RuntimeError("SMS gateway said: " + re.sub(r"\s+", " ", out)[:150])
     return out[:200]
+
+
+def deliver_file(c, title, text, path):
+    """A report: the PDF by email and Telegram, the text by WhatsApp."""
+    brand = c.get("BRAND") or os.environ.get("ML_BRAND") or "MikrotikLover"
+    res = {}
+    for ch in channels(c):
+        try:
+            if ch == "telegram":
+                send_telegram_file(c, path, f"{title}\n\n{text}")
+            elif ch == "whatsapp":
+                send_whatsapp(c, f"{title}\n\n{text}\n\n(PDF: dashboard → Security → Monthly reports)")
+            else:
+                send_email(c, f"[{brand}] {title}", f"{title}\n\n{text}\n\nThe full report is attached (PDF).", attach=path)
+            res[ch] = "ok"
+        except Exception as e:  # noqa: BLE001
+            res[ch] = str(e)[:200] or e.__class__.__name__
+    return res
+
+
+def monthly_due(c, state, now):
+    """The 1st of the month at SUMMARY_HOUR: last month's security report, once."""
+    if "monthly" not in events(c):
+        return False
+    lt = time.localtime(now)
+    return lt.tm_mday == 1 and lt.tm_hour >= int(c.get("SUMMARY_HOUR", "21")) and state.get("monthly_month") != time.strftime("%Y-%m", lt)
+
+
+def monthly_send(c, db, month=None, out=None):
+    import secreport
+    d = secreport.gather(db.rows, month)
+    out = out or secreport.OUT
+    os.makedirs(out, exist_ok=True)
+    path = os.path.join(out, f"security-{d['month']}.pdf")
+    with open(path + ".tmp", "wb") as f:
+        f.write(secreport.make_pdf(d))
+    os.replace(path + ".tmp", path)
+    title, text = f"🛡 Security report {d['title']}", secreport.text(d)
+    res = deliver_file(c, title, text, path) if channels(c) else {}
+    record(db, "monthly", title, text, res)
+    return path, res
 
 
 def deliver(c, title, text, only=None):
@@ -511,6 +579,12 @@ def main():
             res = deliver(c, "📊 Daily summary", text)
             record(db, "summary", "📊 Daily summary", text, res)
             state["summary_day"] = time.strftime("%Y-%m-%d", time.localtime(now))
+        if monthly_due(c, state, now) and channels(c):
+            try:
+                monthly_send(c, db)
+            except Exception as e:  # noqa: BLE001
+                print(f"alerts: monthly report failed: {e}", file=sys.stderr)
+            state["monthly_month"] = time.strftime("%Y-%m", time.localtime(now))
         if weekly_due(c, state, now) and channels(c):
             text = weekly_text(db)
             res = deliver(c, "📈 Weekly report", text)
@@ -518,6 +592,16 @@ def main():
             state["weekly_week"] = time.strftime("%G-%V", time.localtime(now))
         save_state(state, statef)
         print(f"alerts: {len(found)} new, {sent} sent" + ("" if channels(c) else " (no channel set up)"))
+    elif cmd == "monthly":
+        month = a[a.index("--month") + 1] if "--month" in a and a.index("--month") + 1 < len(a) else None
+        if month and not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", month):
+            sys.exit("ERROR: --month like 2026-10")
+        path, res = monthly_send(c, db, month, a[a.index("--out") + 1] if "--out" in a else None)
+        print(path)
+        for k, v in res.items():
+            print(f"{k}: {v}")
+        if any(v != "ok" for v in res.values()):
+            sys.exit(1)
     elif cmd == "weekly":
         text = weekly_text(db)
         if channels(c):

@@ -1696,7 +1696,7 @@ setting_set() { echo "INSERT INTO ml_setting (k, v) VALUES ($(q "$1"), $(q "$2")
 
 cmd_security() {
     local sub=list days=7 cat="" top=200 sev=""
-    case ${1:-} in list|scan|update|autoblock|dns-block|summary|quarantine|release|quarantined|quarantine-auto|quarantine-server) sub=$1; shift ;; esac
+    case ${1:-} in list|scan|update|autoblock|dns-block|summary|quarantine|release|quarantined|quarantine-auto|quarantine-server|report|reports) sub=$1; shift ;; esac
     case $sub in
     quarantine)
         local t=${1:-}; [ -n "$t" ] || die "usage: radius-admin security quarantine IP|USER [reason ...]"; shift
@@ -1711,6 +1711,24 @@ cmd_security() {
             off) setting_set security_quarantine_auto 0; ok "Automatic quarantine off" ;;
             *)   echo "auto-quarantine: $( [ "$(setting_get security_quarantine_auto)" = 1 ] && echo on || echo off)" ;;
         esac; return ;;
+    report)
+        # radius-admin security report [--month YYYY-MM] [--send]
+        local month="" send=0
+        while [ $# -gt 0 ]; do case $1 in --month) month=${2:-}; shift 2 ;; --send) send=1; shift ;; *) die "usage: radius-admin security report [--month YYYY-MM] [--send]" ;; esac; done
+        [ -z "$month" ] || [[ $month =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]] || die "--month like 2026-10"
+        install -d -m 750 -o root -g "$(id -gn mlweb 2>/dev/null || echo root)" /var/lib/mikrotiklover/reports
+        local out rc=0
+        if [ "$send" = 1 ]; then
+            out=$(alerts_py monthly ${month:+--month "$month"} 2>&1) || rc=$?
+        else
+            out=$(python3 -I /usr/local/lib/mikrotiklover/secreport.py make ${month:+--month "$month"} --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" 2>&1) || rc=$?
+        fi
+        chgrp "$(id -gn mlweb 2>/dev/null || echo root)" /var/lib/mikrotiklover/reports/*.pdf 2>/dev/null || true
+        chmod 640 /var/lib/mikrotiklover/reports/*.pdf 2>/dev/null || true
+        [ "$rc" = 0 ] || die "$(grep -v '^/var/lib' <<<"$out" | grep -v ': ok$' | tr '\n' ' ')"
+        ok "Security report: $(head -1 <<<"$out")$( [ "$send" = 0 ] || echo " — sent: $(tail -n +2 <<<"$out" | tr '\n' ' ')")"
+        return ;;
+    reports) ls -1t /var/lib/mikrotiklover/reports/security-*.pdf 2>/dev/null || echo "no report yet (radius-admin security report)"; return ;;
     quarantine-server)
         local ip=${1:-}; valid_ip "$ip"; [[ $ip != */* ]] || die "one address"
         setting_set server_ip "$ip"; cmd_policy build >/dev/null
@@ -2247,6 +2265,10 @@ Reports aur samajh
   insights                              this week vs last week in plain words, top users / apps, unusual use
   insights anomalies                    users who used 10x their normal day (today / yesterday)
   alerts weekly                         send this week's report now (every Monday by itself)
+
+Monthly security report (PDF)
+  security report [--month YYYY-MM] [--send]   make the PDF (default: last month); --send: email / Telegram / WhatsApp
+  security reports                      list made reports (/var/lib/mikrotiklover/reports); automatic on the 1st
 
 Health check
   doctor [--json]                       every part of the server: green / yellow / red, and how to fix it

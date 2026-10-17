@@ -11,9 +11,9 @@ import alerts  # noqa: E402
 fails = 0
 
 
-def check(name, cond):
+def check(name, cond, got=None):
     global fails
-    print(("ok   " if cond else "FAIL ") + name)
+    print(("ok   " if cond else "FAIL ") + name + ("" if cond or got is None else f"\n     got: {got}"))
     fails += 0 if cond else 1
 
 
@@ -39,6 +39,9 @@ class H(BaseHTTPRequestHandler):
             d = json.loads(body)
             got.append(("smsjson", d["number"], d["message"], self.headers.get("Content-Type")))
             return self.reply(200, '{"status":"sent"}')
+        if self.path == f"/bot{TOKEN}/sendDocument":
+            got.append(("telegram-doc", b"%PDF-1.4" in body and b'name="document"; filename="r.pdf"' in body, body.count(b"name=\"caption\"")))
+            return self.reply(200, '{"ok":true}')
         if self.path == f"/bot{TOKEN}/sendMessage":
             d = json.loads(body)
             got.append(("telegram", d["chat_id"], d["text"]))
@@ -117,7 +120,7 @@ for bad in ("TELEGRAM_TOKEN=nope", "WHATSAPP_PHONE=12", "EVENTS=security,foo", "
     except ValueError:
         check(f"settings: {bad} refused", True)
 check("settings: empty value removes it", "WHATSAPP_PHONE" not in alerts.set_values(dict(c), ["WHATSAPP_PHONE="]))
-check("settings: default events", alerts.events({}) == ["security", "quarantine", "router", "service", "jobs", "disk", "anomaly", "summary", "weekly"])
+check("settings: default events", alerts.events({}) == ["security", "quarantine", "router", "service", "jobs", "disk", "anomaly", "summary", "weekly", "monthly"])
 m = alerts.mask(c)
 check("status hides secrets", TOKEN not in json.dumps(m) and "SmtpPass123" not in json.dumps(m) and m["TELEGRAM_CHAT"] == "42")
 d = tempfile.mkdtemp()
@@ -257,6 +260,19 @@ check("anomaly: once", alerts.check({"EVENTS": "anomaly"}, tdb, tst) == [])
 mon = time.mktime((2026, 10, 19, 21, 30, 0, 0, 0, -1))
 check("weekly: Monday at the hour, once a week", alerts.weekly_due({}, {}, mon) and not alerts.weekly_due({}, {"weekly_week": time.strftime("%G-%V", time.localtime(mon))}, mon)
       and not alerts.weekly_due({}, {}, mon - 86400))
+
+# monthly report: PDF by Telegram (document) and email (attachment), text by WhatsApp
+pdfp = os.path.join(d, "r.pdf")
+open(pdfp, "wb").write(b"%PDF-1.4\nfake\n%%EOF\n")
+got.clear()
+res = alerts.deliver_file(c, "Security report", "short text", pdfp)
+check("monthly: delivered on all channels", res == {"telegram": "ok", "whatsapp": "ok", "email": "ok"}, res)
+check("monthly: Telegram got the PDF as a document with a caption", ("telegram-doc", True, 1) in got, got)
+check("monthly: email has the PDF attached", any(g[0] == "email" and "filename=\"r.pdf\"" in g[2] and "application/pdf" in g[2] for g in got))
+check("monthly: WhatsApp gets the text", any(g[0] == "whatsapp" and "short text" in g[2] for g in got))
+first = time.mktime((2026, 11, 1, 21, 10, 0, 0, 0, -1))
+check("monthly: due on the 1st at the hour, once", alerts.monthly_due({}, {}, first) and not alerts.monthly_due({}, {"monthly_month": "2026-11"}, first)
+      and not alerts.monthly_due({}, {}, first + 86400))
 
 # ------------------------------------------------------------------ message + summary time
 k, t, x = alerts.compose([("router", "a")])

@@ -996,6 +996,21 @@ Saath mein: 30 din ka rozana data chart, ghanton ka chart (kab sab se zyada rush
 - CLI: `sudo radius-admin insights` / `insights anomalies`.
 - **Tested:** 30 din ka nakli traffic (6 users, 7 apps): muqabla, TikTok ka tezi se barhna, masroof ghanta, bilal ka 23 guna din pakra, alert aur weekly message nakli Telegram par pahunche. `tests/test-insights.py` (20 checks) + alerts tests.
 
+## 7j. Har mahine security report (PDF)
+
+Har mahine ki **1 tareekh** (summary ke waqt) pichle mahine ki security report khud banti hai aur bheji jati hai:
+- **Email**: PDF attachment ke saath · **Telegram**: PDF document · **WhatsApp**: chhoti summary.
+- PDF (2–3 safhe): virus / hacker / DDoS / quarantine ke numbers (pichle mahine se muqabla), "In short" seedhi baatein, roz ka chart, kya hua (type wise), infected devices (user ke saath), hamla karne wale, LAN ke andar nakli router / ARP spoofing, quarantine list, VPN koshishein, aur **"What to do"** — mashware (masalan: Winbox internet se band karein, infected device reset karein).
+- Dashboard → **Security → Monthly reports**: koi bhi mahina chun kar **Make report** / **Make and send**, purani reports **Open / Download**.
+
+```bash
+sudo radius-admin security report                    # pichla mahina (PDF banta hai)
+sudo radius-admin security report --month 2026-10 --send
+sudo radius-admin security reports                   # /var/lib/mikrotiklover/reports
+```
+- PDF ke liye koi naya package nahi chahiye (`tools/minipdf.py`, apna chhota PDF writer).
+- **Tested:** October ki report (asli test data) — 3 safhe, pdftotext se parhi gayi; nakli Telegram ko PDF document, email mein PDF attachment, WhatsApp ko summary; dashboard se banai / download ki (path traversal 404). `tests/test-secreport.py` (19 checks: PDF ka dhancha, offsets, text, lambi table kai safhon par, khaali mahina).
+
 ## 7e. Health check — sab theek hai?
 
 `sudo radius-admin doctor` ya dashboard → **Health check**: server ka har hissa **sabz** (theek), **peela** (dekh lein) ya **laal** (abhi theek karein), aur kharabi ke saath us ka hal likha hota hai.

@@ -830,7 +830,8 @@ const ALERT_EVENTS = [
   ["router", "Router down / back", "router stops answering (2 checks)"], ["service", "Server service stopped", "FreeRADIUS, database, DNS logger, traffic"],
   ["jobs", "Backup / update failed", "nightly backup, off-site copy, updates"], ["disk", "Disk almost full", "under 10% free"],
   ["expiring", "Users expiring", "subscription ends within 24 hours"], ["anomaly", "Unusual data use", "a user uses 10x a normal day"],
-  ["summary", "Daily summary", "users, data, sales, security"], ["weekly", "Weekly report", "Monday: top users & apps, this week vs last"]];
+  ["summary", "Daily summary", "users, data, sales, security"], ["weekly", "Weekly report", "Monday: top users & apps, this week vs last"],
+  ["monthly", "Monthly security report", "1st of the month: PDF by email / Telegram"]];
 const alertsCard = async () => {
   const { status: st = {}, log = [] } = await api("GET", "/api/alerts");
   const s = st.settings || {}, on = st.channels || [], evs = st.events || [];
@@ -1550,7 +1551,23 @@ async function blockingLogs() {
 
 // ------------------------------------------------------------------ security detective: virus, hacker attacks, DDoS
 ROUTES.security = async (tab = "all") => {
-  const tabs = [["all", "All alerts"], ["virus", "Virus (infected devices)"], ["attack", "Hacker attacks"], ["ddos", "DDoS attacks"], ["setup", "Protection & lists"]];
+  const tabs = [["all", "All alerts"], ["virus", "Virus (infected devices)"], ["attack", "Hacker attacks"], ["ddos", "DDoS attacks"], ["setup", "Protection & lists"], ["reports", "Monthly reports"]];
+  if (tab === "reports") {
+    const { reports } = await api("GET", "/api/security/reports");
+    const now = new Date(); const last = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const ym = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const mon = h("input", { type: "month", value: ym(last), max: ym(now) });
+    const make = (send) => async (e) => { e.target.disabled = true; await act(api("POST", "/api/security/reports", { month: mon.value, send })); route(); };
+    shell("Security", h("div", { class: "stack" },
+      h("div", { class: "tabs" }, tabs.map(([k, l]) => h("a", { href: `#/security/${k}`, class: k === tab ? "active" : "" }, l))),
+      card("Monthly security report (PDF)", "made by itself on the 1st of every month",
+        h("div", { class: "muted" }, "Everything about last month on 2–3 pages: virus, attacks, DDoS, fake routers / ARP spoofing, quarantined devices, VPN attempts, and what to do — in simple words. On the 1st it goes by email (PDF attached), Telegram (PDF) and WhatsApp (summary) — Settings → Alerts → Monthly security report."),
+        isAdmin() ? h("div", { class: "toolbar wrap" }, mon, h("button", { class: "primary", onclick: make(false) }, "Make report"), h("button", { onclick: make(true) }, "Make and send")) : null,
+        table([{ label: "Month", render: (r) => h("b", {}, r.month) }, { label: "Made", key: "made" }, { label: "Size", num: true, render: (r) => bytes(r.size) },
+          { label: "", render: (r) => h("div", { class: "row-actions" }, h("a", { class: "btn small", href: `/api/security/reports/${r.name}`, target: "_blank", rel: "noopener" }, "Open"),
+            h("a", { class: "btn small", href: `/api/security/reports/${r.name}?download=1` }, "⬇ Download")) }], reports, "No report yet — press Make report."))));
+    return;
+  }
   const days = h("select", {}, [["1", "Today"], ["7", "7 days"], ["30", "30 days"], ["90", "90 days"]].map(([v, l]) => h("option", { value: v, selected: v === "7" }, l)));
   const high = h("label", { class: "chip" }, h("input", { type: "checkbox" }), "only high");
   const holder = h("div", { class: "stack" });

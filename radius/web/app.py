@@ -1844,6 +1844,43 @@ def insights_get():
     return jsonify(r)
 
 
+# ------------------------------------------------------------------ monthly security reports (PDF)
+REPORT_DIR = os.environ.get("MLWEB_REPORTS", "/var/lib/mikrotiklover/reports")
+REPORT_RE = re.compile(r"^security-\d{4}-\d{2}\.pdf$")
+
+
+@app.get("/api/security/reports")
+@login_required()
+def security_reports():
+    rows = []
+    try:
+        for f in os.listdir(REPORT_DIR):
+            if REPORT_RE.match(f):
+                st = os.stat(os.path.join(REPORT_DIR, f))
+                rows.append({"name": f, "month": f[9:16], "size": st.st_size, "made": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")})
+    except OSError:
+        pass
+    rows.sort(key=lambda r: r["month"], reverse=True)
+    return jsonify(reports=rows)
+
+
+@app.get("/api/security/reports/<name>")
+@login_required()
+def security_report_file(name):
+    if not REPORT_RE.match(name):
+        abort(400, "invalid name")
+    return send_from_directory(REPORT_DIR, name, mimetype="application/pdf", as_attachment=request.args.get("download") == "1")
+
+
+@app.post("/api/security/reports")
+@login_required("admin")
+def security_report_make():
+    d = body()
+    month = field(d, "month", re.compile(r"^\d{4}-(0[1-9]|1[0-2])$"))
+    args = ["security", "report"] + (["--month", month] if month else []) + (["--send"] if d.get("send") else [])
+    return result(*radius_admin(args, timeout=300))
+
+
 # ------------------------------------------------------------------ health check
 @app.get("/api/health")
 @login_required()
