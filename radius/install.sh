@@ -43,6 +43,8 @@ apt-get install -y -qq eapoltest >/dev/null 2>&1 || warn "eapoltest not availabl
 
 # ---------------------------------------------------------------- settings
 install -d -m 700 "$CONF_DIR"
+# dashboard options given now win over the saved ones; otherwise the saved ones are kept on an update
+ARG_WEB_PORT=${WEB_PORT:-} ARG_WEB_ALLOW=${WEB_ALLOW:-}
 if [ -f "$CONF_FILE" ]; then
     # shellcheck source=/dev/null
     . "$CONF_FILE"
@@ -53,9 +55,13 @@ DB_PASS=${DB_PASS:-$(openssl rand -hex 16)}
 LOCAL_SECRET=${LOCAL_SECRET:-$(openssl rand -hex 16)}
 RADIUS_DOMAIN=${RADIUS_DOMAIN:-radius.local}
 CERT_ORG=${CERT_ORG:-MikrotikLover}
+WEB_PORT=${ARG_WEB_PORT:-${WEB_PORT:-8443}}
+WEB_ALLOW=${ARG_WEB_ALLOW:-${WEB_ALLOW:-"127.0.0.1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10"}}
 
 [[ $RADIUS_DOMAIN =~ ^[A-Za-z0-9.-]{1,253}$ ]] || die "Invalid RADIUS_DOMAIN"
 [[ $CERT_ORG =~ ^[A-Za-z0-9\ ._-]{1,64}$ ]] || die "CERT_ORG may only contain letters, digits, space . _ -"
+[[ $WEB_PORT =~ ^[0-9]{2,5}$ ]] || die "Invalid WEB_PORT"
+[[ $WEB_ALLOW =~ ^[0-9a-fA-F.:/\ ]+$ || $WEB_ALLOW == any ]] || die "WEB_ALLOW: IPs/networks separated by spaces, or 'any'"
 
 umask 077
 cat > "$CONF_FILE" <<EOF
@@ -66,6 +72,8 @@ DB_PASS=$DB_PASS
 LOCAL_SECRET=$LOCAL_SECRET
 RADIUS_DOMAIN=$RADIUS_DOMAIN
 CERT_ORG="$CERT_ORG"
+WEB_PORT=$WEB_PORT
+WEB_ALLOW="$WEB_ALLOW"
 EOF
 cat > "$CONF_DIR/my.cnf" <<EOF
 [client]
