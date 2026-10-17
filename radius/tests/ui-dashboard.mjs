@@ -345,7 +345,7 @@ try {
     const ac = page.locator(".card", { has: page.locator("h2", { hasText: /^Alerts/ }) });
     await ac.waitFor({ timeout: 30000 });
     await page.waitForLoadState("networkidle");
-    if ((await ac.locator(".alert-events input[type=checkbox]").count()) !== 8) throw new Error("alerts: 8 event switches expected");
+    if ((await ac.locator(".alert-events input[type=checkbox]").count()) !== 10) throw new Error("alerts: 10 event switches expected");
     for (const ch of ["Telegram", "WhatsApp", "Email"]) await ac.locator(".sub-card", { hasText: ch }).first().waitFor();
     if (/AAFake|SmtpPass/.test(await page.content())) throw new Error("alerts: a secret reached the browser");
     await ac.locator("input[name=WHATSAPP_PHONE]").fill("12ab");
@@ -357,7 +357,7 @@ try {
     if (!/invalid WHATSAPP_PHONE/.test(await at.textContent())) throw new Error(`alerts: bad phone not refused: ${await at.textContent()}`);
     expect400 = false;
   }
-  ok("settings: alerts card (Telegram / WhatsApp / email, 8 events), no secrets in page, bad phone refused");
+  ok("settings: alerts card (Telegram / WhatsApp / email, 10 events), no secrets in page, bad phone refused");
   {
     const nc = page.locator(".card", { has: page.locator("h2", { hasText: "Warn users before it runs out" }) });
     await nc.waitFor({ timeout: 30000 });
@@ -413,9 +413,10 @@ try {
   for (const [hash, title, name] of [["#/online", "Online", "08-online"], ["#/live", "Live log", "09-live"],
     ["#/reports/sites", "Reports", "10-reports-sites"], ["#/reports/blocked", "Reports", "11-reports-blocked"],
     ["#/data/site", "Data usage", "12-data-site"], ["#/data/ip", "Data usage", "13-data-ip"],
-    ["#/settings", "Settings", "14-settings"], ["#/health", "Health check", "14b-health"], ["#/speed", "Speed schedule", "14c-speed"]]) {
+    ["#/settings", "Settings", "14-settings"], ["#/health", "Health check", "14b-health"], ["#/speed", "Speed schedule", "14c-speed"], ["#/insights", "Insights", "14d-insights"]]) {
     await go(page, hash, title);
     if (hash === "#/health") await page.locator(".health-row").first().waitFor({ timeout: 60000 });
+    if (hash === "#/insights") await page.locator(".insight-words li").first().waitFor({ timeout: 60000 });
     await page.waitForTimeout(700);
     await shot(page, name);
     ok(`page ${hash}`);

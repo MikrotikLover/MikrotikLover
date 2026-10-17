@@ -11,18 +11,20 @@
   alerts.py log [N]                      last N alerts sent
 Common options: --cnf FILE --db NAME (database), --conf FILE (settings), --state FILE.
 
-Events (EVENTS=, comma separated): security quarantine router service jobs disk expiring summary
+Events (EVENTS=, comma separated): security quarantine router service jobs disk expiring anomaly summary weekly
+  alerts.py weekly                       this week's report (sent by check on Monday at SUMMARY_HOUR)
 Settings live in /etc/mikrotiklover-radius/alerts.conf (root only, mode 600).
 """
 import json, os, re, shutil, smtplib, socket, ssl, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # insights.py (python3 -I leaves it out)
 
 CONF = "/etc/mikrotiklover-radius/alerts.conf"
 STATE = "/var/lib/mikrotiklover/alerts-state.json"
 UPDATES = "/var/lib/mikrotiklover/updates.txt"
-EVENTS = ("security", "quarantine", "router", "service", "jobs", "disk", "expiring", "summary")
-DEFAULT_EVENTS = "security,quarantine,router,service,jobs,disk,summary"
+EVENTS = ("security", "quarantine", "router", "service", "jobs", "disk", "expiring", "anomaly", "summary", "weekly")
+DEFAULT_EVENTS = "security,quarantine,router,service,jobs,disk,anomaly,summary,weekly"
 KEYS = {
     "TELEGRAM_TOKEN": r"^\d{3,15}:[A-Za-z0-9_-]{20,100}$",
     "TELEGRAM_CHAT": r"^-?\d{1,20}$|^@[A-Za-z0-9_]{4,64}$",
@@ -373,6 +375,15 @@ def check(c, db, state, now=None, ping_fn=ping, running_fn=running, updates=UPDA
                                  "AND expires_at <= NOW() + INTERVAL 1 DAY ORDER BY expires_at LIMIT 100"):
             if once(state, f"exp:{user}:{exp}", 3 * 86400):
                 found.append(("expiring", f"⏳ {user} expires {exp[:16]}"))
+    if "anomaly" in ev:
+        try:
+            import insights
+            for a in insights.find_anomalies(insights.daily_user(db.rows, 20)):
+                if once(state, f"anom:{a['user']}:{a['day']}", 3 * 86400):
+                    found.append(("anomaly", f"📶 {a['user']} used {insights.gb(a['bytes'])} on {a['day']} — {a['times']}x a normal day "
+                                             f"({insights.gb(a['normal'])}). Virus, a shared password or a big download?"))
+        except Exception as e:  # noqa: BLE001 — the other alerts must still go out
+            print(f"alerts: unusual-use check failed: {e}", file=sys.stderr)
     state["last_check"] = now
     return found
 
@@ -387,7 +398,7 @@ def compose(found):
         lines.append(f"… and {len(found) - MAX_LINES} more (dashboard → Security / Settings)")
     kinds = sorted({k for k, _ in found})
     names = {"security": "security", "quarantine": "quarantine", "router": "routers", "service": "services",
-             "jobs": "jobs", "disk": "disk", "expiring": "expiring users"}
+             "jobs": "jobs", "disk": "disk", "expiring": "expiring users", "anomaly": "unusual data use"}
     return ",".join(kinds), f"{len(found)} alerts: " + ", ".join(names.get(k, k) for k in kinds), "\n".join(lines)
 
 
@@ -410,6 +421,19 @@ def summary_text(db):
     if apps:
         lines.append("📱 Top apps: " + ", ".join(a for a, _ in apps))
     return "\n".join(lines)
+
+
+def weekly_due(c, state, now):
+    """Monday at SUMMARY_HOUR, once a week."""
+    if "weekly" not in events(c):
+        return False
+    lt = time.localtime(now)
+    return lt.tm_wday == 0 and lt.tm_hour >= int(c.get("SUMMARY_HOUR", "21")) and state.get("weekly_week") != time.strftime("%G-%V", lt)
+
+
+def weekly_text(db):
+    import insights
+    return insights.text_report(insights.report(db.rows), title=False)
 
 
 def summary_due(c, state, now):
@@ -487,8 +511,21 @@ def main():
             res = deliver(c, "📊 Daily summary", text)
             record(db, "summary", "📊 Daily summary", text, res)
             state["summary_day"] = time.strftime("%Y-%m-%d", time.localtime(now))
+        if weekly_due(c, state, now) and channels(c):
+            text = weekly_text(db)
+            res = deliver(c, "📈 Weekly report", text)
+            record(db, "weekly", "📈 Weekly report", text, res)
+            state["weekly_week"] = time.strftime("%G-%V", time.localtime(now))
         save_state(state, statef)
         print(f"alerts: {len(found)} new, {sent} sent" + ("" if channels(c) else " (no channel set up)"))
+    elif cmd == "weekly":
+        text = weekly_text(db)
+        if channels(c):
+            res = deliver(c, "📈 Weekly report", text)
+            record(db, "weekly", "📈 Weekly report", text, res)
+            print("\n".join(f"{k}: {v}" for k, v in res.items()))
+        else:
+            print(text)
     elif cmd == "summary":
         text = summary_text(db)
         if channels(c):

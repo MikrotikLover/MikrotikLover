@@ -117,7 +117,7 @@ for bad in ("TELEGRAM_TOKEN=nope", "WHATSAPP_PHONE=12", "EVENTS=security,foo", "
     except ValueError:
         check(f"settings: {bad} refused", True)
 check("settings: empty value removes it", "WHATSAPP_PHONE" not in alerts.set_values(dict(c), ["WHATSAPP_PHONE="]))
-check("settings: default events", alerts.events({}) == ["security", "quarantine", "router", "service", "jobs", "disk", "summary"])
+check("settings: default events", alerts.events({}) == ["security", "quarantine", "router", "service", "jobs", "disk", "anomaly", "summary", "weekly"])
 m = alerts.mask(c)
 check("status hides secrets", TOKEN not in json.dumps(m) and "SmtpPass123" not in json.dumps(m) and m["TELEGRAM_CHAT"] == "42")
 d = tempfile.mkdtemp()
@@ -237,6 +237,26 @@ db3.sec.append(["attack", "Fake DHCP server (rogue router on the LAN)", "192.168
 f = alerts.check({"EVENTS": "security"}, db3, st3)
 check("late-written event is still sent, once; NULL user not shown", len(f) == 1 and "— 192.168.88.250," in f[0][1] and "NULL" not in f[0][1]
       and alerts.check({"EVENTS": "security"}, db3, st3) == [])
+
+# unusual data use (10x a normal day)
+import datetime as _dt
+class TrafficDB(FakeDB):
+    def rows(self, q):
+        if "FROM traffic_site" in q and "DATE(bucket)" in q:
+            today = _dt.date.today()
+            out = [((today - _dt.timedelta(days=i)).isoformat(), "sara", str(200 * 2**20)) for i in range(2, 12)]
+            out.append(((today - _dt.timedelta(days=1)).isoformat(), "sara", str(3 * 2**30)))      # ~15x
+            out += [((today - _dt.timedelta(days=i)).isoformat(), "ali", str(2 * 2**30)) for i in range(0, 12)]   # always big
+            out.append((today.isoformat(), "newbie", str(5 * 2**30)))                              # no history
+            return out
+        return []
+tdb, tst = TrafficDB(), {}
+f = alerts.check({"EVENTS": "anomaly"}, tdb, tst)
+check("anomaly: 15x a normal day reported; steady heavy user and new user not", len(f) == 1 and f[0][0] == "anomaly" and "sara" in f[0][1] and "15x" in f[0][1])
+check("anomaly: once", alerts.check({"EVENTS": "anomaly"}, tdb, tst) == [])
+mon = time.mktime((2026, 10, 19, 21, 30, 0, 0, 0, -1))
+check("weekly: Monday at the hour, once a week", alerts.weekly_due({}, {}, mon) and not alerts.weekly_due({}, {"weekly_week": time.strftime("%G-%V", time.localtime(mon))}, mon)
+      and not alerts.weekly_due({}, {}, mon - 86400))
 
 # ------------------------------------------------------------------ message + summary time
 k, t, x = alerts.compose([("router", "a")])

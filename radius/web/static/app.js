@@ -44,6 +44,7 @@ const ICONS = {
   block: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M5.6 5.6l12.8 12.8",
   shield: "M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6zM12 8v5m0 3h.01",
   pulse: "M3 12h4l2-6 4 12 2-6h6",
+  bulb: "M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.8.8 1 1.5 1 2.5h6c0-1 .2-1.7 1-2.5A6 6 0 0 0 12 3",
   clock: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M12 7v5l3 2",
   globe: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M3 12h18M12 3c2.5 2.5 3.8 5.5 3.8 9s-1.3 6.5-3.8 9c-2.5-2.5-3.8-5.5-3.8-9s1.3-6.5 3.8-9",
   vpn: "M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6zM9 12l2 2 4-4",
@@ -207,7 +208,7 @@ const NAV = [
   ["dashboard", "Dashboard", "home"], ["users", "Users", "users"], ["groups", "Groups & policies", "groups"],
   ["macs", "MAC devices", "mac"], ["routers", "Routers", "router"], "-",
   ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], ["speed", "Speed schedule", "clock"], "-",
-  ["online", "Online now", "online"], ["live", "Live log", "live"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
+  ["online", "Online now", "online"], ["live", "Live log", "live"], ["insights", "Insights (samajh)", "bulb"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
   ["data", "Data usage", "data"], ["apps", "Apps on network", "apps"], ["ports", "Ports & protocols", "ports"], "-",
   ["blocking", "Blocking", "block"], ["vpn", "VPN & proxy watch", "vpn"], ["security", "Security", "shield"], ["domains", "Website names", "globe"], "-", ["health", "Health check", "pulse"], ["settings", "Settings", "settings"],
 ];
@@ -576,6 +577,38 @@ ROUTES.live = async () => {
 };
 
 // ------------------------------------------------------------------ reports
+// ------------------------------------------------------------------ reports aur samajh (insights)
+const changeBadge = (c) => c === null || c === undefined ? badge("new", "info") : badge(`${c > 0 ? "▲" : c < 0 ? "▼" : ""} ${Math.abs(c)}%`, c > 20 ? "warn" : c < -20 ? "info" : "");
+ROUTES.insights = async () => {
+  shell("Insights", h("div", { class: "empty" }, "Working it out …"));
+  const r = await api("GET", "/api/insights");
+  const daily = r.daily.map((d) => ({ label: d.day.slice(5), down: d.bytes, up: 0 }));
+  const hours = r.hours.map((b, i) => ({ label: String(i).padStart(2, "0"), down: b, up: 0 }));
+  const sales = r.sales?.now;
+  shell("Insights", h("div", { class: "stack" },
+    h("div", { class: "grid g-tiles" },
+      tile("Data this week", bytes(r.total_now), r.total_before ? h("span", {}, "last week ", bytes(r.total_before), " ", changeBadge(r.change)) : "first week"),
+      tile("Users / devices", String(r.users_now), r.users_before ? `last week ${r.users_before}` : null),
+      tile("Unusual use", String(r.anomalies.length), r.anomalies.length ? "users far above their normal day" : "nothing unusual"),
+      sales ? tile("Sales this week", `${sales.count}`, `${Math.round(sales.amount).toLocaleString()}`) : null),
+    card("Is hafte ki samajh", `${r.week_start} – ${r.today}`, h("ul", { class: "insight-words" }, r.words.map((w) => h("li", { class: w.startsWith("⚠") ? "warn" : "" }, w)))),
+    h("div", { class: "grid g-2" },
+      card("Data per day", "last 30 days", columnChart(daily)),
+      card("Busy hours", "this week, average per day", columnChart(hours))),
+    r.anomalies.length ? card("Unusual data use", "10x or more of the user's normal day — virus, a shared password, or a big download?",
+      table([{ label: "User", render: (a) => h("a", { href: `#/users/${encodeURIComponent(a.user)}` }, a.user) }, { label: "Day", key: "day" },
+        { label: "Used", num: true, render: (a) => bytes(a.bytes) }, { label: "Normal day", num: true, render: (a) => bytes(a.normal) },
+        { label: "", render: (a) => badge(`${a.times}x`, "bad") }], r.anomalies)) : null,
+    h("div", { class: "grid g-2" },
+      card("Top users", "this week vs last week", table([{ label: "User", render: (u) => h("a", { href: `#/users/${encodeURIComponent(u.user)}` }, u.user) },
+        { label: "This week", num: true, render: (u) => bytes(u.now) }, { label: "Last week", num: true, render: (u) => u.before ? bytes(u.before) : "—" },
+        { label: "Change", render: (u) => changeBadge(u.change) }], r.top_users, "No data yet.")),
+      card("Top apps / sites", "this week vs last week", table([{ label: "Site", key: "site" },
+        { label: "This week", num: true, render: (x) => bytes(x.now) }, { label: "Last week", num: true, render: (x) => x.before ? bytes(x.before) : "—" },
+        { label: "Change", render: (x) => changeBadge(x.change) }], r.top_sites, "No data yet."))),
+    h("div", { class: "muted" }, "Every Monday this report also comes to your phone / email (Settings → Alerts → Weekly report). Server: sudo radius-admin insights")));
+};
+
 ROUTES.reports = async (tab = "sites") => {
   const tabs = [["sites", "Visited sites"], ["history", "History"], ["blocked", "Blocked"], ["logins", "Login log"]];
   const user = h("input", { type: "search", placeholder: "User" }), ip = h("input", { type: "search", placeholder: "IP" });
@@ -796,7 +829,8 @@ const ALERT_EVENTS = [
   ["security", "Virus, hacker attack, DDoS", "only HIGH danger"], ["quarantine", "Device quarantined", "automatic or by an admin"],
   ["router", "Router down / back", "router stops answering (2 checks)"], ["service", "Server service stopped", "FreeRADIUS, database, DNS logger, traffic"],
   ["jobs", "Backup / update failed", "nightly backup, off-site copy, updates"], ["disk", "Disk almost full", "under 10% free"],
-  ["expiring", "Users expiring", "subscription ends within 24 hours"], ["summary", "Daily summary", "users, data, sales, security"]];
+  ["expiring", "Users expiring", "subscription ends within 24 hours"], ["anomaly", "Unusual data use", "a user uses 10x a normal day"],
+  ["summary", "Daily summary", "users, data, sales, security"], ["weekly", "Weekly report", "Monday: top users & apps, this week vs last"]];
 const alertsCard = async () => {
   const { status: st = {}, log = [] } = await api("GET", "/api/alerts");
   const s = st.settings || {}, on = st.channels || [], evs = st.events || [];

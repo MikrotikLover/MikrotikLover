@@ -981,6 +981,21 @@ Koi LAN mein ghar wala router laga de ya "fake DHCP" chala de to phones ko ghala
 - **Tested** (nakli router logs UDP 514 par): fake DHCP → high event + Telegram alert; 24 addresses wala MAC aur 4 addresses le lene wala MAC → ARP spoofing high; aik address change → low. `tests/test-sentinel.py` (4 naye checks), `tests/lint-rsc.py`.
 - **Isi kaam mein 3 purane bugs mile aur theek hue:** (1) server ka rsyslog router ki DHCP / script lines phenk deta tha; (2) alerts woh security events chhor dete the jo scan baad mein purane waqt ke saath likhta hai; (3) `radius-admin` database mein latin1 se likhta tha, is liye "—" aur Urdu jaise huroof toot jate the (ab utf8mb4).
 
+## 7i. Reports aur samajh (Insights)
+
+Dashboard → **Insights (samajh)**: numbers ke bajaye seedhi baatein —
+- "Is hafte 50.1 GB data istemal hua — pichle hafte se 32% zyada."
+- "Sab se zyada data youtube.com par gaya: 13.7 GB (27%)", "Sab se tezi se barha: tiktok.com (242% zyada)", "Sab se masroof waqt 20:00–21:00"
+- "⚠ bilal ne kal 8.3 GB istemal kiya — aam din (363 MB) se 23 guna."
+
+Saath mein: 30 din ka rozana data chart, ghanton ka chart (kab sab se zyada rush), **top users** aur **top apps / sites** — is hafte, pichle hafte, aur farq (▲ / ▼ %), sales ka muqabla.
+
+- **Unusual use (anomaly):** kisi user ka aaj / kal ka data us ke aam din (pichle 2 hafte ka median) ka **10 guna** se zyada aur 500 MB se upar ho → Insights mein laal, aur alert (Telegram / WhatsApp / email: event `anomaly`). Naye users (5 din se kam history) ko nahi parakhta. Wajah aksar: virus, password share, ya bari download.
+- **Weekly report:** har **Monday** (summary ke waqt) yahi report — baatein + top 10 users + top 10 apps — phone / email par (event `weekly`). Abhi: `sudo radius-admin alerts weekly`.
+- Purane install par: Settings → Alerts mein "Unusual data use" aur "Weekly report" on karein (agar events pehle save kiye the).
+- CLI: `sudo radius-admin insights` / `insights anomalies`.
+- **Tested:** 30 din ka nakli traffic (6 users, 7 apps): muqabla, TikTok ka tezi se barhna, masroof ghanta, bilal ka 23 guna din pakra, alert aur weekly message nakli Telegram par pahunche. `tests/test-insights.py` (20 checks) + alerts tests.
+
 ## 7e. Health check — sab theek hai?
 
 `sudo radius-admin doctor` ya dashboard → **Health check**: server ka har hissa **sabz** (theek), **peela** (dekh lein) ya **laal** (abhi theek karein), aur kharabi ke saath us ka hal likha hota hai.

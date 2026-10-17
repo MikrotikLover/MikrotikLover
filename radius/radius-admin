@@ -2069,7 +2069,7 @@ cmd_alerts() {
         esac | alerts_py set >/dev/null && ok "Alerts: ${1} off" ;;
     events)
         local cur; cur=$(alerts_py status --json | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["events"]))')
-        if [ $# -eq 0 ]; then echo "on: ${cur//,/ }"; echo "all: security quarantine router service jobs disk expiring summary"; return; fi
+        if [ $# -eq 0 ]; then echo "on: ${cur//,/ }"; echo "all: security quarantine router service jobs disk expiring anomaly summary weekly"; return; fi
         local ev=$1 state=${2:-}
         case $state in
             on)  cur="$cur,$ev" ;;
@@ -2079,7 +2079,7 @@ cmd_alerts() {
         printf 'EVENTS=%s\n' "$(tr ',' '\n' <<<"$cur" | grep -v '^$' | sort -u | paste -sd, -)" | alerts_py set >/dev/null && ok "Alert '$ev' $state" ;;
     summary-hour)
         printf 'SUMMARY_HOUR=%s\n' "${1:-}" | alerts_py set >/dev/null && ok "Daily summary at ${1}:00" ;;
-    set|test|send|check|summary|log|telegram-chats) alerts_py "$sub" "$@" ;;
+    set|test|send|check|summary|weekly|log|telegram-chats) alerts_py "$sub" "$@" ;;
     *) die "usage: radius-admin alerts status | telegram TOKEN [CHAT] | whatsapp PHONE KEY | email TO HOST[:PORT] [...] | off CHANNEL | events [EV on|off] | summary-hour H | test [CHANNEL] | send TITLE [TEXT] | check | summary | log [N]" ;;
     esac
 }
@@ -2243,6 +2243,11 @@ Speed schedule (night boost, peak-hour limit)
   speed now USER ["YYYY-MM-DD HH:MM"]   which speed the user gets (now or at that time) and why
   speed apply                           change running sessions now (the enforcer does it every 5 minutes)
 
+Reports aur samajh
+  insights                              this week vs last week in plain words, top users / apps, unusual use
+  insights anomalies                    users who used 10x their normal day (today / yesterday)
+  alerts weekly                         send this week's report now (every Monday by itself)
+
 Health check
   doctor [--json]                       every part of the server: green / yellow / red, and how to fix it
 
@@ -2252,9 +2257,9 @@ Alerts (Telegram / WhatsApp / email)
   alerts whatsapp PHONE APIKEY          WhatsApp via CallMeBot (free key)
   alerts email TO HOST[:PORT] [--user U] [--from A] [--tls starttls|ssl|none]
   alerts off telegram|whatsapp|email
-  alerts events [EVENT on|off]          security quarantine router service jobs disk expiring summary
+  alerts events [EVENT on|off]          security quarantine router service jobs disk expiring anomaly summary weekly
   alerts summary-hour H                 daily summary time (default 21)
-  alerts test [CHANNEL] | send TITLE [TEXT] | summary | log [N]
+  alerts test [CHANNEL] | send TITLE [TEXT] | summary | weekly | log [N]
   alerts check                          look for problems and send them (cron, every 5 minutes)
 
 CDN detective
@@ -2348,6 +2353,7 @@ case ${1:-help} in
     alerts)  shift; cmd_alerts "$@" ;;
     speed)   shift; cmd_speed "$@" ;;
     notice)  shift; cmd_notice "$@" ;;
+    insights) shift; python3 -I /usr/local/lib/mikrotiklover/insights.py "${1:-report}" --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "${@:2}" ;;
     doctor|health) shift; python3 -I /usr/local/lib/mikrotiklover/health.py --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@" ;;
     backups) cmd_backups ;;
     restore) shift; cmd_restore "$@" ;;

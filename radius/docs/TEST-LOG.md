@@ -85,3 +85,7 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 05:23 | Bug: alerts missed security events written later with an older time | Fixed — last 26 h + send once; first run only remembers |
 | 05:23 | Bug: radius-admin wrote to the DB as latin1 (— and Urdu broken) | Fixed — my.cnf utf8mb4 + unicode_ci for the mysql client |
 | 05:23 | Suites after LAN guard: sentinel 33, alerts 46, notice, speed, lint, all others | All pass |
+| 05:28 | Insights page with 30 days of fake traffic | OK — plain-words summary, charts, top users/apps with change, anomaly 23x |
+| 05:28 | Anomaly alert + weekly report (fake Telegram) | OK — sent once; weekly text without double title |
+| 05:28 | Bug: alerts.py could not import insights under python3 -I | Fixed — path added; a failing check no longer stops the other alerts |
+| 05:28 | test-insights (20) + alerts (49) + UI (46) | All pass |

@@ -1835,6 +1835,15 @@ def user_phone(name):
     return result(*radius_admin(["user", "phone", name, ph]))
 
 
+# ------------------------------------------------------------------ reports aur samajh (insights)
+@app.get("/api/insights")
+@login_required()
+def insights_get():
+    import insights
+    r = insights.report(lambda sql: [tuple(x.values()) for x in q(sql)])
+    return jsonify(r)
+
+
 # ------------------------------------------------------------------ health check
 @app.get("/api/health")
 @login_required()
