@@ -962,7 +962,115 @@ cmd_enforce() {
         esac
     done <<<"$rows"
     echo "DELETE FROM ml_fup WHERE applied_at < NOW() - INTERVAL 40 DAY;" | db
-    [ -z "$verbose" ] || ok "Enforcer: $n_cut session(s) disconnected, $n_fup slowed to FUP speed"
+    local n_speed; n_speed=$(speed_enforce "$verbose")
+    [ -z "$verbose" ] || ok "Enforcer: $n_cut session(s) disconnected, $n_fup slowed to FUP speed, $n_speed speed change(s) by schedule"
+}
+
+# Bandwidth schedule: when a time window starts or ends, change the speed of running sessions (CoA).
+# Prints the number of sessions changed.
+speed_enforce() {
+    local verbose=${1:-} rows u uid want cur n=0
+    if [ "$(echo "SELECT (SELECT COUNT(*) FROM ml_speed_schedule WHERE enabled=1) + (SELECT COUNT(*) FROM ml_rate_applied)" | db)" = 0 ]; then
+        echo 0; return 0
+    fi
+    speed_snapshot
+    # want = scheduled speed now, else the normal speed, else no limit (0/0)
+    # cur  = what the session has: last sent by us, else what it got at login
+    rows=$(echo "SELECT r.username, r.acctuniqueid,
+                        COALESCE(NULLIF(ml_sched_rate(r.username, NOW()),''), NULLIF(ml_base_rate(r.username),''), '0/0'),
+                        COALESCE(a.rate, NULLIF(ml_sched_rate(r.username, r.acctstarttime),''), NULLIF(ml_base_rate(r.username),''), '0/0')
+                 FROM radacct r LEFT JOIN ml_rate_applied a ON a.acctuniqueid = r.acctuniqueid
+                 WHERE r.acctstoptime IS NULL
+                   AND NOT EXISTS (SELECT 1 FROM ml_fup f WHERE f.acctuniqueid = r.acctuniqueid)
+                   AND ml_check(r.username) NOT LIKE 'fup:%'" | db)
+    while IFS=$'\t' read -r u uid want cur; do
+        [ -n "$u" ] && [ "$want" != "$cur" ] || continue
+        [[ $want =~ ^[0-9A-Za-z/\ .]{1,64}$ ]] || continue
+        [ -z "$verbose" ] || echo "speed $u ($uid): $cur -> $want" >&2
+        nas_request "$u" coa "Mikrotik-Rate-Limit = \"$want\"" silent "$uid" 2>/dev/null
+        if [ "${LAST_NAS_OK:-0}" != 0 ]; then
+            echo "REPLACE INTO ml_rate_applied (acctuniqueid, username, rate) VALUES ($(q "$uid"), $(q "$u"), $(q "$want"));" | db
+            n=$((n + 1))
+        fi
+    done <<<"$rows"
+    echo "DELETE a FROM ml_rate_applied a LEFT JOIN radacct r ON r.acctuniqueid = a.acctuniqueid
+          WHERE r.acctuniqueid IS NULL OR r.acctstoptime IS NOT NULL;" | db
+    echo "$n"
+}
+
+# Note the speed every running session has now (what it got at login), before the rules change —
+# otherwise a changed rule would make it look as if the session already had the new speed.
+speed_snapshot() {
+    echo "INSERT IGNORE INTO ml_rate_applied (acctuniqueid, username, rate)
+          SELECT r.acctuniqueid, r.username,
+                 COALESCE(NULLIF(ml_sched_rate(r.username, r.acctstarttime),''), NULLIF(ml_base_rate(r.username),''), '0/0')
+          FROM radacct r WHERE r.acctstoptime IS NULL AND r.acctuniqueid <> '';" | db
+}
+
+# "22:00-06:00" / "22h-6h" / "22-6" -> "1320 360"
+speed_time() {
+    local t=${1,,} a b
+    [[ $t =~ ^([0-9]{1,2})(:([0-9]{2})|h)?-([0-9]{1,2})(:([0-9]{2})|h)?$ ]] || return 1
+    a=$((10#${BASH_REMATCH[1]} * 60 + 10#${BASH_REMATCH[3]:-0})); b=$((10#${BASH_REMATCH[4]} * 60 + 10#${BASH_REMATCH[6]:-0}))
+    [ "$b" != 1440 ] || b=0
+    [ "$a" -lt 1440 ] && [ "$b" -lt 1440 ] || return 1
+    echo "$a $b"
+}
+
+cmd_speed() {
+    local sub=${1:-list}; shift || true
+    case $sub in
+    list)
+        dbt <<<"SELECT id, name, IF(enabled,'on','off') AS state,
+                       IF(target_type='all','everyone',CONCAT(target_type,' ',target)) AS applies_to,
+                       IF(start_min=end_min,'all day',CONCAT(LPAD(start_min DIV 60,2,'0'),':',LPAD(start_min MOD 60,2,'0'),'-',LPAD(end_min DIV 60,2,'0'),':',LPAD(end_min MOD 60,2,'0'))) AS time,
+                       days, rate AS speed
+                FROM ml_speed_schedule ORDER BY FIELD(target_type,'user','plan','group','all'), id" ;;
+    add)
+        local name=${1:-} rate="" time="" days=all ttype=all target=""; shift || true
+        [[ $name =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "usage: radius-admin speed add NAME --rate 20M/20M --time 22:00-06:00 [--days mon,tue,...] [--group G | --plan P | --user U]"
+        while [ $# -gt 0 ]; do case $1 in
+            --rate) rate=${2:-}; shift 2 ;; --time) time=${2:-}; shift 2 ;; --days) days=${2:-}; shift 2 ;;
+            --group|--plan|--user) ttype=${1#--}; target=${2:-}; shift 2 ;; --all) ttype=all; shift ;;
+            *) die "Unknown option $1" ;; esac; done
+        [[ $rate =~ ^[0-9]+[kKmMgG]?/[0-9]+[kKmMgG]?([0-9A-Za-z/\ .]*)$ && ${#rate} -le 64 ]] || die "--rate like 20M/20M (download/upload)"
+        local tm; tm=$(speed_time "$time") || die "--time like 22:00-06:00 (over midnight is fine; 00:00-00:00 = all day)"
+        days=${days,,}; days=${days// /}
+        [ "$days" = all ] || [[ $days =~ ^(mon|tue|wed|thu|fri|sat|sun)(,(mon|tue|wed|thu|fri|sat|sun)){0,6}$ ]] || die "--days all, or mon,tue,wed,thu,fri,sat,sun"
+        case $ttype in
+            group) group_exists "$target" || die "No such group '$target'" ;;
+            plan) [ -n "$(echo "SELECT 1 FROM ml_plan WHERE name=$(q "$target")" | db)" ] || die "No such plan '$target'" ;;
+            user) [ -n "$(echo "SELECT 1 FROM radcheck WHERE username=$(q "$target") LIMIT 1" | db)" ] || die "No such user '$target'" ;;
+        esac
+        speed_snapshot
+        echo "INSERT INTO ml_speed_schedule (name, target_type, target, days, start_min, end_min, rate) VALUES
+              ($(q "$name"), '$ttype', $(q "$target"), $(q "$days"), ${tm% *}, ${tm#* }, $(q "$rate"))
+              ON DUPLICATE KEY UPDATE target_type=VALUES(target_type), target=VALUES(target), days=VALUES(days),
+              start_min=VALUES(start_min), end_min=VALUES(end_min), rate=VALUES(rate), enabled=1;" | db
+        ok "Speed schedule '$name': $rate, $time, $days, ${ttype}${target:+ $target} — running sessions change within 5 minutes (now: radius-admin speed apply)" ;;
+    del|on|off)
+        local id=${1:-}; [ -n "$id" ] || die "usage: radius-admin speed $sub ID|NAME"
+        local w; if [[ $id =~ ^[0-9]+$ ]]; then w="id=$id"; else w="name=$(q "$id")"; fi
+        [ -n "$(echo "SELECT 1 FROM ml_speed_schedule WHERE $w" | db)" ] || die "No speed schedule '$id'"
+        speed_snapshot
+        case $sub in
+            del) echo "DELETE FROM ml_speed_schedule WHERE $w" | db; ok "Speed schedule '$id' deleted" ;;
+            on|off) echo "UPDATE ml_speed_schedule SET enabled=$([ "$sub" = on ] && echo 1 || echo 0) WHERE $w" | db; ok "Speed schedule '$id' $sub" ;;
+        esac ;;
+    now)
+        local u=${1:-}; [ -n "$u" ] || die "usage: radius-admin speed now USER [\"YYYY-MM-DD HH:MM\"]"
+        local t=${2:-}; [ -z "$t" ] || [[ $t =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}$ ]] || die "time like \"2026-10-17 23:00\""
+        local at="NOW()"; [ -z "$t" ] || at=$(q "$t:00")
+        local r; r=$(echo "SELECT IFNULL(NULLIF(ml_sched_rate($(q "$u"), $at),''),'-'), IFNULL(NULLIF(ml_base_rate($(q "$u")),''),'-'), ml_check($(q "$u"))" | db)
+        local sched base chk; IFS=$'\t' read -r sched base chk <<<"$r"
+        if [[ $chk == fup:* ]]; then echo "$u: ${chk#fup:*:} (fair-usage speed: data quota used up)"
+        elif [ "$sched" != - ]; then echo "$u: $sched (speed schedule)"
+        elif [ "$base" != - ]; then echo "$u: $base (normal speed)"
+        else echo "$u: no speed limit"; fi ;;
+    apply)
+        local n; n=$(speed_enforce verbose); ok "$n running session(s) changed" ;;
+    *) die "usage: radius-admin speed list | add NAME --rate R --time HH:MM-HH:MM [--days ...] [--group|--plan|--user X] | del|on|off ID | now USER [TIME] | apply" ;;
+    esac
 }
 
 # CDN detective (tools/cdnmap.py): which app is behind a CDN hostname or IP
@@ -2024,6 +2132,14 @@ Backup, restore, automatic updates
   update                                all automatic updates now (weekly cron): app catalog, IP owners,
                                         new app names, threat lists, VPN lists, router rules
 
+Speed schedule (night boost, peak-hour limit)
+  speed list                            all time windows with their speed
+  speed add NAME --rate 20M/20M --time 22:00-06:00 [--days mon,tue,...] [--group G | --plan P | --user U]
+                                        everyone if no group/plan/user; user > plan > group > everyone
+  speed del|on|off ID|NAME
+  speed now USER ["YYYY-MM-DD HH:MM"]   which speed the user gets (now or at that time) and why
+  speed apply                           change running sessions now (the enforcer does it every 5 minutes)
+
 Health check
   doctor [--json]                       every part of the server: green / yellow / red, and how to fix it
 
@@ -2127,6 +2243,7 @@ case ${1:-help} in
     domains) shift; cmd_domains "$@" ;;
     backup)  shift; cmd_backup "$@" ;;
     alerts)  shift; cmd_alerts "$@" ;;
+    speed)   shift; cmd_speed "$@" ;;
     doctor|health) shift; python3 -I /usr/local/lib/mikrotiklover/health.py --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@" ;;
     backups) cmd_backups ;;
     restore) shift; cmd_restore "$@" ;;

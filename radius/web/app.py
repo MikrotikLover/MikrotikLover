@@ -1680,6 +1680,79 @@ def backup_download(name):
     return send_from_directory(BACKUP_DIR, name, as_attachment=True)
 
 
+# ------------------------------------------------------------------ speed schedule (night boost, peak hours)
+DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def speed_active(r, now=None):
+    now = now or datetime.now()
+    m, today, yday = now.hour * 60 + now.minute, DAYS[now.weekday()], DAYS[(now.weekday() - 1) % 7]
+    on = lambda d: r["days"] == "all" or d in r["days"].split(",")  # noqa: E731
+    a, b = r["start_min"], r["end_min"]
+    if not r["enabled"]:
+        return False
+    if a == b:
+        return on(today)
+    if a < b:
+        return a <= m < b and on(today)
+    return (m >= a and on(today)) or (m < b and on(yday))
+
+
+@app.get("/api/speed")
+@login_required()
+def speed_list():
+    rows = q("SELECT id, name, target_type, target, days, start_min, end_min, rate, enabled FROM ml_speed_schedule "
+             "ORDER BY FIELD(target_type,'user','plan','group','all'), id")
+    for r in rows:
+        r["active"] = speed_active(r)
+    groups = [r["groupname"] for r in q("SELECT DISTINCT groupname FROM radgroupreply UNION SELECT groupname FROM radgroup_meta ORDER BY 1")]
+    plans = [r["name"] for r in q("SELECT name FROM ml_plan ORDER BY name")]
+    return jsonify(rules=jsonable(rows), groups=groups, plans=plans, now=datetime.now().strftime("%a %H:%M"))
+
+
+SPEED_RATE_RE = re.compile(r"^[0-9]+[kKmMgG]?/[0-9]+[kKmMgG]?$")
+
+
+@app.post("/api/speed")
+@login_required("admin")
+def speed_save():
+    d = body()
+    name = field(d, "name", re.compile(r"^[A-Za-z0-9._-]{1,64}$"), required=True)
+    rate = field(d, "rate", SPEED_RATE_RE, required=True)
+    start = field(d, "start", re.compile(r"^\d{2}:\d{2}$"), required=True)
+    end = field(d, "end", re.compile(r"^\d{2}:\d{2}$"), required=True)
+    days = d.get("days") or []
+    if not isinstance(days, list) or any(x not in DAYS for x in days):
+        abort(400, "invalid days")
+    ttype = field(d, "target_type", re.compile(r"^(all|group|plan|user)$"), required=True)
+    args = ["speed", "add", name, "--rate", rate, "--time", f"{start}-{end}",
+            "--days", "all" if not days or len(days) == 7 else ",".join(x for x in DAYS if x in days)]
+    if ttype != "all":
+        args += [f"--{ttype}", field(d, "target", NAME_RE, required=True)]
+    return result(*radius_admin(args))
+
+
+@app.post("/api/speed/<int:rid>/<action>")
+@login_required("admin")
+def speed_action(rid, action):
+    if action not in ("on", "off", "del"):
+        abort(404)
+    return result(*radius_admin(["speed", action, str(rid)]))
+
+
+@app.get("/api/speed/check")
+@login_required()
+def speed_check():
+    u = request.args.get("user", "").strip()
+    if not NAME_RE.match(u):
+        abort(400, "invalid user")
+    at = request.args.get("at", "").strip()
+    if at and not re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", at):
+        abort(400, "invalid time")
+    ok, out = radius_admin(["speed", "now", u] + ([at] if at else []), log=False)
+    return result(ok, out)
+
+
 # ------------------------------------------------------------------ health check
 @app.get("/api/health")
 @login_required()

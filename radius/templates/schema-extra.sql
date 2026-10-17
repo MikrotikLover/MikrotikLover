@@ -267,3 +267,27 @@ CREATE TABLE IF NOT EXISTS ml_alert (
   result VARCHAR(255) NOT NULL DEFAULT '',
   KEY idx_at (at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Bandwidth scheduling: a different speed at certain hours (night boost, peak-hour limit)
+CREATE TABLE IF NOT EXISTS ml_speed_schedule (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(64) NOT NULL,
+  target_type ENUM('all','group','plan','user') NOT NULL DEFAULT 'all',
+  target VARCHAR(64) NOT NULL DEFAULT '',
+  days VARCHAR(40) NOT NULL DEFAULT 'all',            -- 'all' or mon,tue,... (the day the window starts)
+  start_min SMALLINT UNSIGNED NOT NULL,               -- minutes after midnight; start > end = over midnight
+  end_min SMALLINT UNSIGNED NOT NULL,                 -- start = end: the whole day
+  rate VARCHAR(64) NOT NULL,                          -- Mikrotik-Rate-Limit, e.g. 20M/20M
+  enabled TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_name (name),
+  KEY idx_target (target_type, target)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Speed last sent to a running session by the enforcer (so a change is sent once)
+CREATE TABLE IF NOT EXISTS ml_rate_applied (
+  acctuniqueid VARCHAR(32) NOT NULL PRIMARY KEY,
+  username VARCHAR(64) NOT NULL,
+  rate VARCHAR(64) NOT NULL,
+  applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -45,6 +45,18 @@ mikrotiklover_limits {
 			}
 		}
 	}
+	# bandwidth schedule (night boost, peak-hour limit): the speed for this time of day.
+	# A fair-usage speed (quota used up) always wins. The enforcer changes running sessions.
+	if (!(&control:Tmp-String-1 =~ /^fup:/)) {
+		update control {
+			&Tmp-String-5 := "%{sql:SELECT ml_sched_rate('%{User-Name}', NOW())}"
+		}
+		if (&control:Tmp-String-5 =~ /^[0-9A-Za-z\/ .]{1,64}$/) {
+			update reply {
+				&Mikrotik-Rate-Limit := &control:Tmp-String-5
+			}
+		}
+	}
 	if (&control:Tmp-String-1 =~ /^ok:([0-9]+):([0-9]+):([0-9]+):([01])$/) {
 		update control {
 			&Tmp-Integer-1 := "%{1}"

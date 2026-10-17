@@ -923,6 +923,25 @@ sudo radius-admin restore mikrotiklover-....tar.gz.enc    # password puchega
 - Raat ki copy fail ho (server band, internet nahi) to backup phir bhi server par mehfooz rehta hai, aur **Automatic updates** list mein "Off-site backup: failed" dikhta hai.
 - **Tested:** SSH (alag user + key) aur rclone (Google Drive jaisa remote): copy encrypted pahunchi, `keep 2` ne purani mitayin, server "kho" diya → `fetch` + `restore` se sab wapas, galat password par restore ruk gaya, backup server band par "failed" darj hua.
 
+## 7f. Speed schedule — raat ko zyada speed, rush hours mein kam
+
+Waqt ke hisaab se speed: misal ke taur par raat 22:00–08:00 sab ko 20M ("night package"), shaam 18:00–23:00 weekdays par aik group ko 2M, ya weekend par zyada speed.
+
+```bash
+sudo radius-admin speed add night-boost --rate 20M/20M --time 22:00-08:00              # sab ke liye, har din
+sudo radius-admin speed add peak --rate 2M/2M --time 18:00-23:00 --days mon,tue,wed,thu,fri --group students
+sudo radius-admin speed add weekend --rate 15M/15M --time 00:00-00:00 --days sat,sun --plan monthly-5M
+sudo radius-admin speed add vip --rate 50M/50M --time 0-0 --user ali                    # aik user, poora din
+sudo radius-admin speed list | del NAME | off NAME | on NAME
+sudo radius-admin speed now ali ["2026-10-19 19:30"]   # ali ko is waqt (ya us waqt) kaunsi speed, aur kyun
+sudo radius-admin speed apply                          # chalte sessions abhi badlein (warna 5 minute mein khud)
+```
+- **Kaise:** login par FreeRADIUS us waqt ki speed deta hai (`Mikrotik-Rate-Limit`). Jab waqt ki khirki shuru ya khatam ho, har 5 minute wala enforcer chalte sessions ki speed **RADIUS CoA** se badal deta hai — user ko dobara login nahi karna parta (router par `/radius incoming accept=yes` zaroori).
+- **Kaun jeetta hai:** aik user > plan > group > sab; phir naya rule. Data quota khatam ho kar **FUP speed** lagi ho to woh hamesha jeetti hai. Khirki ke baad user apni normal speed par wapas aata hai (normal speed na ho to "0/0" = koi limit nahi).
+- 22:00–06:00 jaisa waqt aadhi raat paar karta hai; din (`--days`) woh hai jis din waqt **shuru** hota hai (Friday 23:00–02:00 = Friday raat se Saturday subah tak).
+- Dashboard → **Speed schedule**: rules ki list, har aik ki 24 ghante ki timeline aur "active / waiting" nishan; quick start buttons (Night boost, Peak-hour limit, Weekend boost); aur "Check a user": kisi bhi user ki kisi bhi waqt ki speed.
+- **Tested:** login reply mein schedule wali speed; chalte session par nakli router ko CoA gaya 10M → 20M → 5M → 10M jaise rules band / chalu kiye; dobara chalane par kuch nahi bheja gaya; FUP wale session ko nahi chheda. `tests/test-speed.sh` (20 checks: aadhi raat, din, priority, off rules, CLI ghaltiyan).
+
 ## 7e. Health check — sab theek hai?
 
 `sudo radius-admin doctor` ya dashboard → **Health check**: server ka har hissa **sabz** (theek), **peela** (dekh lein) ya **laal** (abhi theek karein), aur kharabi ke saath us ka hal likha hota hai.

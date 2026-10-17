@@ -44,6 +44,7 @@ const ICONS = {
   block: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M5.6 5.6l12.8 12.8",
   shield: "M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6zM12 8v5m0 3h.01",
   pulse: "M3 12h4l2-6 4 12 2-6h6",
+  clock: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M12 7v5l3 2",
   globe: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M3 12h18M12 3c2.5 2.5 3.8 5.5 3.8 9s-1.3 6.5-3.8 9c-2.5-2.5-3.8-5.5-3.8-9s1.3-6.5 3.8-9",
   vpn: "M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6zM9 12l2 2 4-4",
   apps: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
@@ -205,7 +206,7 @@ const legend = () => h("div", { class: "legend" }, h("span", {}, h("i", { class:
 const NAV = [
   ["dashboard", "Dashboard", "home"], ["users", "Users", "users"], ["groups", "Groups & policies", "groups"],
   ["macs", "MAC devices", "mac"], ["routers", "Routers", "router"], "-",
-  ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], "-",
+  ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], ["speed", "Speed schedule", "clock"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
   ["data", "Data usage", "data"], ["apps", "Apps on network", "apps"], ["ports", "Ports & protocols", "ports"], "-",
   ["blocking", "Blocking", "block"], ["vpn", "VPN & proxy watch", "vpn"], ["security", "Security", "shield"], ["domains", "Website names", "globe"], "-", ["health", "Health check", "pulse"], ["settings", "Settings", "settings"],
@@ -888,6 +889,82 @@ async function subscriptionCard(name, acc) {
   }
   return card("Package", "plan, expiry, data quota", items);
 }
+
+// ------------------------------------------------------------------ speed schedule
+const SPEED_DAYS = [["mon", "Mon"], ["tue", "Tue"], ["wed", "Wed"], ["thu", "Thu"], ["fri", "Fri"], ["sat", "Sat"], ["sun", "Sun"]];
+const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+const timeline = (r) => {
+  const segs = r.start_min === r.end_min ? [[0, 1440]] : r.start_min < r.end_min ? [[r.start_min, r.end_min]] : [[r.start_min, 1440], [0, r.end_min]];
+  return h("div", { class: "timeline", title: r.start_min === r.end_min ? "all day" : `${hhmm(r.start_min)}–${hhmm(r.end_min)}` },
+    segs.map(([a, b]) => { const e = h("span", { class: "seg" + (r.enabled ? "" : " off") }); e.style.left = `${a / 14.4}%`; e.style.width = `${(b - a) / 14.4}%`; return e; }),
+    [6, 12, 18].map((x) => { const e = h("i"); e.style.left = `${x / 0.24}%`; return e; }));
+};
+ROUTES.speed = async () => {
+  const d = await api("GET", "/api/speed");
+  const edit = (r, preset) => {
+    const v = r || preset || {};
+    const days = v.days && v.days !== "all" ? v.days.split(",") : SPEED_DAYS.map(([k]) => k);
+    const tsel = h("select", { name: "target_type", onchange: () => fill() },
+      [["all", "Everyone"], ["group", "A group"], ["plan", "A plan"], ["user", "One user"]].map(([k, l]) => h("option", { value: k, selected: (v.target_type || "all") === k }, l)));
+    const target = h("label", { class: "field" }, "Which", h("span"));
+    const fill = () => {
+      const t = tsel.value;
+      target.hidden = t === "all";
+      const opts = t === "group" ? d.groups : t === "plan" ? d.plans : null;
+      target.lastChild.replaceWith(opts ? h("select", { name: "target" }, opts.map((o) => h("option", { value: o, selected: v.target === o }, o)))
+        : h("input", { name: "target", value: v.target || "", placeholder: "username" }));
+    };
+    const f = h("form", { class: "form cols", onsubmit: (e) => e.preventDefault() },
+      h("label", { class: "field" }, "Name", h("input", { name: "name", required: true, value: v.name || "", readonly: !!r, pattern: "[A-Za-z0-9._\\-]{1,64}" })),
+      h("label", { class: "field" }, "Speed (download/upload)", h("input", { name: "rate", required: true, value: v.rate || "", placeholder: "20M/20M", pattern: "[0-9]+[kKmMgG]?/[0-9]+[kKmMgG]?" })),
+      h("label", { class: "field" }, "From", h("input", { name: "start", type: "time", required: true, value: hhmm(v.start_min ?? 1320) })),
+      h("label", { class: "field" }, "To (next day if earlier)", h("input", { name: "end", type: "time", required: true, value: hhmm(v.end_min ?? 360) })),
+      h("div", { class: "field full" }, h("b", {}, "Days (the day the time starts)"), h("div", { class: "day-picks" },
+        SPEED_DAYS.map(([k, l]) => h("label", { class: "check" }, h("input", { type: "checkbox", name: `day_${k}`, checked: days.includes(k) }), l)))),
+      h("label", { class: "field" }, "Applies to", tsel), target,
+      h("div", { class: "full muted" }, "Most specific wins: one user > plan > group > everyone. A fair-usage speed (quota used up) always wins. Running sessions change within 5 minutes."));
+    fill();
+    dialog(r ? `Speed schedule ${r.name}` : "Add speed schedule", f, [{ label: "Cancel" }, { label: "Save", class: "primary", action: async () => {
+      if (!f.reportValidity()) return false;
+      const x = formValues(f);
+      const body = { name: x.name, rate: x.rate, start: x.start, end: x.end, target_type: x.target_type, target: x.target || "",
+        days: SPEED_DAYS.map(([k]) => k).filter((k) => x[`day_${k}`]) };
+      if (!body.days.length) { toast("Pick at least one day", true); return false; }
+      if (!(await act(api("POST", "/api/speed", body)))) return false;
+      route();
+    } }]);
+  };
+  const presets = [
+    ["🌙 Night boost", { name: "night-boost", rate: "20M/20M", start_min: 1320, end_min: 480, target_type: "all" }],
+    ["🕖 Peak-hour limit", { name: "peak-hours", rate: "2M/2M", start_min: 1080, end_min: 1380, target_type: "all", days: "mon,tue,wed,thu,fri" }],
+    ["📅 Weekend boost", { name: "weekend", rate: "15M/15M", start_min: 0, end_min: 0, target_type: "all", days: "sat,sun" }]];
+  const check = h("form", { class: "toolbar wrap", onsubmit: async (e) => {
+    e.preventDefault();
+    const x = formValues(check);
+    const at = x.at ? x.at.replace("T", " ") : "";
+    try { const r = await api("GET", `/api/speed/check?user=${encodeURIComponent(x.user)}${at ? `&at=${encodeURIComponent(at)}` : ""}`); out.textContent = r.message; }
+    catch (err) { out.textContent = ""; toast(err.message, true); }
+  } }, h("input", { name: "user", placeholder: "username", required: true }), h("input", { name: "at", type: "datetime-local", title: "empty = now" }),
+    h("button", { type: "submit" }, "Which speed?"));
+  const out = h("b", { class: "speed-out" });
+  shell("Speed schedule", h("div", { class: "stack" },
+    card("Speed by time of day", `now: ${d.now}`,
+      h("div", { class: "muted" }, "Give more speed at night or on weekends, or less in busy evening hours. Users get the scheduled speed when they log in, and running sessions are changed automatically (RADIUS CoA)."),
+      isAdmin() ? h("div", { class: "toolbar wrap" }, h("button", { class: "primary", onclick: () => edit(null) }, icon("plus"), "Add"),
+        h("span", { class: "muted" }, "Quick start:"), presets.map(([l, p]) => h("button", { class: "small", onclick: () => edit(null, p) }, l))) : null,
+      table([{ label: "Name", render: (r) => h("b", {}, r.name) },
+        { label: "Now", render: (r) => !r.enabled ? badge("off", "") : r.active ? badge("active", "ok") : badge("waiting", "info") },
+        { label: "Speed", key: "rate" },
+        { label: "When", render: (r) => h("div", { class: "when" }, h("span", {}, (r.start_min === r.end_min ? "all day" : `${hhmm(r.start_min)}–${hhmm(r.end_min)}`) + " · " +
+          (r.days === "all" ? "every day" : r.days.split(",").map((x) => x[0].toUpperCase() + x.slice(1)).join(" "))), timeline(r)) },
+        { label: "Applies to", render: (r) => r.target_type === "all" ? "everyone" : `${r.target_type} ${r.target}` },
+        { label: "", render: (r) => isAdmin() ? h("div", { class: "row-actions" },
+          h("button", { class: "small", onclick: () => edit(r) }, "Edit"),
+          h("button", { class: "small", onclick: async () => { if (await act(api("POST", `/api/speed/${r.id}/${r.enabled ? "off" : "on"}`, {}))) route(); } }, r.enabled ? "Turn off" : "Turn on"),
+          h("button", { class: "small danger", onclick: async () => { if (await confirmDlg("Delete", `Delete speed schedule ${r.name}?`, "Delete")) if (await act(api("POST", `/api/speed/${r.id}/del`, {}))) route(); } }, "Delete")) : null }],
+        d.rules, "No speed schedule yet — everyone has their normal speed all day.")),
+    card("Check a user", "which speed, and why", check, out)));
+};
 
 ROUTES.plans = async () => {
   const { plans, currency } = await api("GET", "/api/plans");

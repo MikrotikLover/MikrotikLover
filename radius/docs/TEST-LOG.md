@@ -70,3 +70,8 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 05:01 | One-click get.sh: piped (curl | bash style) update | OK — OS/RAM/disk/ports checked, code fetched, installer ran, health shown |
 | 05:01 | get.sh errors: not root, bad option, bad branch | OK — clear message, nothing changed |
 | 05:01 | Bug: re-running the installer reset dashboard WEB_ALLOW/WEB_PORT | Fixed — saved in radius.conf, kept on update, new value wins |
+| 05:08 | Speed schedule: login reply | OK — Mikrotik-Rate-Limit from the schedule (10M), group rule beats everyone |
+| 05:08 | Speed schedule: running session CoA (fake router) | OK — 10M→20M→5M→10M as rules were turned off/on; nothing sent when unchanged |
+| 05:08 | Bug found in own code: speed at login was recomputed from the CHANGED rules | Fixed — speed of running sessions noted before every rule change and by the enforcer |
+| 05:08 | Dashboard bugs: wrong column for group list; timeline blocked by CSP | Fixed + re-tested (no console errors) |
+| 05:08 | test-speed (20) + UI (44) | All pass |

@@ -407,7 +407,7 @@ try {
   for (const [hash, title, name] of [["#/online", "Online", "08-online"], ["#/live", "Live log", "09-live"],
     ["#/reports/sites", "Reports", "10-reports-sites"], ["#/reports/blocked", "Reports", "11-reports-blocked"],
     ["#/data/site", "Data usage", "12-data-site"], ["#/data/ip", "Data usage", "13-data-ip"],
-    ["#/settings", "Settings", "14-settings"], ["#/health", "Health check", "14b-health"]]) {
+    ["#/settings", "Settings", "14-settings"], ["#/health", "Health check", "14b-health"], ["#/speed", "Speed schedule", "14c-speed"]]) {
     await go(page, hash, title);
     if (hash === "#/health") await page.locator(".health-row").first().waitFor({ timeout: 60000 });
     await page.waitForTimeout(700);
