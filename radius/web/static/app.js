@@ -46,6 +46,7 @@ const ICONS = {
   pulse: "M3 12h4l2-6 4 12 2-6h6",
   bulb: "M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.8.8 1 1.5 1 2.5h6c0-1 .2-1.7 1-2.5A6 6 0 0 0 12 3",
   clock: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M12 7v5l3 2",
+  brush: "M4 20c3 0 5-2 5-5l9-9a2 2 0 0 0-3-3l-9 9c-3 0-5 2-5 5zM13 7l3 3",
   globe: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M3 12h18M12 3c2.5 2.5 3.8 5.5 3.8 9s-1.3 6.5-3.8 9c-2.5-2.5-3.8-5.5-3.8-9s1.3-6.5 3.8-9",
   vpn: "M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6zM9 12l2 2 4-4",
   apps: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
@@ -207,7 +208,7 @@ const legend = () => h("div", { class: "legend" }, h("span", {}, h("i", { class:
 const NAV = [
   ["dashboard", "Dashboard", "home"], ["users", "Users", "users"], ["groups", "Groups & policies", "groups"],
   ["macs", "MAC devices", "mac"], ["routers", "Routers", "router"], "-",
-  ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], ["speed", "Speed schedule", "clock"], "-",
+  ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], ["speed", "Speed schedule", "clock"], ["hotspot", "Hotspot page", "brush"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["insights", "Insights (samajh)", "bulb"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
   ["data", "Data usage", "data"], ["apps", "Apps on network", "apps"], ["ports", "Ports & protocols", "ports"], "-",
   ["blocking", "Blocking", "block"], ["vpn", "VPN & proxy watch", "vpn"], ["security", "Security", "shield"], ["domains", "Website names", "globe"], "-", ["health", "Health check", "pulse"], ["settings", "Settings", "settings"],
@@ -509,7 +510,8 @@ ROUTES.routers = async () => {
       route();
     } }]);
   };
-  shell("Routers", card(null, null,
+  const net = await api("GET", "/api/network").catch(() => ({ routers: [], nas_without_report: [] }));
+  shell("Routers", h("div", { class: "stack" }, routerHealth(net), card("RADIUS clients", "routers allowed to use this server",
     h("div", { class: "toolbar" }, h("span", { class: "muted grow" }, "MikroTik routers allowed to use this RADIUS server."),
       isAdmin() ? h("button", { class: "primary", onclick: add }, icon("plus"), "Add router") : null),
     table([
@@ -525,8 +527,49 @@ ROUTES.routers = async () => {
           h("button", { class: "small danger", onclick: async () => {
             if (await confirmDlg("Remove router", `Remove ${n.nasname}? It will no longer be able to log users in.`, "Remove"))
               if (await act(api("DELETE", `/api/nas?ip=${encodeURIComponent(n.nasname)}`))) route();
-          } }, "Remove")) : null }], nas, "No routers yet — add your MikroTik first.")));
+          } }, "Remove")) : null }], nas, "No routers yet — add your MikroTik first."))));
 };
+
+// Network control: health of every router (autosync.rsc → ml-stats, every minute)
+const bps = (b) => { b = Number(b) || 0; const u = ["bit/s", "kbit/s", "Mbit/s", "Gbit/s"]; let i = 0; while (b >= 1000 && i < 3) { b /= 1000; i++; } return `${b.toFixed(b < 10 && i ? 1 : 0)} ${u[i]}`; };
+const meter = (pct, warnAt = 70, badAt = 90) => {
+  const bar = h("i", {}); bar.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+  return h("div", { class: "meter " + (pct >= badAt ? "bad" : pct >= warnAt ? "warn" : "ok") }, bar);
+};
+function routerHealth(net) {
+  const cards = net.routers.map((r) => {
+    const silent = r.age >= 300;
+    const memPct = r.mem_total ? Math.round(100 - (r.mem_free * 100) / r.mem_total) : 0;
+    const hddPct = r.hdd_total ? Math.round(100 - (r.hdd_free * 100) / r.hdd_total) : 0;
+    const down = r.links.filter((l) => l.status === "down");
+    const ifs = r.interfaces.filter((i) => !i.disabled).sort((a, b) => (b.rx_bps + b.tx_bps) - (a.rx_bps + a.tx_bps));
+    const hist = r.history.map((x) => ({ label: x.t, down: Number(x.rx_bps) / 8, up: Number(x.tx_bps) / 8 }));
+    return card(h("span", {}, r.identity, " ", silent ? badge(`silent ${Math.round(r.age / 60)} min`, "bad") : down.length ? badge("internet link down", "bad") : badge("online", "ok")),
+      `${r.router_ip}${r.nas_name ? ` · ${r.nas_name}` : ""} · ${r.board} · RouterOS ${r.version}`,
+      h("div", { class: "rh-grid" },
+        h("div", { class: "rh-stat" }, h("span", {}, "CPU"), h("b", {}, `${r.cpu}%`), meter(r.cpu)),
+        h("div", { class: "rh-stat" }, h("span", {}, "Memory"), h("b", {}, `${memPct}%`), meter(memPct)),
+        h("div", { class: "rh-stat" }, h("span", {}, "Disk"), h("b", {}, `${hddPct}%`), meter(hddPct, 80, 95)),
+        h("div", { class: "rh-stat" }, h("span", {}, "Uptime"), h("b", {}, r.uptime || "—")),
+        h("div", { class: "rh-stat" }, h("span", {}, "Users online"), h("b", {}, String(Number(r.users_hotspot) + Number(r.users_ppp))),
+          h("small", { class: "muted" }, `hotspot ${r.users_hotspot} · PPPoE ${r.users_ppp} · DHCP ${r.dhcp_leases}`))),
+      r.links.length ? h("div", { class: "toolbar wrap" }, h("b", {}, "Internet links:"), r.links.map((l) =>
+        badge(`${(l.comment || "").replace("ml-link: ", "") || l.host} · ${l.host} · ${l.status}`, l.status === "up" ? "ok" : l.status === "down" ? "bad" : ""))) :
+        h("div", { class: "muted small" }, "No netwatch link check on this router (the auto-sync script adds two)."),
+      hist.length > 1 ? h("div", {}, h("div", { class: "muted small" }, "Traffic on the busiest interface, last 24 h (per second)"), columnChart(hist)) : null,
+      table([{ label: "Interface", render: (i) => h("b", {}, i.name) }, { label: "Type", key: "type" },
+        { label: "State", render: (i) => i.running ? badge("up", "ok") : badge("down", "bad") },
+        { label: "↓ now", num: true, render: (i) => bps(i.rx_bps) }, { label: "↑ now", num: true, render: (i) => bps(i.tx_bps) },
+        { label: "↓ total", num: true, render: (i) => bytes(i.rx) }], ifs.slice(0, 12)),
+      isAdmin() ? h("div", { class: "toolbar" }, h("span", { class: "muted grow" }, `last report ${r.last_seen}`),
+        h("button", { class: "small", onclick: async () => { if (await act(api("POST", "/api/network/forget", { router_ip: r.router_ip, identity: r.identity }))) route(); } }, "Forget")) : null);
+  });
+  const missing = net.nas_without_report.length ? h("div", { class: "note" }, `No health report from: ${net.nas_without_report.map((n) => `${n.name || n.ip} (${n.ip})`).join(", ")}. `,
+    "Import the new auto-sync script on them (Blocking → Router auto-sync → Download script): it now also sends the router's health every minute.") : null;
+  return h("div", { class: "stack" },
+    card("Router health", `${net.routers.length} router(s) reporting`, h("div", { class: "muted" }, "CPU, memory, disk, uptime, interfaces, internet links and users online of every MikroTik, every minute. A router that goes silent or loses its internet link comes as an alert (Settings → Alerts → Router down / back)."), missing),
+    net.routers.length ? h("div", { class: "grid g-2" }, cards) : null);
+}
 
 // ------------------------------------------------------------------ online
 ROUTES.online = async () => {
@@ -1050,6 +1093,52 @@ ROUTES.speed = async () => {
     card("Check a user", "which speed, and why", check, out)));
 };
 
+// ------------------------------------------------------------------ hotspot login page designer
+ROUTES.hotspot = async (pageName = "login.html") => {
+  const d = await api("GET", "/api/hotspot");
+  const st = d.settings;
+  const frame = h("iframe", { class: "hs-preview", title: "preview", sandbox: "" });
+  const load = (pg) => { frame.src = `/api/hotspot/preview/${pg}?t=${Date.now()}`; };
+  const tabs = h("div", { class: "tabs" }, [["login.html", "Login"], ["status.html", "After login (status)"], ["alogin.html", "Just logged in"]].map(([k, l]) =>
+    h("a", { href: "javascript:void 0", class: k === pageName ? "active" : "", onclick: (e) => { tabs.querySelectorAll("a").forEach((a) => a.classList.remove("active")); e.target.classList.add("active"); pageName = k; load(k); } }, l)));
+  const f = h("form", { class: "form", onsubmit: async (e) => {
+    e.preventDefault();
+    const v = formValues(f);
+    if (await act(api("POST", "/api/hotspot", v))) load(pageName);
+  } },
+    h("label", { class: "field" }, "Title", h("input", { name: "hs_title", maxlength: 80, value: st.hs_title, placeholder: d.brand })),
+    h("label", { class: "field" }, "Line under the title", h("input", { name: "hs_sub", maxlength: 80, value: st.hs_sub, placeholder: "Card par likha username aur password likhein" })),
+    h("div", { class: "toolbar wrap" },
+      h("label", { class: "field" }, "Colour 1", h("input", { name: "hs_color1", type: "color", value: st.hs_color1 || "#1d4ed8" })),
+      h("label", { class: "field" }, "Colour 2", h("input", { name: "hs_color2", type: "color", value: st.hs_color2 || "#0ea5e9" })),
+      h("div", { class: "toolbar wrap" }, [["#1d4ed8", "#0ea5e9"], ["#15803d", "#84cc16"], ["#7e22ce", "#ec4899"], ["#b91c1c", "#f97316"], ["#0f172a", "#475569"]].map(([a, b]) => {
+        const sw = h("button", { type: "button", class: "swatch", title: `${a} → ${b}`, onclick: () => { f.querySelector("[name=hs_color1]").value = a; f.querySelector("[name=hs_color2]").value = b; } });
+        sw.style.background = `linear-gradient(135deg, ${a}, ${b})`; return sw;
+      }))),
+    h("label", { class: "field" }, "Notice / advert box (| = new line)", h("textarea", { name: "hs_notice", maxlength: 400, rows: 2, placeholder: "Naya offer: 30 din 500 Rs | Raat 12 se 8 double speed" }, st.hs_notice || "")),
+    h("label", { class: "field" }, "Footer", h("input", { name: "hs_footer", maxlength: 80, value: st.hs_footer, placeholder: "Masla? Rabta: 0300-…" })),
+    isAdmin() ? h("div", { class: "toolbar" }, h("button", { class: "primary", type: "submit" }, "Save & preview")) : null);
+  const logoIn = h("input", { type: "file", accept: "image/png,image/jpeg,image/gif,image/webp" });
+  const logoBox = h("div", { class: "toolbar wrap" }, h("b", {}, "Logo:"), d.logo ? badge("set", "ok") : badge("none", ""), logoIn,
+    isAdmin() ? h("button", { type: "button", onclick: () => {
+      const file = logoIn.files[0];
+      if (!file) return toast("Choose a picture first", true);
+      if (file.size > 100000) return toast("Logo too big — 100 KB at most", true);
+      const rd = new FileReader();
+      rd.onload = async () => { if (await act(api("POST", "/api/hotspot/logo", { data: rd.result }))) route(); };
+      rd.readAsDataURL(file);
+    } }, "Upload") : null,
+    d.logo && isAdmin() ? h("button", { type: "button", class: "small danger", onclick: async () => { if (await act(api("POST", "/api/hotspot/logo", { data: "" }))) route(); } }, "Remove") : null);
+  const push = h("label", { class: "check" + (st.hs_push === "1" ? " on" : "") }, h("input", { type: "checkbox", checked: st.hs_push === "1", disabled: !isAdmin(),
+    onchange: async (e) => { await act(api("POST", "/api/hotspot/push", { on: e.target.checked })); route(); } }),
+    h("div", {}, h("b", {}, "Put these pages on the routers automatically"), h("span", {}, "Router auto-sync downloads login.html, status.html and alogin.html into every hotspot profile's folder (within 15 minutes after a change). Off = the routers keep their own pages.")));
+  shell("Hotspot page", h("div", { class: "grid hs-grid" },
+    h("div", { class: "stack" }, card("Login page design", d.version ? `design ${d.version}` : "not made yet", f, logoBox), card("Routers", null, push,
+      h("div", { class: "muted small" }, "By hand instead: Winbox → Files → hotspot/ → upload the 3 files from the server folder /var/lib/mikrotiklover/router/hotspot/."))),
+    card("Preview", "phone size", tabs, h("div", { class: "hs-phone" }, frame))));
+  load(pageName);
+};
+
 ROUTES.plans = async () => {
   const { plans, currency } = await api("GET", "/api/plans");
   const edit = (p) => {
@@ -1426,6 +1515,7 @@ function policyEditor(meta, pol) {
 
 ROUTES.blocking = async (tab = "policies") => {
   if (tab === "logs") return blockingLogs();
+  if (tab === "parental") return parentalPage();
   const [meta, ul] = await Promise.all([api("GET", "/api/blocking"), api("GET", "/api/users")]);
   const r = meta.router;
   const openEditor = (pol) => {
@@ -1525,7 +1615,79 @@ ROUTES.vpn = async (tab = "users") => {
 };
 
 // ------------------------------------------------------------------ blocking logs: which policy blocked which user, and what
-const blockingTabs = (tab) => h("div", { class: "tabs" }, [["policies", "Policies"], ["logs", "Blocking logs"]]
+// Parental controls: ready-made schedules for children in one click (makes a policy and gives it to them)
+const PARENTAL = [
+  { k: "homework", t: "📚 Homework time", d: "No social media, video and games", from: "16:00", to: "19:00", days: "mon,tue,wed,thu,fri",
+    lines: (tm) => ["social", "social-video", "video-streaming", "gaming"].map((c) => `block ${c} time=${tm}`) },
+  { k: "bedtime", t: "🌙 Bedtime", d: "No internet at all", from: "22:00", to: "06:00", days: "sun,mon,tue,wed,thu,fri,sat",
+    lines: (tm) => [`block-all time=${tm}`] },
+  { k: "school", t: "🏫 School hours", d: "Only study: no games, social, video", from: "08:00", to: "14:00", days: "mon,tue,wed,thu,fri,sat",
+    lines: (tm) => ["social", "social-video", "video-streaming", "gaming", "messaging"].map((c) => `block ${c} time=${tm}`) },
+  { k: "games", t: "🎮 Games only at the weekend", d: "Games blocked Monday–Friday", from: "00:00", to: "00:00", days: "mon,tue,wed,thu,fri",
+    lines: (tm) => [`block gaming time=${tm}`] },
+];
+const ptime = (from, to, days) => {
+  const hm = (x) => { const [a, b] = x.split(":").map(Number); return b ? `${a}h${b}m` : `${a}h`; };
+  return `${from === to ? "0s-23h59m59s" : `${hm(from)}-${hm(to)}`},${days}`;
+};
+async function parentalPage() {
+  const [{ users }, gr] = await Promise.all([api("GET", "/api/users"), api("GET", "/api/groups")]);
+  const rows = PARENTAL.map((p) => {
+    const on = h("input", { type: "checkbox", checked: p.k === "homework" || p.k === "bedtime" });
+    const from = h("input", { type: "time", value: p.from, disabled: p.k === "games" }), to = h("input", { type: "time", value: p.to, disabled: p.k === "games" });
+    const days = h("div", { class: "day-picks" }, SPEED_DAYS.map(([k, l]) => h("label", { class: "check" }, h("input", { type: "checkbox", value: k, checked: p.days.split(",").includes(k) }), l)));
+    const el = h("div", { class: "sub-card" }, h("label", { class: "check" }, on, h("div", {}, h("b", {}, p.t), h("span", {}, p.d))),
+      p.k === "games" ? null : h("div", { class: "toolbar" }, "From", from, "to", to, h("span", { class: "muted small" }, "(over midnight is fine)")), days);
+    return { p, on, from, to, days, el };
+  });
+  const safe = h("input", { type: "checkbox", checked: true }), novpn = h("input", { type: "checkbox", checked: true });
+  const name = h("input", { value: "kids", pattern: "[a-z0-9-]{1,40}", size: 12 });
+  const who = h("input", { placeholder: "users, comma separated", list: "pc-users" });
+  const grp = h("select", {}, h("option", { value: "" }, "— or a group —"), gr.groups.map((g) => h("option", { value: g.name }, g.name)));
+  const preview = h("pre", { class: "code-box" });
+  const build = () => {
+    const out = [`# Parental controls (${new Date().toISOString().slice(0, 10)})`];
+    rows.forEach((r) => {
+      if (!r.on.checked) return;
+      const d = [...r.days.querySelectorAll("input:checked")].map((x) => x.value).join(",");
+      if (!d) return;
+      out.push(...r.p.lines(ptime(r.from.value, r.to.value, d)));
+    });
+    if (safe.checked) out.push("dns family");
+    if (novpn.checked) out.push("block-vpn");
+    return out.join("\n");
+  };
+  const refresh = () => { preview.textContent = build(); };
+  [...rows.flatMap((r) => [r.on, r.from, r.to, ...r.days.querySelectorAll("input")]), safe, novpn].forEach((x) => x.addEventListener("change", refresh));
+  refresh();
+  const apply = async (e) => {
+    const pol = `parental-${name.value.trim() || "kids"}`;
+    if (!/^[a-z0-9-]{1,48}$/.test(pol)) return toast("Name: small letters, digits and -", true);
+    const list = who.value.split(",").map((x) => x.trim()).filter(Boolean);
+    if (!list.length && !grp.value) return toast("Choose the children (users) or a group", true);
+    if (build().split("\n").length < 2) return toast("Choose at least one rule", true);
+    e.target.disabled = true;
+    try {
+      if (!(await act(api("POST", "/api/policies", { name: pol, text: build() })))) return;
+      for (const u of list) await act(api("POST", `/api/users/${encodeURIComponent(u)}/policy`, { policy: pol }));
+      if (grp.value) await act(api("POST", "/api/groups", { name: grp.value, policy: pol, edit: true }));
+      toast(`Policy ${pol} is active — the router gets it within 15 minutes (auto-sync)`);
+    } finally { e.target.disabled = false; }
+  };
+  shell("Blocking", h("div", { class: "stack" }, blockingTabs("parental"),
+    card("Parental controls", "ready-made schedules for children",
+      h("div", { class: "muted" }, "Tick what you want, choose the children, press Apply. It becomes a normal policy (Policies tab) that you can change later. Times are the router's clock."),
+      h("div", { class: "grid g-2" }, rows.map((r) => r.el)),
+      h("div", { class: "checks" },
+        h("label", { class: "check" }, safe, h("div", {}, h("b", {}, "🛡 Family-safe internet, always"), h("span", {}, "family DNS: adult sites blocked, safe search on Google / YouTube / Bing"))),
+        h("label", { class: "check" }, novpn, h("div", {}, h("b", {}, "🚫 No VPN / proxy"), h("span", {}, "so the rules cannot be skipped with a VPN app")))),
+      h("div", { class: "toolbar wrap" }, h("b", {}, "Children:"), who, h("datalist", { id: "pc-users" }, users.map((u) => h("option", { value: u.username }))), grp,
+        h("span", {}, "Name:"), name, isAdmin() ? h("button", { class: "primary", onclick: apply }, "Apply") : null),
+      h("details", {}, h("summary", {}, "The policy that will be made"), preview)),
+    card("For the parents", null, h("div", { class: "muted" }, "Which sites and apps a child used: Users → the child → Top sites (7 days), or Insights for the whole network. A blocked try shows up in Blocking logs."))));
+}
+
+const blockingTabs = (tab) => h("div", { class: "tabs" }, [["policies", "Policies"], ["parental", "Parental controls"], ["logs", "Blocking logs"]]
   .map(([k, l]) => h("a", { href: `#/blocking/${k}`, class: k === tab ? "active" : "" }, l)));
 async function blockingLogs() {
   const days = h("select", {}, [["1", "Today"], ["7", "7 days"], ["30", "30 days"]].map(([v, l]) => h("option", { value: v }, l)));

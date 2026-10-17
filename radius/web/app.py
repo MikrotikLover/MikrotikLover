@@ -179,6 +179,13 @@ def server_error(e):
 
 @app.after_request
 def security_headers(resp):
+    if resp.headers.get("X-ML-Preview"):          # hotspot page preview: its own (inline) styles, shown in an iframe
+        del resp.headers["X-ML-Preview"]
+        resp.headers["Content-Security-Policy"] = ("default-src 'none'; style-src 'unsafe-inline'; img-src data:; "
+                                                   "frame-ancestors 'self'; sandbox")
+        resp.headers["X-Frame-Options"] = "SAMEORIGIN"
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        return resp
     resp.headers["Content-Security-Policy"] = ("default-src 'self'; img-src 'self' data:; style-src 'self'; "
                                                "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
                                                "base-uri 'none'; form-action 'self'")
@@ -1423,6 +1430,153 @@ def router_version():
 @app.get("/api/public/router/sync.rsc")
 def router_sync():
     return app.response_class(_router_file("sync.rsc"), mimetype="text/plain")
+
+
+# ------------------------------------------------------------------ network control: router health reports
+@app.post("/api/public/router/report")
+def router_report():
+    """Every minute from each router (autosync.rsc: ml-stats). Same key as the auto-sync."""
+    key = request.args.get("key", "")
+    if not key or not router_key() or not hmac.compare_digest(key, router_key()):
+        abort(403)
+    if (request.content_length or 0) > 65536:
+        abort(413)
+    import routerstat
+    try:
+        d = routerstat.parse(request.get_data(as_text=True))
+    except ValueError as e:
+        abort(400, str(e))
+    ip = client_ip()[:45]
+    prev = q1("SELECT interfaces, TIMESTAMPDIFF(SECOND, last_seen, NOW()) AS age FROM ml_router_status WHERE router_ip=%s AND identity=%s",
+              (ip, d["identity"]))
+    old = []
+    if prev:
+        try:
+            old = json.loads(prev["interfaces"] or "[]")
+        except ValueError:
+            old = []
+    routerstat.rates(d["interfaces"], old, prev["age"] if prev else 0)
+    q("""REPLACE INTO ml_router_status (router_ip, identity, board, version, uptime, cpu, mem_free, mem_total, hdd_free, hdd_total,
+                                        users_hotspot, users_ppp, dhcp_leases, interfaces, links, last_seen)
+         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())""",
+      (ip, d["identity"], d["board"], d["version"], d["uptime"], d["cpu"], d["mem_free"], d["mem_total"], d["hdd_free"], d["hdd_total"],
+       d["hotspot"], d["ppp"], d["dhcp"], json.dumps(d["interfaces"]), json.dumps(d["links"])))
+    rx, tx = routerstat.busiest(d["interfaces"])
+    mem_pct = round(100 - d["mem_free"] * 100 / d["mem_total"]) if d["mem_total"] else 0
+    q("""INSERT INTO ml_router_stat (router_ip, identity, at, cpu, mem_pct, rx_bps, tx_bps, users)
+         VALUES (%s,%s,DATE_FORMAT(NOW(), '%%Y-%%m-%%d %%H:%%i:00'),%s,%s,%s,%s,%s)
+         ON DUPLICATE KEY UPDATE cpu=VALUES(cpu), mem_pct=VALUES(mem_pct), rx_bps=VALUES(rx_bps), tx_bps=VALUES(tx_bps), users=VALUES(users)""",
+      (ip, d["identity"], d["cpu"], mem_pct, rx, tx, d["hotspot"] + d["ppp"]))
+    if datetime.now().minute == 0:
+        q("DELETE FROM ml_router_stat WHERE at < NOW() - INTERVAL 7 DAY")
+    return app.response_class("ok\n", mimetype="text/plain")
+
+
+@app.get("/api/network")
+@login_required()
+def network_status():
+    rows = q("""SELECT router_ip, identity, board, version, uptime, cpu, mem_free, mem_total, hdd_free, hdd_total, users_hotspot,
+                       users_ppp, dhcp_leases, interfaces, links, last_seen, TIMESTAMPDIFF(SECOND, last_seen, NOW()) AS age
+                FROM ml_router_status ORDER BY identity""")
+    nas = {r["nasname"]: r["shortname"] for r in q("SELECT nasname, shortname FROM nas")}
+    out = []
+    for r in rows:
+        r = dict(r)
+        for k in ("interfaces", "links"):
+            try:
+                r[k] = json.loads(r[k] or "[]")
+            except ValueError:
+                r[k] = []
+        r["nas_name"] = nas.get(r["router_ip"], "")
+        r["history"] = jsonable(q("""SELECT DATE_FORMAT(at, '%%H:%%i') AS t, cpu, mem_pct, rx_bps, tx_bps, users FROM ml_router_stat
+                                      WHERE router_ip=%s AND identity=%s AND at >= NOW() - INTERVAL 24 HOUR ORDER BY at""",
+                                   (r["router_ip"], r["identity"])))
+        out.append(jsonable([r])[0])
+    return jsonify(routers=out, nas_without_report=[{"ip": k, "name": v} for k, v in nas.items()
+                                                    if "/" not in k and k not in {r["router_ip"] for r in rows}])
+
+
+@app.post("/api/network/forget")
+@login_required("admin")
+def network_forget():
+    d = body()
+    ip, ident = field(d, "router_ip", re.compile(r"^[0-9a-fA-F.:]{3,45}$"), required=True), str(d.get("identity", ""))[:64]
+    q("DELETE FROM ml_router_status WHERE router_ip=%s AND identity=%s", (ip, ident))
+    q("DELETE FROM ml_router_stat WHERE router_ip=%s AND identity=%s", (ip, ident))
+    audit(f"forget router report {ip} {ident}", "ok")
+    return result(True, "Removed from the list (it comes back when the router reports again)")
+
+
+# ------------------------------------------------------------------ hotspot login page designer
+HS_KEYS = {"hs_title": 80, "hs_sub": 80, "hs_footer": 80, "hs_notice": 400, "hs_color1": 7, "hs_color2": 7}
+HS_PAGES = ("login.html", "status.html", "alogin.html")
+
+
+@app.get("/api/hotspot")
+@login_required()
+def hotspot_get():
+    st = {k: "" for k in HS_KEYS}
+    st["hs_push"] = "0"
+    for r in q("SELECT k, v FROM ml_setting WHERE k LIKE 'hs\\_%%'"):
+        st[r["k"]] = r["v"]
+    ver = ""
+    try:
+        ver = open(os.path.join(ROUTER_DIR, "hotspot", "version")).read().strip()
+    except OSError:
+        pass
+    return jsonify(settings=st, version=ver, logo=os.path.exists("/var/lib/mikrotiklover/hotspot-logo.txt"), brand=settings_get()["brand"])
+
+
+@app.post("/api/hotspot")
+@login_required("admin")
+def hotspot_save():
+    d = body()
+    for k, maxlen in HS_KEYS.items():
+        if k not in d:
+            continue
+        v = str(d[k] or "").strip()
+        if len(v) > maxlen or "\n" in v or not v.isprintable():
+            abort(400, f"invalid {k[3:]}")
+        if k.startswith("hs_color") and v and not re.match(r"^#[0-9a-fA-F]{6}$", v):
+            abort(400, f"invalid {k[3:]}")
+        q("INSERT INTO ml_setting (k, v) VALUES (%s,%s) ON DUPLICATE KEY UPDATE v=VALUES(v)", (k, v))
+    audit("hotspot page design", "ok")
+    return result(*radius_admin(["hotspot", "build"], timeout=180))
+
+
+@app.post("/api/hotspot/logo")
+@login_required("admin")
+def hotspot_logo():
+    data = str(body().get("data") or "")
+    if not data:
+        return result(*radius_admin(["hotspot", "logo", "-"], timeout=180))
+    if len(data) > 150000 or not re.match(r"^data:image/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$", data):
+        abort(400, "logo: a PNG / JPG / GIF / WebP image, 100 KB at most")
+    return result(*radius_admin(["hotspot", "logo", "--stdin"], stdin=data, action="hotspot logo", timeout=180))
+
+
+@app.post("/api/hotspot/push")
+@login_required("admin")
+def hotspot_push():
+    return result(*radius_admin(["hotspot", "push", "on" if body().get("on") else "off"], timeout=180))
+
+
+@app.get("/api/hotspot/preview/<page>")
+@login_required()
+def hotspot_preview(page):
+    if page not in HS_PAGES:
+        abort(404)
+    ok, out = radius_admin(["hotspot", "preview", page], log=False, timeout=60)
+    if not ok:
+        abort(500, out[-200:])
+    return app.response_class(out, mimetype="text/html", headers={"X-ML-Preview": "1"})
+
+
+@app.get("/api/public/router/hotspot/<page>")
+def router_hotspot_page(page):
+    if page not in HS_PAGES:
+        abort(404)
+    return app.response_class(_router_file(os.path.join("hotspot", page)), mimetype="text/html")
 
 
 # ------------------------------------------------------------------ VPN watch

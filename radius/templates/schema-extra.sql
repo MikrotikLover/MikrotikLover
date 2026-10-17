@@ -310,3 +310,37 @@ CREATE TABLE IF NOT EXISTS ml_notice_sent (
   PRIMARY KEY (username, kind, ref),
   KEY idx_at (at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Network control: what every router reports each minute (autosync.rsc, script ml-stats)
+CREATE TABLE IF NOT EXISTS ml_router_status (
+  router_ip VARCHAR(45) NOT NULL,                 -- as the server sees it (several routers behind one NAT: identity tells them apart)
+  identity VARCHAR(64) NOT NULL DEFAULT '',
+  board VARCHAR(64) NOT NULL DEFAULT '',
+  version VARCHAR(64) NOT NULL DEFAULT '',
+  uptime VARCHAR(32) NOT NULL DEFAULT '',
+  cpu TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  mem_free BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  mem_total BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  hdd_free BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  hdd_total BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  users_hotspot INT UNSIGNED NOT NULL DEFAULT 0,
+  users_ppp INT UNSIGNED NOT NULL DEFAULT 0,
+  dhcp_leases INT UNSIGNED NOT NULL DEFAULT 0,
+  interfaces MEDIUMTEXT NOT NULL,        -- JSON: [{name, type, running, disabled, rx, tx, rx_bps, tx_bps}]
+  links TEXT NOT NULL,                   -- JSON: [{host, status, comment}] (netwatch)
+  last_seen DATETIME NOT NULL,
+  PRIMARY KEY (router_ip, identity)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- History for the charts (kept 7 days)
+CREATE TABLE IF NOT EXISTS ml_router_stat (
+  router_ip VARCHAR(45) NOT NULL,
+  identity VARCHAR(64) NOT NULL DEFAULT '',
+  at DATETIME NOT NULL,
+  cpu TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  mem_pct TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  rx_bps BIGINT UNSIGNED NOT NULL DEFAULT 0,      -- busiest running interface
+  tx_bps BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  users INT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (router_ip, identity, at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

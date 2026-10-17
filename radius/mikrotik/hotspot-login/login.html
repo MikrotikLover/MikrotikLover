@@ -26,6 +26,8 @@
   .err { background:#fef2f2; color:#b91c1c; border-radius:10px; padding:10px 12px; margin-bottom:6px; font-size:14px; text-align:center; }
   .foot { text-align:center; margin-top:16px; font-size:13px; color:var(--m); }
   .foot a { color:var(--a); }
+  .logo { display:block; max-width:160px; max-height:80px; margin:0 auto 10px; }
+  .ad { background:#eff6ff; border:1px solid #bfdbfe; color:#1e3a8a; border-radius:10px; padding:10px 12px; margin:8px 0; font-size:14px; text-align:center; }
 </style>
 </head>
 <body>
@@ -39,9 +41,11 @@ $(if chap-id)
 <script src="/md5.js"></script>
 $(endif)
 <div class="card">
+  <!--ML-LOGO-->
   <h1 id="brand">MikrotikLover WiFi</h1>
   <p class="sub">Card par likha username aur password likhein</p>
   $(if error)<div class="err">$(error)</div>$(endif)
+  <!--ML-NOTICE-->
   <form name="login" action="$(link-login-only)" method="post" onsubmit="return doLogin()">
     <input type="hidden" name="dst" value="$(link-orig)">
     <input type="hidden" name="popup" value="true">

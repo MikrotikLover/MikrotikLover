@@ -274,6 +274,26 @@ first = time.mktime((2026, 11, 1, 21, 10, 0, 0, 0, -1))
 check("monthly: due on the 1st at the hour, once", alerts.monthly_due({}, {}, first) and not alerts.monthly_due({}, {"monthly_month": "2026-11"}, first)
       and not alerts.monthly_due({}, {}, first + 86400))
 
+# router health reports: silent router, internet link down / back
+class RepDB(FakeDB):
+    rep = [["192.168.88.1", "office", "30", '[{"host": "8.8.8.8", "status": "up", "comment": "ml-link: ISP1"}]']]
+    def rows(self, q):
+        return self.rep if "ml_router_status" in q else []
+rdb, rst = RepDB(), {}
+check("router reporting, link up: nothing", alerts.check({"EVENTS": "router"}, rdb, rst) == [])
+RepDB.rep = [["192.168.88.1", "office", "40", '[{"host": "8.8.8.8", "status": "down", "comment": "ml-link: ISP1"}]']]
+f = alerts.check({"EVENTS": "router"}, rdb, rst)
+check("internet link down: at once, with its name", len(f) == 1 and "Internet link DOWN on office: ISP1" in f[0][1], f)
+check("still down: not again", alerts.check({"EVENTS": "router"}, rdb, rst) == [])
+RepDB.rep = [["192.168.88.1", "office", "20", '[{"host": "8.8.8.8", "status": "up", "comment": "ml-link: ISP1"}]']]
+check("link back", ["back on office" in l for _, l in alerts.check({"EVENTS": "router"}, rdb, rst)] == [True])
+RepDB.rep = [["192.168.88.1", "office", "900", '[{"host": "8.8.8.8", "status": "down", "comment": ""}]']]
+check("silent router: after 2 checks; its old link state ignored", alerts.check({"EVENTS": "router"}, rdb, rst) == []
+      and ["silent: office" in l for _, l in alerts.check({"EVENTS": "router"}, rdb, rst)] == [True])
+
+RepDB.rep = [["10.0.0.9", "new-router", "20", '[{"host": "1.1.1.1", "status": "down", "comment": "ml-link: ISP2"}]']]
+check("a link that is down in the very first report is reported", ["DOWN on new-router: ISP2" in l for _, l in alerts.check({"EVENTS": "router"}, rdb, rst)] == [True])
+
 # ------------------------------------------------------------------ message + summary time
 k, t, x = alerts.compose([("router", "a")])
 check("one problem: it is the title", (k, t, x) == ("router", "a", ""))

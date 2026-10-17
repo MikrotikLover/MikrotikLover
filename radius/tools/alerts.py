@@ -354,10 +354,11 @@ def running(pattern):
     return subprocess.run(["pgrep", "-f", pattern], capture_output=True, timeout=5).returncode == 0
 
 
-def updown(state, key, ok, need=2):
-    """Counts failed checks; -> 'down' after `need` failures in a row, 'up' when it comes back."""
+def updown(state, key, ok, need=2, alert_new=False):
+    """Counts failed checks; -> 'down' after `need` failures in a row, 'up' when it comes back.
+    Something never seen working is not reported, unless alert_new (a router's internet link)."""
     st = state.setdefault("updown", {})
-    v = st.get(key, {"fail": 0, "alerted": False, "seen": False})
+    v = st.get(key, {"fail": 0, "alerted": False, "seen": alert_new})
     out = None
     if ok:
         if v["alerted"]:
@@ -418,6 +419,27 @@ def check(c, db, state, now=None, ping_fn=ping, running_fn=running, updates=UPDA
                 found.append(("router", f"📡 Router DOWN: {name} ({addr}) does not answer"))
             elif r == "up":
                 found.append(("router", f"✅ Router back: {name} ({addr})"))
+    if "router" in ev:
+        # routers that send health reports (autosync.rsc ml-stats): silent for 5 minutes, internet links (netwatch)
+        for ip, ident, age, links in db.rows("SELECT router_ip, identity, TIMESTAMPDIFF(SECOND, last_seen, NOW()), links FROM ml_router_status"):
+            r = updown(state, f"report:{ip}:{ident}", int(age or 0) < 300)
+            if r == "down":
+                found.append(("router", f"📡 Router silent: {ident} ({ip}) has not reported for {int(age) // 60} min — power, cable or the line to the server?"))
+            elif r == "up":
+                found.append(("router", f"✅ Router {ident} ({ip}) reports again"))
+            try:
+                lst = json.loads(links or "[]")
+            except ValueError:
+                lst = []
+            if int(age or 0) >= 300:
+                continue                       # old link states of a silent router mean nothing
+            for l in lst:
+                name = (l.get("comment") or "").replace("ml-link: ", "") or l.get("host", "")
+                r = updown(state, f"link:{ip}:{ident}:{l.get('host')}", l.get("status") != "down", need=1, alert_new=True)
+                if r == "down":
+                    found.append(("router", f"🌐 Internet link DOWN on {ident}: {name} ({l.get('host')}) does not answer"))
+                elif r == "up":
+                    found.append(("router", f"✅ Internet link back on {ident}: {name}"))
     if "service" in ev:
         for name, pat in SERVICES:
             r = updown(state, f"service:{name}", running_fn(pat))

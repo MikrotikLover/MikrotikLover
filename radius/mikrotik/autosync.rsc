@@ -38,3 +38,35 @@ add name=ml-sync policy=read,write,policy,test source={
 remove [find name=ml-sync]
 add name=ml-sync interval=15m start-time=startup on-event="/system script run ml-sync"
 /system script run ml-sync
+
+# 4. network control: every minute the router tells the server how it is (dashboard → Routers → Router health):
+#    CPU, memory, disk, uptime, interfaces (up/down, traffic), internet links (netwatch) and users online.
+#    No change to the router's configuration — it only reads and sends.
+/system script
+remove [find name=ml-stats]
+add name=ml-stats policy=read,test comment="mikrotiklover: router health report" source={
+:local base "https://radius.example.lan:8443/api/public/router"
+:local key "PUT-THE-KEY-HERE"
+:local r [/system resource get]
+:local d ("id=" . [/system identity get name] . "\nver=" . ($r->"version") . "\nboard=" . ($r->"board-name") . "\ncpu=" . ($r->"cpu-load") . "\nup=" . ($r->"uptime"))
+:set d ($d . "\nmem=" . ($r->"free-memory") . "/" . ($r->"total-memory") . "\nhdd=" . ($r->"free-hdd-space") . "/" . ($r->"total-hdd-space"))
+:foreach i in=[/interface find where type!="loopback"] do={
+  :local x [/interface get $i]
+  :set d ($d . "\nif=" . ($x->"name") . "|" . ($x->"running") . "|" . ($x->"disabled") . "|" . ($x->"rx-byte") . "|" . ($x->"tx-byte") . "|" . ($x->"type"))
+}
+:do { :foreach n in=[/tool netwatch find] do={ :local x [/tool netwatch get $n]; :set d ($d . "\nnw=" . ($x->"host") . "|" . ($x->"status") . "|" . ($x->"comment")) } } on-error={}
+:do { :set d ($d . "\nhs=" . [:len [/ip hotspot active find]]) } on-error={}
+:do { :set d ($d . "\nppp=" . [:len [/ppp active find]]) } on-error={}
+:do { :set d ($d . "\ndhcp=" . [:len [/ip dhcp-server lease find where status="bound"]]) } on-error={}
+:do { /tool fetch url="$base/report?key=$key" http-method=post http-data=$d http-header-field="Content-Type: text/plain" check-certificate=yes-without-crl output=none } on-error={ :log warning "ml-stats: RADIUS server not reachable" }
+}
+/system scheduler
+remove [find name=ml-stats]
+add name=ml-stats interval=1m start-time=startup on-event="/system script run ml-stats" comment="mikrotiklover: router health report"
+
+# internet links: the router checks them every 30 s (netwatch); a link that goes down shows red on the
+# dashboard and comes as an alert. Add your own: /tool netwatch add host=... comment="ml-link: ISP2"
+/tool netwatch
+remove [find comment~"^ml-link: "]
+add host=8.8.8.8 interval=30s timeout=2s comment="ml-link: internet (Google DNS)"
+add host=1.1.1.1 interval=30s timeout=2s comment="ml-link: internet (Cloudflare DNS)"
