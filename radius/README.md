@@ -14,8 +14,19 @@ FreeRADIUS 3.2 + MariaDB par bana hua RADIUS server, MikroTik Wi-Fi ke liye:
 
 > 📘 **Poori installation aur configuration guide (shuru se aakhir tak, tarteeb ke saath): [`docs/INSTALL.md`](docs/INSTALL.md)**
 
-## 1. Install (Ubuntu 22.04/24.04, Debian 12)
+## 1. Install (Ubuntu 22.04/24.04, Debian 12/13)
 
+**Aik command (one-click):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/MikrotikLover/MikrotikLover/main/radius/get.sh | sudo bash
+```
+Yeh 3 sawal poochta hai (server ka naam, company ka naam, dashboard kaun khole), phir sab khud karta hai: system check (OS, RAM ≥1 GB, disk ≥3 GB, internet, 1812/1813 khali), code `/opt/mikrotiklover` mein, poora install, aur aakhir mein health check. Sawal ke baghair:
+```bash
+curl -fsSL .../radius/get.sh | sudo bash -s -- --domain radius.yourcompany.com --yes [--web-allow any] [--firewall]
+```
+**Update:** wohi command dobara chalayein — users, settings aur data rehte hain (dashboard ki port / allow list bhi yaad rehti hai).
+
+Ya haath se:
 ```bash
 git clone <this-repo> && cd MikrotikLover/radius
 sudo RADIUS_DOMAIN=radius.yourcompany.com ./install.sh

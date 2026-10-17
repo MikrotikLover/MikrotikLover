@@ -55,6 +55,13 @@ Server ko fixed IP dein (netplan / router DHCP reservation).
 
 ## 3. Install
 
+**Sab se asaan — aik command:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/MikrotikLover/MikrotikLover/main/radius/get.sh | sudo bash
+```
+Sawal: server ka naam (certificate), company ka naam, dashboard sirf LAN se ya har jagah se. Pehle system check hota hai (OS, RAM, disk, internet, RADIUS ports); kuch kam ho to wahin ruk kar wajah batata hai. Aakhir mein health check dikhata hai. Log: `/var/log/mikrotiklover-install.log`. Options: `--domain NAME --org NAME --web-allow any|"IPs" --web-port N --firewall --yes`. Update ke liye wohi command dobara.
+
+**Ya haath se:**
 ```bash
 sudo apt -y install git
 git clone https://github.com/mikrotiklover/mikrotiklover.git

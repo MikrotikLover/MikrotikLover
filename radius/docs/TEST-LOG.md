@@ -67,3 +67,6 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 04:58 | Health check after services started | 13 green, 6 yellow (no router traffic in sandbox, catalog 404 until merge), 1 red (office-hap router not reachable here) |
 | 04:58 | Fixes during build | fix text now matches the actual problem; disk warning only when <10% AND <10 GB |
 | 04:58 | test-health (25) + UI (43) | All pass |
+| 05:01 | One-click get.sh: piped (curl | bash style) update | OK — OS/RAM/disk/ports checked, code fetched, installer ran, health shown |
+| 05:01 | get.sh errors: not root, bad option, bad branch | OK — clear message, nothing changed |
+| 05:01 | Bug: re-running the installer reset dashboard WEB_ALLOW/WEB_PORT | Fixed — saved in radius.conf, kept on update, new value wins |
