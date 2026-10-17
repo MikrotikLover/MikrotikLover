@@ -1029,6 +1029,28 @@ sudo radius-admin hotspot push on
 - IPv6 abhi nahi (filters aur reports sirf IPv4).
 - **Tested:** do nakli routers ki reports (ghalat key 403, kharab data 400), raftar ka hisaab, link-down alert pehli report par bhi; parental policy ban kar 2 bachon ko lagi aur router rules mein gayi; designer: title/rang/notice/logo, HTML escape (`<script>` text ban jata hai), SVG logo mana, router script aur key wala download (bina key 403). `tests/test-hotspotgen.py` (15 checks), UI 49/49.
 
+## 7l. Social WiFi (cafe) — phone number se free WiFi
+
+Customer WiFi se judta hai → login page par **"📱 Phone number se free WiFi"** → mobile number (naam aur "offers bhejein" optional) → SMS / WhatsApp par **6 hindson ka code** → code likhte hi internet chalu (router par khud login). Roz ki had: waqt + data (+ speed) — `social-free` plan.
+
+```bash
+sudo radius-admin security quarantine-server 192.168.88.10   # server ka IP jaise router dekhta hai
+sudo radius-admin notice gateway 'https://sms.example.pk/api?key=KEY&to={phone0}&msg={text}' --ok OK
+sudo radius-admin hotspot push on          # login page routers par khud
+sudo radius-admin social on
+sudo radius-admin social set minutes 60    # roz 60 minute
+sudo radius-admin social set mb 500        # roz 500 MB
+sudo radius-admin social set rate 2M/2M    # (optional) speed
+sudo radius-admin social list | export     # customers / CSV
+sudo radius-admin social offer "Aaj chai + paratha 200 Rs" [--dry-run]
+```
+- **Kaise:** login page ka button server ke `http://SERVER:8081/social/start` par jata hai (auto-sync router ki hotspot **walled garden** mein yeh address khol deta hai). Code sahi hone par server `sw-923…` account banata / password badalta hai aur browser router ke login page par **CHAP** (ya PAP) se khud login kar deta hai — router ka `login-by` waisa hi rehta hai.
+- **Hifazat:** code ka sirf hash rakha jata hai; 5 minute valid; 5 ghalat koshishon ke baad band; aik number ko 15 minute mein 3 codes, aik device ko ghante mein 6; code usi device (MAC) par chalta hai jis ne manga.
+- **Dashboard → Social WiFi:** on / off, roz ka waqt / data / speed, SMS ka message, customers (phone, naam, offers ki ijazat, visits, pehli / aakhri dafa), **Export CSV**, **Send an offer** (sirf ijazat walon ko, din mein aik dafa), Forget.
+- Roz ki free had khatam ho to portal kehta hai "Aaj ka free WiFi istemal ho chuka — kal phir aayein".
+- **Google login:** abhi nahi — phone ke WiFi-login window mein Google aksar login rokta hai, aur asli domain + certificate chahiye. OTP har phone par chalta hai.
+- **Tested:** browser se poora raasta — number → nakli SMS gateway par code → ghalat code → sahi code → nakli router ne FreeRADIUS se **asli CHAP login** karwaya (Session-Timeout 45 min, 300 MB limit wapas aaye); rate limits, purana code, doosra device, 5 ghalat koshishen, roz ki had, naam saaf (`<script>` hata), CSV. `tests/test-social.sh` (18 checks), UI 50/50.
+
 ## 7e. Health check — sab theek hai?
 
 `sudo radius-admin doctor` ya dashboard → **Health check**: server ka har hissa **sabz** (theek), **peela** (dekh lein) ya **laal** (abhi theek karein), aur kharabi ke saath us ka hal likha hota hai.

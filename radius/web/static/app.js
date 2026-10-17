@@ -46,6 +46,7 @@ const ICONS = {
   pulse: "M3 12h4l2-6 4 12 2-6h6",
   bulb: "M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.8.8 1 1.5 1 2.5h6c0-1 .2-1.7 1-2.5A6 6 0 0 0 12 3",
   clock: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M12 7v5l3 2",
+  phone: "M7 2h10v20H7zM11 18h2",
   brush: "M4 20c3 0 5-2 5-5l9-9a2 2 0 0 0-3-3l-9 9c-3 0-5 2-5 5zM13 7l3 3",
   globe: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M3 12h18M12 3c2.5 2.5 3.8 5.5 3.8 9s-1.3 6.5-3.8 9c-2.5-2.5-3.8-5.5-3.8-9s1.3-6.5 3.8-9",
   vpn: "M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6zM9 12l2 2 4-4",
@@ -208,7 +209,7 @@ const legend = () => h("div", { class: "legend" }, h("span", {}, h("i", { class:
 const NAV = [
   ["dashboard", "Dashboard", "home"], ["users", "Users", "users"], ["groups", "Groups & policies", "groups"],
   ["macs", "MAC devices", "mac"], ["routers", "Routers", "router"], "-",
-  ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], ["speed", "Speed schedule", "clock"], ["hotspot", "Hotspot page", "brush"], "-",
+  ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], ["speed", "Speed schedule", "clock"], ["hotspot", "Hotspot page", "brush"], ["social", "Social WiFi", "phone"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["insights", "Insights (samajh)", "bulb"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
   ["data", "Data usage", "data"], ["apps", "Apps on network", "apps"], ["ports", "Ports & protocols", "ports"], "-",
   ["blocking", "Blocking", "block"], ["vpn", "VPN & proxy watch", "vpn"], ["security", "Security", "shield"], ["domains", "Website names", "globe"], "-", ["health", "Health check", "pulse"], ["settings", "Settings", "settings"],
@@ -1137,6 +1138,50 @@ ROUTES.hotspot = async (pageName = "login.html") => {
       h("div", { class: "muted small" }, "By hand instead: Winbox → Files → hotspot/ → upload the 3 files from the server folder /var/lib/mikrotiklover/router/hotspot/."))),
     card("Preview", "phone size", tabs, h("div", { class: "hs-phone" }, frame))));
   load(pageName);
+};
+
+// ------------------------------------------------------------------ social WiFi (cafe): phone number + code
+ROUTES.social = async () => {
+  const d = await api("GET", "/api/social");
+  const st = d.settings, s = d.stats, on = st.social_on === "1";
+  const f = h("form", { class: "form cols", onsubmit: async (e) => {
+    e.preventDefault();
+    if (await act(api("POST", "/api/social", formValues(f)))) route();
+  } },
+    h("label", { class: "field" }, "Free minutes per day", h("input", { name: "minutes", type: "number", min: 1, max: 9999, value: st.social_minutes })),
+    h("label", { class: "field" }, "Free data per day (MB)", h("input", { name: "mb", type: "number", min: 1, value: st.social_mb })),
+    h("label", { class: "field" }, "Speed (empty = no limit)", h("input", { name: "rate", value: st.social_rate, placeholder: "2M/2M" })),
+    h("label", { class: "field" }, "Code message (SMS / WhatsApp)", h("input", { name: "message", maxlength: 160, value: st.social_msg })),
+    isAdmin() ? h("div", { class: "full" }, h("button", { class: "primary", type: "submit" }, "Save")) : null);
+  const toggle = h("label", { class: "check" + (on ? " on" : "") }, h("input", { type: "checkbox", checked: on, disabled: !isAdmin(),
+    onchange: async (e) => { if (!(await act(api("POST", "/api/social", { on: e.target.checked })))) e.target.checked = !e.target.checked; route(); } }),
+    h("div", {}, h("b", {}, "Free WiFi with the phone number"), h("span", {}, "The hotspot login page gets a button \"📱 Phone number se free WiFi\". The customer types the number, gets a 6-digit code by SMS / WhatsApp, and is online — within the daily limit below.")));
+  const offer = h("input", { maxlength: 300, placeholder: "Aaj chai + paratha sirf 200 Rs — 5 baje tak!", class: "grow" });
+  const send = (dry) => async (e) => {
+    if (!offer.value.trim()) return toast("Write the offer first", true);
+    if (!dry && !(await confirmDlg("Send offer", `Send this SMS to the customers who allowed offers (${s.consent})?`, "Send"))) return;
+    e.target.disabled = true; await act(api("POST", "/api/social/offer", { text: offer.value.trim(), dry })); e.target.disabled = false; if (!dry) route();
+  };
+  const needs = [];
+  if (!st.server_ip) needs.push("this server's IP for the routers (Security → Protection & lists → server IP)");
+  shell("Social WiFi", h("div", { class: "stack" },
+    h("div", { class: "grid g-tiles" },
+      tile("Customers", String(s.customers), `${s.came_back} came back`), tile("Today", String(s.today), `${s.new_today} new`),
+      tile("Allow offers", String(s.consent), "can get your SMS offers"), tile("Free per day", `${st.social_minutes} min`, `${st.social_mb} MB${st.social_rate ? ` · ${st.social_rate}` : ""}`)),
+    card("Social WiFi for the cafe", on ? "on" : "off",
+      h("div", { class: "muted" }, "Customers get free internet for a while by giving their mobile number (checked with a code). You get a list of your customers and can send them offers. Needs an SMS / WhatsApp gateway (Settings → Warn users → SMS gateway) and the login pages on the routers (Hotspot page → put on the routers)."),
+      needs.length ? h("div", { class: "note" }, "First set: ", needs.join("; ")) : null,
+      h("div", { class: "checks" }, toggle), f),
+    card("Send an offer", "only to customers who allowed it · once a day at most",
+      h("div", { class: "toolbar wrap" }, offer, isAdmin() ? h("button", { onclick: send(true) }, "How many?") : null, isAdmin() ? h("button", { class: "primary", onclick: send(false) }, "Send") : null)),
+    card("Customers", `${d.customers.length} shown`,
+      isAdmin() ? h("div", { class: "toolbar" }, h("span", { class: "grow" }), h("a", { class: "btn small", href: "/api/social/export.csv" }, "⬇ Export CSV")) : null,
+      table([{ label: "Phone", render: (c) => h("code", {}, c.phone) }, { label: "Name", key: "name" },
+        { label: "Offers", render: (c) => c.consent ? badge("yes", "ok") : badge("no", "") }, { label: "Visits", key: "visits", num: true },
+        { label: "First", render: (c) => String(c.first_seen).slice(0, 16) }, { label: "Last", render: (c) => String(c.last_seen).slice(0, 16) },
+        { label: "", render: (c) => isAdmin() ? h("button", { class: "small danger", onclick: async () => {
+            if (await confirmDlg("Forget customer", `Remove ${c.phone} and their WiFi account?`, "Remove")) if (await act(api("POST", "/api/social/forget", { phone: c.phone }))) route();
+          } }, "Forget") : null }], d.customers, "No customer yet."))));
 };
 
 ROUTES.plans = async () => {

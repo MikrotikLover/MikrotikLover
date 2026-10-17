@@ -344,3 +344,31 @@ CREATE TABLE IF NOT EXISTS ml_router_stat (
   users INT UNSIGNED NOT NULL DEFAULT 0,
   PRIMARY KEY (router_ip, identity, at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Social WiFi (cafe): customers who logged in with their phone number (OTP)
+CREATE TABLE IF NOT EXISTS ml_social_user (
+  phone VARCHAR(20) NOT NULL PRIMARY KEY,
+  username VARCHAR(64) NOT NULL,
+  name VARCHAR(64) NOT NULL DEFAULT '',
+  consent TINYINT(1) NOT NULL DEFAULT 0,          -- may we send offers?
+  visits INT UNSIGNED NOT NULL DEFAULT 0,          -- logins on different days
+  first_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_mac VARCHAR(17) NOT NULL DEFAULT '',
+  last_offer DATETIME NULL,
+  KEY idx_last (last_seen)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- One-time codes sent by SMS / WhatsApp (only a hash is kept)
+CREATE TABLE IF NOT EXISTS ml_social_otp (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  phone VARCHAR(20) NOT NULL,
+  mac VARCHAR(17) NOT NULL DEFAULT '',
+  ip VARCHAR(45) NOT NULL DEFAULT '',
+  code_hash CHAR(64) NOT NULL,
+  attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  used TINYINT(1) NOT NULL DEFAULT 0,
+  created DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_phone (phone, created),
+  KEY idx_mac (mac, created)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

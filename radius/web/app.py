@@ -179,6 +179,14 @@ def server_error(e):
 
 @app.after_request
 def security_headers(resp):
+    if resp.headers.get("X-ML-CSP"):              # social WiFi pages: the last one posts to the router's login page
+        resp.headers["Content-Security-Policy"] = resp.headers["X-ML-CSP"]
+        del resp.headers["X-ML-CSP"]
+        resp.headers["X-Frame-Options"] = "DENY"
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["Referrer-Policy"] = "no-referrer"
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
     if resp.headers.get("X-ML-Preview"):          # hotspot page preview: its own (inline) styles, shown in an iframe
         del resp.headers["X-ML-Preview"]
         resp.headers["Content-Security-Policy"] = ("default-src 'none'; style-src 'unsafe-inline'; img-src data:; "
@@ -855,6 +863,203 @@ def public_connect():
     """Data for the public connect guide (no login). Only names users need anyway."""
     st = settings_get()
     return jsonify({k: st[k] for k in ("brand", "ssid", "hotspot_ssid", "hotspot_url", "radius_domain", "contact")})
+
+
+# ------------------------------------------------------------------ social WiFi: dashboard
+SOCIAL_DEFAULTS = {"social_on": "0", "social_minutes": "60", "social_mb": "500", "social_rate": "",
+                   "social_msg": "{brand}: aap ka WiFi code {code} hai"}
+
+
+@app.get("/api/social")
+@login_required()
+def social_get():
+    st = dict(SOCIAL_DEFAULTS)
+    for r in q("SELECT k, v FROM ml_setting WHERE k LIKE 'social\\_%%' OR k='server_ip'"):
+        if r["v"] != "":
+            st[r["k"]] = r["v"]
+    stats = q1("""SELECT COUNT(*) AS customers, IFNULL(SUM(consent),0) AS consent, IFNULL(SUM(last_seen >= CURDATE()),0) AS today,
+                         IFNULL(SUM(first_seen >= CURDATE()),0) AS new_today, IFNULL(SUM(visits > 1),0) AS came_back FROM ml_social_user""")
+    rows = q("SELECT phone, name, consent, visits, first_seen, last_seen, last_offer FROM ml_social_user ORDER BY last_seen DESC LIMIT 300")
+    per_day = q("""SELECT DATE(created) AS day, COUNT(DISTINCT phone) AS phones FROM ml_social_otp WHERE used=1 AND created >= CURDATE() - INTERVAL 13 DAY
+                   GROUP BY 1 ORDER BY 1""")
+    return jsonify(settings=st, stats=jsonable([stats])[0], customers=jsonable(rows), per_day=jsonable(per_day))
+
+
+@app.post("/api/social")
+@login_required("admin")
+def social_set():
+    d = body()
+    msgs = []
+    for key, arg in (("minutes", "minutes"), ("mb", "mb"), ("rate", "rate"), ("message", "message")):
+        if key in d and str(d[key]).strip() != "":
+            ok, msg = radius_admin(["social", "set", arg, str(d[key]).strip()], timeout=120)
+            if not ok:
+                return result(ok, msg)
+            msgs.append(msg)
+    if "on" in d:
+        ok, msg = radius_admin(["social", "on" if d["on"] else "off"], timeout=180)
+        if not ok:
+            return result(ok, msg)
+        msgs.append(msg)
+    return result(True, "\n".join(msgs) or "Nothing changed")
+
+
+@app.get("/api/social/export.csv")
+@login_required("admin")
+def social_export():
+    import csv, io
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["phone", "name", "offers_ok", "visits", "first_seen", "last_seen"])
+    for r in q("SELECT phone, name, consent, visits, first_seen, last_seen FROM ml_social_user ORDER BY last_seen DESC"):
+        # a name starting with = + - @ would be a formula in Excel (phones are only + and digits)
+        w.writerow([r["phone"], re.sub(r"^[=+\-@]", "", r["name"]), r["consent"], r["visits"], r["first_seen"], r["last_seen"]])
+    audit("social customers exported", "ok")
+    return app.response_class(buf.getvalue(), mimetype="text/csv",
+                              headers={"Content-Disposition": f'attachment; filename="wifi-customers-{datetime.now():%Y-%m-%d}.csv"'})
+
+
+@app.post("/api/social/offer")
+@login_required("admin")
+def social_offer():
+    d = body()
+    text = str(d.get("text") or "").strip()
+    if not text or len(text) > 300 or "\n" in text:
+        abort(400, "offer text: one line, 300 characters at most")
+    return result(*radius_admin(["social", "offer", text] + (["--dry-run"] if d.get("dry") else []), timeout=900))
+
+
+@app.post("/api/social/forget")
+@login_required("admin")
+def social_forget():
+    ph = field(body(), "phone", re.compile(r"^\+[0-9]{8,15}$"), required=True)
+    return result(*radius_admin(["social", "forget", ph]))
+
+
+# ------------------------------------------------------------------ social WiFi portal (port 8081, before login)
+SOCIAL_CSP = ("default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; "
+              "form-action 'self' http: https:; base-uri 'none'; frame-ancestors 'none'")
+LOGIN_URL_RE = re.compile(r"^https?://[A-Za-z0-9.-]{1,253}(:\d{1,5})?/[A-Za-z0-9/_.-]{0,100}$")
+CHAP_RE = re.compile(r"^[\\0-7a-zA-Z0-9]{0,200}$")
+
+
+def _social_ctx():
+    f = request.form if request.method == "POST" else request.args
+    ctx = {}
+    for k, rx, n in (("mac", r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$", 17), ("ip", r"^[0-9.]{7,15}$", 15), ("login", None, 400),
+                     ("dst", r"^https?://\S{1,500}$", 500), ("chap_id", None, 200), ("chap_challenge", None, 200)):
+        v = str(f.get(k, ""))[:n]
+        if k == "login":
+            v = v if LOGIN_URL_RE.match(v) else ""
+        elif k.startswith("chap"):
+            v = v if CHAP_RE.match(v) else ""
+        elif v and not re.match(rx, v):
+            v = ""
+        ctx[k] = v
+    return ctx
+
+
+def _social_page(body_html, title="Free WiFi"):
+    from html import escape
+    st = settings_get()
+    brand = escape(st.get("brand") or "WiFi")
+    page = f"""<!doctype html><html lang="ur-Latn"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>{escape(title)} — {brand}</title>
+<link rel="stylesheet" href="/static/social.css"></head><body><main class="card"><h1>{brand}</h1>{body_html}</main>
+<script src="/static/social.js"></script></body></html>"""
+    return app.response_class(page, mimetype="text/html", headers={"X-ML-CSP": SOCIAL_CSP})
+
+
+def _hidden(ctx, extra=None):
+    from html import escape
+    return "".join(f'<input type="hidden" name="{k}" value="{escape(v)}">' for k, v in {**ctx, **(extra or {})}.items())
+
+
+def _social_on():
+    return (q1("SELECT v FROM ml_setting WHERE k='social_on'") or {}).get("v") == "1"
+
+
+def _phone_form(ctx, err="", phone="", name="", consent=True):
+    from html import escape
+    return _social_page(f"""<p class="lead">Apna mobile number likhein — SMS / WhatsApp par 6 hindson ka code aayega.</p>
+{f'<p class="err">{escape(err)}</p>' if err else ''}
+<form method="post" action="/social/send">{_hidden(ctx)}
+<label>Mobile number<input name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="03001234567" value="{escape(phone)}" required></label>
+<label>Naam (zaroori nahi)<input name="name" maxlength="40" autocomplete="name" value="{escape(name)}"></label>
+<label class="chk"><input type="checkbox" name="consent" value="1"{' checked' if consent else ''}> Offers aur deals SMS par bhejein</label>
+<button type="submit">Code bhejein</button></form>
+<p class="small">Free WiFi ki had hai (roz ka waqt / data). Aap ka number sirf is network ke liye rakha jata hai.</p>""")
+
+
+@app.route("/social/start", methods=["GET", "POST"])
+def social_start():
+    if not _social_on():
+        return _social_page("<p>Free WiFi abhi band hai. Staff se card lein.</p>")
+    return _phone_form(_social_ctx())
+
+
+@app.post("/social/send")
+def social_send():
+    from html import escape
+    if not _social_on():
+        return _social_page("<p>Free WiFi abhi band hai.</p>")
+    ctx = _social_ctx()
+    phone, name = str(request.form.get("phone", ""))[:20], str(request.form.get("name", ""))[:40]
+    consent = request.form.get("consent") == "1"
+    if not re.match(r"^[+0-9 -]{8,20}$", phone):
+        return _phone_form(ctx, "Number ghalat hai — misal: 03001234567", phone, name, consent)
+    ok, msg = radius_admin(["social", "otp", phone, ctx["mac"], ctx["ip"] or client_ip()], log=False, timeout=60)
+    if not ok:
+        return _phone_form(ctx, msg.splitlines()[-1] if msg else "Code nahi gaya", phone, name, consent)
+    return _social_page(f"""<p class="lead">Code <b>{escape(phone)}</b> par bhej diya gaya. Yahan likhein:</p>
+<form method="post" action="/social/verify">{_hidden(ctx, {"phone": phone, "name": name, "consent": "1" if consent else "0"})}
+<label>6 hindson ka code<input name="code" inputmode="numeric" pattern="[0-9]{{6}}" maxlength="6" autocomplete="one-time-code" required autofocus></label>
+<button type="submit">Internet chalu karein</button></form>
+<form method="post" action="/social/start">{_hidden(ctx)}<button class="link" type="submit">Number badlein / naya code</button></form>""")
+
+
+def _chap_bytes(s):
+    """MikroTik's $(chap-id) / $(chap-challenge) are JavaScript strings with octal escapes (\\341...)."""
+    out, i = bytearray(), 0
+    while i < len(s):
+        m = re.match(r"\\([0-7]{1,3})", s[i:])
+        if m:
+            out.append(int(m.group(1), 8) & 0xFF)
+            i += len(m.group(0))
+        else:
+            out.append(ord(s[i]) & 0xFF)
+            i += 1
+    return bytes(out)
+
+
+@app.post("/social/verify")
+def social_verify():
+    import hashlib
+    from html import escape
+    if not _social_on():
+        return _social_page("<p>Free WiFi abhi band hai.</p>")
+    ctx = _social_ctx()
+    phone, name, code = str(request.form.get("phone", ""))[:20], str(request.form.get("name", ""))[:40], str(request.form.get("code", ""))[:6]
+    consent = "1" if request.form.get("consent") == "1" else "0"
+    ok, msg = radius_admin(["social", "verify", phone, code, ctx["mac"], name, consent], log=False, timeout=60)
+    if not ok:
+        return _social_page(f"""<p class="err">{escape(msg.splitlines()[-1] if msg else 'Code ghalat hai')}</p>
+<form method="post" action="/social/verify">{_hidden(ctx, {"phone": phone, "name": name, "consent": consent})}
+<label>6 hindson ka code<input name="code" inputmode="numeric" pattern="[0-9]{{6}}" maxlength="6" required autofocus></label>
+<button type="submit">Dobara koshish</button></form>
+<form method="post" action="/social/start">{_hidden(ctx)}<button class="link" type="submit">Naya code mangwayein</button></form>""")
+    vals = dict(l.split("=", 1) for l in msg.splitlines() if "=" in l)
+    user, pw = vals.get("user", ""), vals.get("pass", "")
+    if ctx["chap_id"]:
+        pw = hashlib.md5(_chap_bytes(ctx["chap_id"]) + pw.encode() + _chap_bytes(ctx["chap_challenge"])).hexdigest()
+    if not ctx["login"]:
+        return _social_page(f"""<p class="ok">Code sahi hai ✓</p><p>Ab Wi-Fi login page par yeh likhein:</p>
+<p class="cred">Username: <b>{escape(user)}</b><br>Password: <b>{escape(vals.get('pass', ''))}</b></p>""")
+    return _social_page(f"""<p class="ok">Code sahi hai ✓ — internet chalu ho raha hai …</p>
+<form id="mlauto" method="post" action="{escape(ctx['login'])}">
+<input type="hidden" name="username" value="{escape(user)}"><input type="hidden" name="password" value="{escape(pw)}">
+<input type="hidden" name="dst" value="{escape(ctx['dst'])}"><input type="hidden" name="popup" value="true">
+<button type="submit">Agar khud na khule to yahan dabayein</button></form>""", "Connecting")
 
 
 @app.get("/quarantine")

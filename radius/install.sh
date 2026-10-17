@@ -402,8 +402,14 @@ EOF
         [ -e /proc/net/if_inet6 ] && echo "    listen [::]:8081;"
         echo "    server_name _;"
         echo "    server_tokens off;"
-        echo "    location = /static/quarantine.css {"
+        echo "    location ~ ^/static/(quarantine|social)\\.(css|js)\$ {"
         echo "        proxy_pass http://127.0.0.1:8099;"
+        echo "    }"
+        echo "    location /social/ {             # social WiFi portal (phone number + code, before login)"
+        echo "        proxy_pass http://127.0.0.1:8099;"
+        echo '        proxy_set_header Host $host;'
+        echo '        proxy_set_header X-Forwarded-For $remote_addr;'
+        echo "        client_max_body_size 16k;"
         echo "    }"
         echo "    location / {"
         echo "        rewrite ^ /quarantine break;"

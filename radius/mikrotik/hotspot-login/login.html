@@ -27,6 +27,9 @@
   .foot { text-align:center; margin-top:16px; font-size:13px; color:var(--m); }
   .foot a { color:var(--a); }
   .logo { display:block; max-width:160px; max-height:80px; margin:0 auto 10px; }
+  .social { margin-top:16px; padding-top:14px; border-top:1px dashed #cbd5e1; text-align:center; }
+  .social button { background:#16a34a; margin-top:6px; }
+  .social small { color:var(--m); }
   .ad { background:#eff6ff; border:1px solid #bfdbfe; color:#1e3a8a; border-radius:10px; padding:10px 12px; margin:8px 0; font-size:14px; text-align:center; }
 </style>
 </head>
@@ -58,6 +61,7 @@ $(endif)
     <label class="pin"><input type="checkbox" id="pinmode"> Card par sirf PIN hai</label>
     <button type="submit">Login</button>
   </form>
+  <!--ML-SOCIAL-->
   <div class="foot">$(if trial == 'yes')<a href="$(link-login-only)?dst=$(link-orig-esc)&amp;username=T-$(mac-esc)">Free trial</a> · $(endif)Masla? Staff se rabta karein.</div>
 </div>
 <script>

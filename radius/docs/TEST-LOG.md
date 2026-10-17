@@ -99,3 +99,7 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 11:09 | Parental presets → policy for 2 kids → router rules | OK |
 | 11:09 | Hotspot designer: CLI, dashboard preview, logo, push via auto-sync | OK — XSS escaped, SVG refused; preview without scripts (CSP clean) |
 | 11:09 | test-hotspotgen (15) + UI (49) + all suites | All pass |
+| 11:19 | Social WiFi: phone → SMS code → router login (fake router asks FreeRADIUS with CHAP) | OK — Access-Accept, 45 min / 300 MB limits in the reply |
+| 11:19 | Social WiFi limits: rate limits, old code, other device, 5 wrong tries, daily limit | OK |
+| 11:19 | Bugs fixed: 'returning' is a reserved SQL word; CSV export lost lines starting with +; consent reset by CLI | Fixed + re-tested |
+| 11:19 | test-social (18) + UI (50) + all suites | All pass |

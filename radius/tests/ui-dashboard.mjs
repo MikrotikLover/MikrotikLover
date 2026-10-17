@@ -413,7 +413,7 @@ try {
   for (const [hash, title, name] of [["#/online", "Online", "08-online"], ["#/live", "Live log", "09-live"],
     ["#/reports/sites", "Reports", "10-reports-sites"], ["#/reports/blocked", "Reports", "11-reports-blocked"],
     ["#/data/site", "Data usage", "12-data-site"], ["#/data/ip", "Data usage", "13-data-ip"],
-    ["#/settings", "Settings", "14-settings"], ["#/health", "Health check", "14b-health"], ["#/speed", "Speed schedule", "14c-speed"], ["#/insights", "Insights", "14d-insights"], ["#/security/reports", "Security", "14e-security-reports"], ["#/hotspot", "Hotspot page", "14f-hotspot"], ["#/blocking/parental", "Blocking", "14g-parental"]]) {
+    ["#/settings", "Settings", "14-settings"], ["#/health", "Health check", "14b-health"], ["#/speed", "Speed schedule", "14c-speed"], ["#/insights", "Insights", "14d-insights"], ["#/security/reports", "Security", "14e-security-reports"], ["#/hotspot", "Hotspot page", "14f-hotspot"], ["#/blocking/parental", "Blocking", "14g-parental"], ["#/social", "Social WiFi", "14h-social"]]) {
     await go(page, hash, title);
     if (hash === "#/health") await page.locator(".health-row").first().waitFor({ timeout: 60000 });
     if (hash === "#/insights") await page.locator(".insight-words li").first().waitFor({ timeout: 60000 });

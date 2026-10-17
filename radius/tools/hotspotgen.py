@@ -27,7 +27,7 @@ SAMPLE = {"username": "ali123", "ip": "10.5.0.23", "uptime": "1h12m", "session-t
 
 def settings(rows):
     st = dict(DEFAULTS)
-    for k, v in rows("SELECT k, v FROM ml_setting WHERE k LIKE 'hs\\_%%' OR k IN ('brand', 'contact')"):
+    for k, v in rows("SELECT k, v FROM ml_setting WHERE k LIKE 'hs\\_%%' OR k IN ('brand', 'contact', 'social_on', 'server_ip')"):
         st[k] = v
     if not st["hs_title"]:
         st["hs_title"] = st.get("brand") or "WiFi"
@@ -50,6 +50,17 @@ def render(name, tpl, st, logo=""):
     s = s.replace("<!--ML-LOGO-->", f'<img class="logo" src="{logo}" alt="">' if logo and LOGO_RE.match(logo) else "")
     notice = "<br>".join(e(x) for x in str(st["hs_notice"]).split("|") if x.strip())
     s = s.replace("<!--ML-NOTICE-->", f'<div class="ad">{notice}</div>' if notice else "")
+    ip = st.get("server_ip", "")
+    if st.get("social_on") == "1" and re.match(r"^\d+\.\d+\.\d+\.\d+$", ip or ""):
+        # social WiFi: free internet with the phone number (portal on this server, port 8081)
+        s = s.replace("<!--ML-SOCIAL-->", f"""<form class="social" action="http://{ip}:8081/social/start" method="post">
+    <input type="hidden" name="mac" value="$(mac)"><input type="hidden" name="ip" value="$(ip)">
+    <input type="hidden" name="login" value="$(link-login-only)"><input type="hidden" name="dst" value="$(link-orig)">
+    <input type="hidden" name="chap_id" value="$(chap-id)"><input type="hidden" name="chap_challenge" value="$(chap-challenge)">
+    <small>Card nahi hai?</small>
+    <button type="submit">📱 Phone number se free WiFi</button>
+  </form>""")
+    s = s.replace("<!--ML-SOCIAL-->", "")
     return s
 
 
