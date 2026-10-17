@@ -94,3 +94,8 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 05:34 | Dashboard Security → Monthly reports | OK — make, list, open, download; traversal 404 |
 | 05:34 | Bug found: 'security report' not recognised by the CLI dispatcher | Fixed before commit |
 | 05:34 | test-secreport (19) + alerts + UI (47) + all suites + rsc lint | All pass |
+| 11:09 | Network control: router health from 2 fake routers | OK — CPU/mem/disk/interfaces/links, rates, 24h chart; bad key 403 |
+| 11:09 | Bug: a link already down in the first report gave no alert | Fixed (links alert even if never seen up) |
+| 11:09 | Parental presets → policy for 2 kids → router rules | OK |
+| 11:09 | Hotspot designer: CLI, dashboard preview, logo, push via auto-sync | OK — XSS escaped, SVG refused; preview without scripts (CSP clean) |
+| 11:09 | test-hotspotgen (15) + UI (49) + all suites | All pass |

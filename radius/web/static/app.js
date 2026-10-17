@@ -1100,7 +1100,7 @@ ROUTES.hotspot = async (pageName = "login.html") => {
   const frame = h("iframe", { class: "hs-preview", title: "preview", sandbox: "" });
   const load = (pg) => { frame.src = `/api/hotspot/preview/${pg}?t=${Date.now()}`; };
   const tabs = h("div", { class: "tabs" }, [["login.html", "Login"], ["status.html", "After login (status)"], ["alogin.html", "Just logged in"]].map(([k, l]) =>
-    h("a", { href: "javascript:void 0", class: k === pageName ? "active" : "", onclick: (e) => { tabs.querySelectorAll("a").forEach((a) => a.classList.remove("active")); e.target.classList.add("active"); pageName = k; load(k); } }, l)));
+    h("a", { href: `#/hotspot/${k}`, class: k === pageName ? "active" : "", onclick: (e) => { e.preventDefault(); tabs.querySelectorAll("a").forEach((a) => a.classList.remove("active")); e.target.classList.add("active"); pageName = k; load(k); } }, l)));
   const f = h("form", { class: "form", onsubmit: async (e) => {
     e.preventDefault();
     const v = formValues(f);

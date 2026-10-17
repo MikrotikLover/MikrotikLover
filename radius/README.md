@@ -1011,6 +1011,24 @@ sudo radius-admin security reports                   # /var/lib/mikrotiklover/re
 - PDF ke liye koi naya package nahi chahiye (`tools/minipdf.py`, apna chhota PDF writer).
 - **Tested:** October ki report (asli test data) — 3 safhe, pdftotext se parhi gayi; nakli Telegram ko PDF document, email mein PDF attachment, WhatsApp ko summary; dashboard se banai / download ki (path traversal 404). `tests/test-secreport.py` (19 checks: PDF ka dhancha, offsets, text, lambi table kai safhon par, khaali mahina).
 
+## 7k. Network control
+
+**1. Router health (multi-router dashboard)** — Dashboard → **Routers**: har MikroTik ka CPU, memory, disk, uptime, users online (hotspot / PPPoE / DHCP), har interface (up / down, abhi ki raftar, kul data), internet links, aur 24 ghante ka traffic chart.
+- Router par naya auto-sync script import karein (Blocking → Router auto-sync → Download script). Is mein `ml-stats` (har minute sirf parh kar bhejta hai, config nahi badalta) aur do netwatch internet checks (8.8.8.8, 1.1.1.1) shamil hain. Apna doosra ISP: `/tool netwatch add host=... comment="ml-link: ISP2"`.
+- Alerts (event `router`): router 5 minute chup → "Router silent"; netwatch link down → "Internet link DOWN on …"; wapas aane par bhi.
+
+**2. Parental controls** — Blocking → **Parental controls**: aik click mein Homework time (16–19, social / video / games band), Bedtime (22–6, internet band), School hours, Games sirf weekend, Family-safe DNS, VPN band. Bachon ke users ya group chunein → **Apply**: `parental-kids` policy ban kar lag jati hai (baad mein Policies mein badal sakte hain).
+
+**3. Hotspot login page designer** — Dashboard → **Hotspot page**: title, neeche wali line, do rang (ya tayyar jore), logo (PNG/JPG, 100 KB), notice / advert box (`|` = nayi line), footer — phone size live preview (login, status, just-logged-in). "Put these pages on the routers automatically" on karein to auto-sync teeno pages har hotspot profile ke folder mein khud utaar deta hai.
+```bash
+sudo radius-admin hotspot set title "Chai Wala Cafe"
+sudo radius-admin hotspot set notice "1 ghanta free|Chai + Paratha 250 Rs"
+sudo radius-admin hotspot logo logo.png
+sudo radius-admin hotspot push on
+```
+- IPv6 abhi nahi (filters aur reports sirf IPv4).
+- **Tested:** do nakli routers ki reports (ghalat key 403, kharab data 400), raftar ka hisaab, link-down alert pehli report par bhi; parental policy ban kar 2 bachon ko lagi aur router rules mein gayi; designer: title/rang/notice/logo, HTML escape (`<script>` text ban jata hai), SVG logo mana, router script aur key wala download (bina key 403). `tests/test-hotspotgen.py` (15 checks), UI 49/49.
+
 ## 7e. Health check — sab theek hai?
 
 `sudo radius-admin doctor` ya dashboard → **Health check**: server ka har hissa **sabz** (theek), **peela** (dekh lein) ya **laal** (abhi theek karein), aur kharabi ke saath us ka hal likha hota hai.

@@ -82,6 +82,8 @@ def preview(page_html, notice=""):
         return m.group(2) if v.get(m.group(1)) else (m.group(3) or "")
     s = re.sub(r"\$\(if ([\w-]+)(?: == '[^']*')?\)(.*?)(?:\$\(else\)(.*?))?\$\(endif\)", cond, page_html, flags=re.S)
     s = re.sub(r"\$\(([\w-]+)\)", lambda m: html.escape(v.get(m.group(1), "")), s)
+    s = re.sub(r"<script\b.*?</script>", "", s, flags=re.S | re.I)          # the preview shows the look only
+    s = re.sub(r'\son[a-z]+="[^"]*"', "", s)
     return re.sub(r'<meta http-equiv="refresh"[^>]*>', "", s)
 
 
