@@ -912,6 +912,42 @@ sudo radius-admin restore mikrotiklover-....tar.gz.enc    # password puchega
 - Raat ki copy fail ho (server band, internet nahi) to backup phir bhi server par mehfooz rehta hai, aur **Automatic updates** list mein "Off-site backup: failed" dikhta hai.
 - **Tested:** SSH (alag user + key) aur rclone (Google Drive jaisa remote): copy encrypted pahunchi, `keep 2` ne purani mitayin, server "kho" diya → `fetch` + `restore` se sab wapas, galat password par restore ruk gaya, backup server band par "failed" darj hua.
 
+## 7d. Alerts — Telegram / WhatsApp / Email
+
+Server khud aap ke phone par message bhejta hai jab kuch gadbad ho. Har 5 minute check hota hai (cron), aik waqt ke kai masle **aik hi message** mein aate hain, aur koi baat **do baar nahi** bheji jati.
+
+| Event | Kab |
+|---|---|
+| `security` | Virus / hacker attack / DDoS — sirf HIGH khatra |
+| `quarantine` | Koi device quarantine hua (khud ya admin ne) |
+| `router` | Router 2 checks tak jawab na de → "Router DOWN"; wapas aaye → "Router back" |
+| `service` | FreeRADIUS, database, DNS logger ya traffic collector band → aur wapas chalne par bhi |
+| `jobs` | Raat ka backup, off-site copy ya koi update fail |
+| `disk` | Disk 10% se kam khali |
+| `expiring` | User ki subscription 24 ghante mein khatam (default off — hotspot par bahut ho sakte hain) |
+| `summary` | Roz ki summary (default 21:00): users, data, sales, security, quarantine, top apps |
+
+```bash
+# Telegram: @BotFather -> /newbot -> token; apne bot ko kholein aur Start dabayein, phir:
+sudo radius-admin alerts telegram 123456789:AAxxxx        # chat id khud dhoond leta hai
+# WhatsApp (CallMeBot, free): +34 644 66 32 62 ko "I allow callmebot to send me messages" bhejein -> API key
+sudo radius-admin alerts whatsapp +923001234567 123456
+# Email (Gmail: App password banayein)
+sudo radius-admin alerts email owner@example.com smtp.gmail.com:587 --user me@gmail.com   # password puchega
+
+sudo radius-admin alerts                      # kya on hai
+sudo radius-admin alerts test [telegram|whatsapp|email]
+sudo radius-admin alerts events expiring on   # event on/off
+sudo radius-admin alerts summary-hour 20      # summary ka waqt
+sudo radius-admin alerts summary              # summary abhi bhejein
+sudo radius-admin alerts log                  # bheje gaye alerts
+sudo radius-admin alerts off whatsapp
+```
+- Dashboard → **Settings → Alerts**: teeno channels (har aik ka **Send test** aur **Turn off**), Telegram ka **Find my chat**, events ke switches, summary ka waqt, **Send summary now**, aur bheje gaye alerts ki list (har channel ka nateeja).
+- Tokens / passwords sirf server par `/etc/mikrotiklover-radius/alerts.conf` (root, 600) mein; dashboard par kabhi wapas nahi dikhte (khali chhorein = purana rahe).
+- Aik channel kharab ho (ghalat key, SMTP band) to baaki phir bhi message bhejte hain; ghalti list mein dikhti hai.
+- **Tested** (Telegram / CallMeBot / SMTP ke local test servers ke saath): teeno channels par message; ghalat token / key / password pakra gaya; DDoS + quarantine, router down → back, DNS logger band → wapas, failed job, expiring users, roz ki summary; dobara check par kuch repeat nahi; 38 automatic tests (`tests/test-alerts.py`).
+
 ## 7c. Automatic updates (har hafte, khud)
 
 `sudo radius-admin update` (cron: Tuesday raat) yeh sab update karta hai:

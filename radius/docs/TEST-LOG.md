@@ -57,3 +57,9 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 04:33 | Dashboard Settings → Off-site copy | OK — status, key, Test/Send/Show password/Turn off; switch to cloud; bad target refused; phone fits (fixed: form was wider than phone screen) |
 | 04:33 | Fix: manual 'offsite send' did not update 'Last copy'; SSH port showed 22 | Fixed + re-tested |
 | 04:33 | UI suite (41 checks) + 10 automatic suites after off-site | All pass (UI test: 2 locators made exact, expected 400 allowed) |
+| 04:43 | Alerts: Telegram / WhatsApp / Email setup + test (local fake servers; real ones blocked here) | OK — all 3 delivered; Telegram chat id found automatically; settings file 600 |
+| 04:43 | Alerts: wrong token / API key / SMTP password / SMTP down | OK — each error shown, other channels still sent |
+| 04:43 | Alerts check: DDoS + quarantine, router down→back, DNS logger stopped→back, failed job, expiring, summary | OK — grouped in one message, no repeats on next check |
+| 04:43 | Bug: emoji broken in alert history (database charset) | Fixed — utf8mb4 for the alerts DB connection |
+| 04:43 | Dashboard Settings → Alerts | OK — per-channel test/off, find chat, events, summary hour, history; secrets never sent to browser; phone fits |
+| 04:43 | Suites: test-alerts (38) + UI (42) + 10 other suites | All pass |

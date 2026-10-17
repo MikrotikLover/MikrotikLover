@@ -686,6 +686,7 @@ ROUTES.settings = async () => {
         { label: "", render: (b) => h("a", { class: "btn small", href: `/api/backups/${encodeURIComponent(b.name)}` }, "⬇ Download") }], bk.backups, "No backup yet."),
       h("div", { class: "toolbar" }, h("button", { class: "primary", onclick: async (e) => { e.target.disabled = true; await act(api("POST", "/api/backups")); route(); } }, "Backup now"))));
     wide.push(offsiteCard(bk.offsite || { type: "off" }));
+    wide.push(await alertsCard());
     wide.push(card("Automatic updates", "every week (Tuesday night) + hourly lists",
       h("div", { class: "muted" }, "App catalog, IP owner lists, names of newly found apps, threat lists (virus / attacks), VPN lists and the router rules update themselves. Hourly: app inventory, website names, VPN watch, security scan, learned app domains."),
       table([{ label: "Job", key: "name" }, { label: "Last run", key: "when" },
@@ -716,6 +717,72 @@ ROUTES.settings = async () => {
       { label: "Action", key: "action", wrap: true }, { label: "Result", render: (a) => a.result === "ok" ? badge("ok", "ok") : badge(a.result, "bad") }], audit)));
   }
   shell("Settings", h("div", { class: "stack" }, h("div", { class: "grid g-2" }, parts), wide));
+};
+
+// Alerts: Telegram / WhatsApp / email when something needs attention, plus a daily summary
+const ALERT_EVENTS = [
+  ["security", "Virus, hacker attack, DDoS", "only HIGH danger"], ["quarantine", "Device quarantined", "automatic or by an admin"],
+  ["router", "Router down / back", "router stops answering (2 checks)"], ["service", "Server service stopped", "FreeRADIUS, database, DNS logger, traffic"],
+  ["jobs", "Backup / update failed", "nightly backup, off-site copy, updates"], ["disk", "Disk almost full", "under 10% free"],
+  ["expiring", "Users expiring", "subscription ends within 24 hours"], ["summary", "Daily summary", "users, data, sales, security"]];
+const alertsCard = async () => {
+  const { status: st = {}, log = [] } = await api("GET", "/api/alerts");
+  const s = st.settings || {}, on = st.channels || [], evs = st.events || [];
+  const inp = (name, label, attrs = {}) => h("label", { class: "field" }, label, h("input", { name, value: s[name] || "", ...attrs }));
+  const secret = (name, label) => inp(name, label, { type: "password", autocomplete: "off", placeholder: s[name] ? "saved — empty = keep" : "", value: "" });
+  const test = (ch) => h("button", { type: "button", class: "small", disabled: !on.includes(ch), onclick: async (e) => {
+    e.target.disabled = true; await act(api("POST", "/api/alerts/test", { channel: ch })); route(); } }, "Send test");
+  const off = (ch) => on.includes(ch) ? h("button", { type: "button", class: "small danger", onclick: async () => {
+    if (await act(api("POST", "/api/alerts", { [`off_${ch}`]: true }))) route(); } }, "Turn off") : null;
+  const head = (ch, title) => h("div", { class: "toolbar" }, h("b", { class: "grow" }, title), badge(on.includes(ch) ? "on" : "off", on.includes(ch) ? "ok" : ""), test(ch), off(ch));
+  const chatSel = h("div", { class: "muted small" });
+  const f = h("form", { class: "stack", onsubmit: async (e) => {
+    e.preventDefault();
+    const v = formValues(f);
+    v.events = ALERT_EVENTS.map(([k]) => k).filter((k) => v[`ev_${k}`]);
+    if (await act(api("POST", "/api/alerts", v))) route();
+  } },
+    h("div", { class: "grid g-2 alert-channels" },
+      h("div", { class: "sub-card" }, head("telegram", "Telegram"),
+        h("div", { class: "muted small" }, "In Telegram open @BotFather → /newbot → copy the token. Then open your new bot and press Start, and click Find my chat."),
+        secret("TELEGRAM_TOKEN", "Bot token"),
+        h("label", { class: "field" }, "Chat id", h("div", { class: "toolbar" }, h("input", { name: "TELEGRAM_CHAT", value: s.TELEGRAM_CHAT || "", class: "grow" }),
+          h("button", { type: "button", class: "small", onclick: async () => {
+            const tok = f.querySelector("[name=TELEGRAM_TOKEN]").value.trim();
+            let r = null;
+            try { r = await api("POST", "/api/alerts/telegram-chats", { token: tok }); } catch (err) { return toast(err.message, true); }
+            chatSel.replaceChildren();
+            if (!r.chats.length) return toast(r.message || "No chat yet — press Start in your bot, then try again", true);
+            r.chats.forEach((c) => chatSel.append(h("button", { type: "button", class: "small", onclick: () => { f.querySelector("[name=TELEGRAM_CHAT]").value = c.id; } }, `${c.name || "chat"} (${c.id})`)));
+            if (r.chats.length === 1) { f.querySelector("[name=TELEGRAM_CHAT]").value = r.chats[0].id; toast(`Chat found: ${r.chats[0].name} — press Save`); }
+          } }, "Find my chat"))), chatSel),
+      h("div", { class: "sub-card" }, head("whatsapp", "WhatsApp (CallMeBot)"),
+        h("div", { class: "muted small" }, "Free: save +34 644 66 32 62 in your phone, send it on WhatsApp \"I allow callmebot to send me messages\" — the reply has your API key."),
+        inp("WHATSAPP_PHONE", "Your WhatsApp number", { placeholder: "+923001234567" }), secret("WHATSAPP_APIKEY", "API key")),
+      h("div", { class: "sub-card full" }, head("email", "Email (SMTP)"),
+        h("div", { class: "muted small" }, "Gmail: smtp.gmail.com, port 587, STARTTLS, your address, and an App password (Google account → Security → App passwords)."),
+        h("div", { class: "form cols" }, inp("EMAIL_TO", "Send to (comma = more)", { placeholder: "owner@example.com" }), inp("SMTP_HOST", "SMTP server", { placeholder: "smtp.gmail.com" }),
+          inp("SMTP_PORT", "Port", { type: "number", min: 1, max: 65535, placeholder: "587" }),
+          h("label", { class: "field" }, "Security", h("select", { name: "SMTP_TLS" }, ["starttls", "ssl", "none"].map((t) => h("option", { value: t, selected: (s.SMTP_TLS || "starttls") === t }, t.toUpperCase())))),
+          inp("SMTP_USER", "Login (user)"), secret("SMTP_PASS", "Password / app password"), inp("EMAIL_FROM", "From (empty = login)")))),
+    h("div", {}, h("b", {}, "Send an alert for"),
+      h("div", { class: "checks alert-events" }, ALERT_EVENTS.map(([k, t, d]) => {
+        const cb = h("input", { type: "checkbox", name: `ev_${k}`, checked: evs.includes(k), onchange: (e) => e.target.closest(".check").classList.toggle("on", e.target.checked) });
+        return h("label", { class: "check" + (evs.includes(k) ? " on" : "") }, cb, h("div", {}, h("b", {}, t), h("span", {}, d)));
+      })),
+      h("label", { class: "field inline" }, "Daily summary at", h("select", { name: "SUMMARY_HOUR" },
+        Array.from({ length: 24 }, (_, i) => h("option", { value: i, selected: (st.summary_hour ?? 21) === i }, `${String(i).padStart(2, "0")}:00`))))),
+    h("div", { class: "toolbar" }, h("button", { class: "primary", type: "submit" }, "Save"),
+      h("button", { type: "button", disabled: !on.length, onclick: async (e) => { e.target.disabled = true; await act(api("POST", "/api/alerts/test", {})); route(); } }, "Send test to all"),
+      h("button", { type: "button", disabled: !on.length, onclick: async (e) => { e.target.disabled = true; await act(api("POST", "/api/alerts/summary")); route(); } }, "Send summary now"),
+      h("span", { class: "muted" }, st.last_check ? `Checked every 5 minutes · last ${st.last_check}` : "Checked every 5 minutes")));
+  return card("Alerts", on.length ? `on: ${on.map((c) => ({ telegram: "Telegram", whatsapp: "WhatsApp", email: "Email" })[c]).join(", ")}` : "off — set up a channel",
+    h("div", { class: "muted" }, "Get a message on your phone when a router goes down, a virus or attack is found, a device is quarantined, a backup fails … Many problems at once come as one message. Nothing is sent twice."),
+    f,
+    h("details", {}, h("summary", {}, `Sent alerts (${log.length})`),
+      table([{ label: "When", render: (a) => String(a.at).slice(0, 16) }, { label: "Kind", render: (a) => badge(a.kind, a.kind === "test" ? "" : a.kind === "summary" ? "info" : "warn") },
+        { label: "Alert", render: (a) => h("span", { title: a.text }, a.title), wrap: true },
+        { label: "Result", render: (a) => badge(a.result.slice(0, 80), /^((telegram|whatsapp|email): ok(, )?)+$/.test(a.result) ? "ok" : "bad"), wrap: true }], log, "No alert sent yet.")));
 };
 
 // Off-site copy of the nightly backup: a backup server over SSH, or Google Drive / Dropbox / S3 ... via rclone

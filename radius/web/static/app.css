@@ -212,3 +212,11 @@ dialog:has(.policy-editor) { width: min(780px, calc(100vw - 32px)); }
 [hidden] { display: none !important; }
 .check input { flex: none; width: 16px; height: 16px; margin-top: 2px; }
 .table-wrap + .toolbar, .empty + .toolbar { margin-top: 30px; }
+/* alerts card */
+.sub-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.sub-card.full, .alert-channels .full { grid-column: 1 / -1; }
+.muted.small, div.small { font-size: 12px; }
+.alert-events { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); margin: 8px 0; }
+label.field.inline { flex-direction: row; align-items: center; gap: 10px; }
+label.field.inline select { width: auto; }
+details > summary { cursor: pointer; font-weight: 600; margin: 4px 0 8px; }

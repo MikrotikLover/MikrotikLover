@@ -1680,6 +1680,80 @@ def backup_download(name):
     return send_from_directory(BACKUP_DIR, name, as_attachment=True)
 
 
+# ------------------------------------------------------------------ alerts (Telegram / WhatsApp / email)
+ALERT_FIELDS = ("TELEGRAM_TOKEN", "TELEGRAM_CHAT", "WHATSAPP_PHONE", "WHATSAPP_APIKEY", "EMAIL_TO", "EMAIL_FROM",
+                "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "SMTP_TLS", "SUMMARY_HOUR")
+ALERT_SECRETS = ("TELEGRAM_TOKEN", "WHATSAPP_APIKEY", "SMTP_PASS")
+
+
+@app.get("/api/alerts")
+@login_required("admin")
+def alerts_get():
+    ok, out = radius_admin(["alerts", "status", "--json"], log=False, timeout=20)
+    try:
+        st = json.loads(out) if ok else {}
+    except ValueError:
+        st = {}
+    log = jsonable(q("SELECT at, kind, title, text, result FROM ml_alert ORDER BY id DESC LIMIT 50"))
+    return jsonify(status=st, log=log)
+
+
+@app.post("/api/alerts")
+@login_required("admin")
+def alerts_set():
+    d = body()
+    lines = []
+    for k in ALERT_FIELDS:
+        if k not in d:
+            continue
+        v = "" if d[k] is None else str(d[k]).strip()
+        if "\n" in v or "\r" in v or len(v) > 256:
+            abort(400, f"invalid {k}")
+        if k in ALERT_SECRETS and (not v or v.startswith("•")):
+            continue   # empty / masked = keep the saved secret
+        lines.append(f"{k}={v}")
+    for ch, keys in (("telegram", ("TELEGRAM_TOKEN", "TELEGRAM_CHAT")), ("whatsapp", ("WHATSAPP_PHONE", "WHATSAPP_APIKEY")),
+                     ("email", ("EMAIL_TO", "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "EMAIL_FROM", "SMTP_TLS"))):
+        if d.get(f"off_{ch}"):
+            lines += [f"{k}=" for k in keys]
+    if isinstance(d.get("events"), list):
+        ev = [e for e in d["events"] if isinstance(e, str) and re.match(r"^[a-z]{1,16}$", e)]
+        lines.append("EVENTS=" + ",".join(ev))
+    if not lines:
+        abort(400, "nothing to save")
+    ok, msg = radius_admin(["alerts", "set"], stdin="\n".join(lines) + "\n", action="alerts settings")
+    return result(ok, msg)
+
+
+@app.post("/api/alerts/test")
+@login_required("admin")
+def alerts_test():
+    ch = field(body(), "channel", re.compile(r"^(telegram|whatsapp|email)$"))
+    ok, msg = radius_admin(["alerts", "test"] + ([ch] if ch else []), timeout=90)
+    return result(ok, msg)
+
+
+@app.post("/api/alerts/telegram-chats")
+@login_required("admin")
+def alerts_telegram_chats():
+    tok = field(body(), "token", re.compile(r"^\d{3,15}:[A-Za-z0-9_-]{20,100}$"), maxlen=120)
+    if tok:
+        ok, msg = radius_admin(["alerts", "set"], stdin=f"TELEGRAM_TOKEN={tok}\n", action="alerts telegram token")
+        if not ok:
+            return result(ok, msg)
+    ok, out = radius_admin(["alerts", "telegram-chats"], timeout=30)
+    if not ok:
+        return result(ok, out)
+    chats = [{"id": l.split("\t", 1)[0], "name": l.split("\t", 1)[1] if "\t" in l else ""} for l in out.splitlines() if re.match(r"^-?\d+\t", l)]
+    return jsonify(ok=True, chats=chats, message="" if chats else out)
+
+
+@app.post("/api/alerts/summary")
+@login_required("admin")
+def alerts_summary():
+    return result(*radius_admin(["alerts", "summary"], timeout=90))
+
+
 @app.post("/api/updates")
 @login_required("admin")
 def run_updates():

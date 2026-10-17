@@ -256,3 +256,14 @@ CREATE TABLE IF NOT EXISTS ml_quarantine (
   KEY idx_ip (ip),
   KEY idx_user (username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Alerts sent to Telegram / WhatsApp / email (history for the dashboard)
+CREATE TABLE IF NOT EXISTS ml_alert (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  kind VARCHAR(32) NOT NULL DEFAULT '',
+  title VARCHAR(255) NOT NULL DEFAULT '',
+  text TEXT NOT NULL,
+  result VARCHAR(255) NOT NULL DEFAULT '',
+  KEY idx_at (at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -176,7 +176,10 @@ Users ko connect karne ka tareeqa batane ke liye unhein `https://SERVER:8443/con
 | Har ghante | App domains seekhna, nayi apps dhoondna, app inventory, website names, VPN watch scan, security scan, router rules build |
 | Har 15 minute (router) | Auto-sync: router server se nayi rules leta hai (sirf jab kuch badla ho) |
 | Har hafte (Tuesday raat) | `radius-admin update`: app catalog, IP owner lists, nayi apps ke naam, threat lists, VPN lists, router rules |
-| Har raat 02:43 | Poora backup (`/var/backups/mikrotiklover`, aakhri 14 rakhe jate hain) |
+| Har raat 02:43 | Poora backup (`/var/backups/mikrotiklover`, aakhri 14 rakhe jate hain) + off-site copy (agar set ho) |
+| Har 5 minute | Alerts check: router / service down, virus / attack, quarantine, failed backup … (`radius-admin alerts check`) + roz ki summary |
+
+**Alerts phone par:** `sudo radius-admin alerts telegram BOT_TOKEN` (ya `whatsapp PHONE APIKEY`, ya `email TO smtp.gmail.com:587 --user ...`), phir `sudo radius-admin alerts test`. Ya dashboard → **Settings → Alerts**. Tafseel README section 7d.
 
 Status: Dashboard → **Settings → Automatic updates** (har kaam ka aakhri run aur nateeja). Sab abhi chalane ke liye: `sudo radius-admin update`.
 
@@ -274,6 +277,7 @@ Log files: `/var/log/mikrotik/` (`dns.log`, `webfilter.log`, `router.log`, `traf
 | TCP 8443 | Browser / router → server | Dashboard, connect guide, router auto-sync |
 | TCP 8081 | Quarantined device → server | Warning page for infected devices (plain HTTP) |
 | TCP 22 (ya jo port diya) | Server → backup server | Off-site backup (SSH), sirf jab set ho |
+| TCP 443 / 587 | Server → internet | Alerts: Telegram, CallMeBot (WhatsApp), SMTP email |
 
 | Path | Kya |
 |---|---|

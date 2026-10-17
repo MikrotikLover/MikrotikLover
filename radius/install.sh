@@ -36,7 +36,7 @@ command -v apt-get >/dev/null || die "Only Debian/Ubuntu are supported"
 log "Installing FreeRADIUS + MariaDB"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq freeradius freeradius-mysql freeradius-utils mariadb-server openssl rsyslog python3 python3-pymysql dnsmasq-base openssh-client >/dev/null
+apt-get install -y -qq freeradius freeradius-mysql freeradius-utils mariadb-server openssl rsyslog python3 python3-pymysql dnsmasq-base openssh-client iputils-ping >/dev/null
 # eapol_test lets "radius-admin test --peap" simulate a real Wi-Fi client (optional package)
 apt-get install -y -qq eapoltest >/dev/null 2>&1 || warn "eapoltest not available; PEAP self-test disabled"
 [ -d "$RADDB" ] || die "$RADDB not found — unexpected FreeRADIUS layout"
@@ -204,6 +204,8 @@ cat > /etc/cron.d/mikrotiklover <<'EOF'
 7 * * * * root /usr/local/sbin/radius-admin hourly >/dev/null 2>&1
 # weekly: app catalog, IP owners, new app names, threat lists, VPN lists, router rules
 17 4 * * 2 root /usr/local/sbin/radius-admin update >/dev/null 2>&1
+# alerts: Telegram / WhatsApp / email when something needs attention (+ daily summary); nothing is sent until set up
+2-59/5 * * * * root /usr/local/sbin/radius-admin alerts check >/dev/null 2>&1
 # nightly complete backup (newest 14 kept in /var/backups/mikrotiklover)
 43 2 * * * root /usr/local/sbin/radius-admin backup --auto --quiet >/dev/null 2>&1
 EOF
@@ -212,7 +214,7 @@ command -v cron >/dev/null || apt-get install -y -qq cron >/dev/null 2>&1 || war
 install -d -m 755 /usr/local/lib/mikrotiklover
 install -m 644 "$SCRIPT_DIR/tools/mlreport.py" /usr/local/lib/mikrotiklover/mlreport.py
 install -m 644 "$SCRIPT_DIR/tools/flowcollector.py" /usr/local/lib/mikrotiklover/flowcollector.py
-install -m 644 "$SCRIPT_DIR/tools/cdnmap.py" "$SCRIPT_DIR/tools/cdnlearn.py" "$SCRIPT_DIR/tools/cdn-apps.json" "$SCRIPT_DIR/tools/ports.py" "$SCRIPT_DIR/tools/appinv.py" "$SCRIPT_DIR/tools/vpn.py" "$SCRIPT_DIR/tools/sentinel.py" /usr/local/lib/mikrotiklover/
+install -m 644 "$SCRIPT_DIR/tools/cdnmap.py" "$SCRIPT_DIR/tools/cdnlearn.py" "$SCRIPT_DIR/tools/cdn-apps.json" "$SCRIPT_DIR/tools/ports.py" "$SCRIPT_DIR/tools/appinv.py" "$SCRIPT_DIR/tools/vpn.py" "$SCRIPT_DIR/tools/sentinel.py" "$SCRIPT_DIR/tools/alerts.py" /usr/local/lib/mikrotiklover/
 install -d -m 755 /var/lib/mikrotiklover
 # Web-filter builder (router rules from policies, app lists and the VPN lists) — radius-admin policy build
 install -d -m 755 /usr/local/lib/mikrotiklover/webfilter/categories /usr/local/lib/mikrotiklover/webfilter/allowonly

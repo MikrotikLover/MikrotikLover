@@ -1820,6 +1820,69 @@ cmd_offsite() {
     esac
 }
 
+# ---------------------------------------------------------------- alerts (Telegram / WhatsApp / email)
+ALERTS_PY=/usr/local/lib/mikrotiklover/alerts.py
+alerts_py() { ML_BRAND="$(setting_get brand 2>/dev/null || true)" python3 -I "$ALERTS_PY" --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@"; }
+
+cmd_alerts() {
+    local sub=${1:-status}; shift || true
+    case $sub in
+    status) alerts_py status "$@" ;;
+    telegram)
+        local token=${1:-} chat=${2:-}
+        [ -n "$token" ] || die "usage: radius-admin alerts telegram BOT_TOKEN [CHAT_ID]   (make a bot with @BotFather)"
+        printf 'TELEGRAM_TOKEN=%s\nTELEGRAM_CHAT=%s\n' "$token" "$chat" | alerts_py set >/dev/null
+        if [ -z "$chat" ]; then
+            local chats; chats=$(alerts_py telegram-chats) || die "$chats"
+            if [ "$(grep -c $'\t' <<<"$chats")" = 1 ]; then
+                chat=$(cut -f1 <<<"$chats"); printf 'TELEGRAM_CHAT=%s\n' "$chat" | alerts_py set >/dev/null
+                ok "Telegram: chat $(cut -f2- <<<"$chats") ($chat) — test: radius-admin alerts test telegram"
+            else
+                echo "$chats"; echo "Then: radius-admin alerts telegram TOKEN CHAT_ID"
+            fi
+        else
+            ok "Telegram on (chat $chat) — test: radius-admin alerts test telegram"
+        fi ;;
+    whatsapp)
+        [ $# -eq 2 ] || die "usage: radius-admin alerts whatsapp PHONE APIKEY   (free key: send 'I allow callmebot to send me messages' to CallMeBot on WhatsApp)"
+        printf 'WHATSAPP_PHONE=%s\nWHATSAPP_APIKEY=%s\n' "$1" "$2" | alerts_py set >/dev/null && ok "WhatsApp on ($1) — test: radius-admin alerts test whatsapp" ;;
+    email)
+        local to=${1:-} host=${2:-} user="" from="" tls=starttls pass=""; shift 2 || true
+        [ -n "$to" ] && [ -n "$host" ] || die "usage: radius-admin alerts email TO SMTP_HOST[:PORT] [--user USER] [--from ADDR] [--tls starttls|ssl|none]   (password asked / from stdin)"
+        while [ $# -gt 0 ]; do case $1 in
+            --user) user=${2:-}; shift 2 ;; --from) from=${2:-}; shift 2 ;; --tls) tls=${2:-}; shift 2 ;;
+            *) die "Unknown option $1" ;; esac; done
+        local port=${host##*:}; [ "$port" != "$host" ] || port=""; host=${host%%:*}
+        if [ -n "$user" ]; then
+            if [ -t 0 ]; then read -r -s -p "SMTP password for $user: " pass; echo >&2; else read -r pass || true; fi
+            [ -n "$pass" ] || die "SMTP password is empty"
+        fi
+        printf 'EMAIL_TO=%s\nSMTP_HOST=%s\nSMTP_PORT=%s\nSMTP_USER=%s\nSMTP_PASS=%s\nEMAIL_FROM=%s\nSMTP_TLS=%s\n' \
+            "$to" "$host" "$port" "$user" "$pass" "$from" "$tls" | alerts_py set >/dev/null && ok "Email on ($to via $host) — test: radius-admin alerts test email" ;;
+    off)
+        case ${1:-} in
+            telegram) printf 'TELEGRAM_TOKEN=\nTELEGRAM_CHAT=\n' ;;
+            whatsapp) printf 'WHATSAPP_PHONE=\nWHATSAPP_APIKEY=\n' ;;
+            email)    printf 'EMAIL_TO=\nSMTP_HOST=\nSMTP_PORT=\nSMTP_USER=\nSMTP_PASS=\nEMAIL_FROM=\nSMTP_TLS=\n' ;;
+            *) die "usage: radius-admin alerts off telegram|whatsapp|email" ;;
+        esac | alerts_py set >/dev/null && ok "Alerts: ${1} off" ;;
+    events)
+        local cur; cur=$(alerts_py status --json | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["events"]))')
+        if [ $# -eq 0 ]; then echo "on: ${cur//,/ }"; echo "all: security quarantine router service jobs disk expiring summary"; return; fi
+        local ev=$1 state=${2:-}
+        case $state in
+            on)  cur="$cur,$ev" ;;
+            off) cur=$(tr ',' '\n' <<<"$cur" | grep -vx "$ev" | paste -sd, -) ;;
+            *) die "usage: radius-admin alerts events [EVENT on|off]" ;;
+        esac
+        printf 'EVENTS=%s\n' "$(tr ',' '\n' <<<"$cur" | grep -v '^$' | sort -u | paste -sd, -)" | alerts_py set >/dev/null && ok "Alert '$ev' $state" ;;
+    summary-hour)
+        printf 'SUMMARY_HOUR=%s\n' "${1:-}" | alerts_py set >/dev/null && ok "Daily summary at ${1}:00" ;;
+    set|test|send|check|summary|log|telegram-chats) alerts_py "$sub" "$@" ;;
+    *) die "usage: radius-admin alerts status | telegram TOKEN [CHAT] | whatsapp PHONE KEY | email TO HOST[:PORT] [...] | off CHANNEL | events [EV on|off] | summary-hour H | test [CHANNEL] | send TITLE [TEXT] | check | summary | log [N]" ;;
+    esac
+}
+
 cmd_sales() {
     local days=${1:-30}; valid_int "$days" days
     echo "SELECT DATE(at) AS day, COUNT(*) AS sales, SUM(kind='voucher') AS vouchers, SUM(kind='renew') AS renewals,
@@ -1961,6 +2024,17 @@ Backup, restore, automatic updates
   update                                all automatic updates now (weekly cron): app catalog, IP owners,
                                         new app names, threat lists, VPN lists, router rules
 
+Alerts (Telegram / WhatsApp / email)
+  alerts                                what is on: channels, events, last check
+  alerts telegram BOT_TOKEN [CHAT_ID]   Telegram bot (from @BotFather); no chat id: found after you press Start
+  alerts whatsapp PHONE APIKEY          WhatsApp via CallMeBot (free key)
+  alerts email TO HOST[:PORT] [--user U] [--from A] [--tls starttls|ssl|none]
+  alerts off telegram|whatsapp|email
+  alerts events [EVENT on|off]          security quarantine router service jobs disk expiring summary
+  alerts summary-hour H                 daily summary time (default 21)
+  alerts test [CHANNEL] | send TITLE [TEXT] | summary | log [N]
+  alerts check                          look for problems and send them (cron, every 5 minutes)
+
 CDN detective
   cdn HOSTNAME|IP [--json]             which app/site is behind it (name, DNS evidence, IP owner, context)
   cdn unknown [DAYS]                   heaviest traffic that has no site name yet
@@ -2049,6 +2123,7 @@ case ${1:-help} in
     security) shift; cmd_security "$@" ;;
     domains) shift; cmd_domains "$@" ;;
     backup)  shift; cmd_backup "$@" ;;
+    alerts)  shift; cmd_alerts "$@" ;;
     backups) cmd_backups ;;
     restore) shift; cmd_restore "$@" ;;
     update)  cmd_update ;;

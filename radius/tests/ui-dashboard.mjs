@@ -339,6 +339,25 @@ try {
     expect400 = false;
   }
   ok("settings: off-site copy form (SSH / cloud), bad target refused");
+  {
+    await page.goto(`${URL}/#/blocking`); await page.waitForTimeout(500);
+    await go(page, "#/settings", "Settings");
+    const ac = page.locator(".card", { has: page.locator("h2", { hasText: /^Alerts/ }) });
+    await ac.waitFor({ timeout: 30000 });
+    await page.waitForLoadState("networkidle");
+    if ((await ac.locator(".alert-events input[type=checkbox]").count()) !== 8) throw new Error("alerts: 8 event switches expected");
+    for (const ch of ["Telegram", "WhatsApp", "Email"]) await ac.locator(".sub-card", { hasText: ch }).first().waitFor();
+    if (/AAFake|SmtpPass/.test(await page.content())) throw new Error("alerts: a secret reached the browser");
+    await ac.locator("input[name=WHATSAPP_PHONE]").fill("12ab");
+    await page.evaluate(() => document.querySelectorAll(".toast").forEach((t) => t.setAttribute("data-seen", "1")));
+    expect400 = true;
+    await ac.getByRole("button", { name: "Save", exact: true }).click();
+    const at = page.locator(".toast:not([data-seen])").last();
+    await at.waitFor({ timeout: 15000 });
+    if (!/invalid WHATSAPP_PHONE/.test(await at.textContent())) throw new Error(`alerts: bad phone not refused: ${await at.textContent()}`);
+    expect400 = false;
+  }
+  ok("settings: alerts card (Telegram / WhatsApp / email, 8 events), no secrets in page, bad phone refused");
 
   // business settings
   await go(page, "#/settings", "Settings");
