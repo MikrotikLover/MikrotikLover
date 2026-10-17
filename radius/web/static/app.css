@@ -244,3 +244,4 @@ details > summary { cursor: pointer; font-weight: 600; margin: 4px 0 8px; }
 .day-picks .check { padding: 4px 10px; }
 .toolbar.wrap { flex-wrap: wrap; }
 .speed-out { display: block; margin-top: 10px; }
+.note.warn-note { font-size: 14px; border: 1px solid var(--warn); }

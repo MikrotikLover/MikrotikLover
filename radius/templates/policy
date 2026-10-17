@@ -45,6 +45,16 @@ mikrotiklover_limits {
 			}
 		}
 	}
+	# "Pehle se khabardari": package ends in a few days / most of the data is used -> a warning in
+	# Reply-Message (the hotspot status page shows it: $(radius18) in mikrotik/hotspot-login/status.html)
+	update control {
+		&Tmp-String-6 := "%{sql:SELECT ml_notice('%{User-Name}')}"
+	}
+	if (&control:Tmp-String-6 && (&control:Tmp-String-6 != "")) {
+		update reply {
+			&Reply-Message := &control:Tmp-String-6
+		}
+	}
 	# bandwidth schedule (night boost, peak-hour limit): the speed for this time of day.
 	# A fair-usage speed (quota used up) always wins. The enforcer changes running sessions.
 	if (!(&control:Tmp-String-1 =~ /^fup:/)) {

@@ -99,8 +99,8 @@ FLUSH PRIVILEGES;
 EOF
 # Official FreeRADIUS schema (CREATE TABLE IF NOT EXISTS → safe to re-run)
 mysql "$DB_NAME" < "$RADDB/mods-config/sql/main/mysql/schema.sql"
-mysql "$DB_NAME" < "$SCRIPT_DIR/templates/schema-extra.sql"
-mysql "$DB_NAME" < "$SCRIPT_DIR/templates/functions.sql"
+mysql --default-character-set=utf8mb4 "$DB_NAME" < "$SCRIPT_DIR/templates/schema-extra.sql"
+mysql --default-character-set=utf8mb4 "$DB_NAME" < "$SCRIPT_DIR/templates/functions.sql"
 mysql -e "GRANT EXECUTE ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost'"
 
 # ---------------------------------------------------------------- certificates

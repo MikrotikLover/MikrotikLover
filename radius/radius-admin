@@ -139,7 +139,7 @@ cmd_user() {
     del|delete|rm)
         local u=${1:-}; valid_name "$u" username
         user_exists "$u" || die "No such user '$u'"
-        echo "DELETE FROM radcheck WHERE username=$(q "$u"); DELETE FROM radreply WHERE username=$(q "$u"); DELETE FROM radusergroup WHERE username=$(q "$u"); DELETE FROM ml_account WHERE username=$(q "$u");" | db
+        echo "DELETE FROM radcheck WHERE username=$(q "$u"); DELETE FROM radreply WHERE username=$(q "$u"); DELETE FROM radusergroup WHERE username=$(q "$u"); DELETE FROM ml_account WHERE username=$(q "$u"); DELETE FROM ml_contact WHERE username=$(q "$u");" | db
         ok "User '$u' deleted"
         ;;
     disable)
@@ -173,6 +173,16 @@ cmd_user() {
             ok "User '$u' moved to group '$g'"
         fi
         ;;
+    phone)
+        local u=${1:-} ph=${2:-}; valid_name "$u" username; [ -n "$ph" ] || die "usage: radius-admin user phone NAME +923001234567|-"
+        user_exists "$u" || die "No such user '$u'"
+        if [ "$ph" = - ]; then
+            echo "DELETE FROM ml_contact WHERE username=$(q "$u")" | db; ok "Phone of '$u' removed"
+        else
+            ph=${ph//[ -]/}; [[ $ph =~ ^0[0-9]{10}$ ]] && ph="+92${ph:1}"     # 03001234567 -> +923001234567
+            [[ $ph =~ ^\+?[0-9]{8,15}$ ]] || die "Phone like +923001234567 or 03001234567"
+            echo "REPLACE INTO ml_contact (username, phone) VALUES ($(q "$u"), $(q "$ph"))" | db; ok "Phone of '$u': $ph"
+        fi ;;
     policy)
         local u=${1:-} p=${2:-}; valid_name "$u" username; [ -n "$p" ] || die "usage: radius-admin user policy NAME POLICY|-"
         user_exists "$u" || die "No such user '$u'"
@@ -1572,6 +1582,89 @@ cmd_hourly() { # cron, every hour: one run at a time; each job's result is shown
     run_update "Hourly: VPN & proxy scan" cmd_vpn scan
     run_update "Hourly: security scan" cmd_security scan
     run_update "Hourly: router rules" cmd_policy build
+    [ "$(setting_get notice_sms)" != 1 ] || run_update "Hourly: SMS warnings to users" cmd_notice run
+}
+
+# ---------------------------------------------------------------- "pehle se khabardari": warn users before it runs out
+NOTICE_KEYS="notice_days notice_quota_pct notice_expiry notice_quota notice_hours notice_sms"
+cmd_notice() {
+    local sub=${1:-status}; shift || true
+    case $sub in
+    status)
+        echo "Warn before expiry : $(setting_get notice_days | grep . || echo 2) day(s)   (0 = off)"
+        echo "Warn at data used  : $(setting_get notice_quota_pct | grep . || echo 90)%   (0 = off)"
+        echo "Expiry message     : $(setting_get notice_expiry | grep . || echo '(default) Aap ka package {date} ko khatam ho ga ({left} baqi). Renew ke liye: {contact}')"
+        echo "Data message       : $(setting_get notice_quota | grep . || echo '(default) Aap ka {used} data istemal ho chuka, sirf {left} baqi hai. Renew ke liye: {contact}')"
+        echo "SMS to users       : $([ "$(setting_get notice_sms)" = 1 ] && echo on || echo off), between $(setting_get notice_hours | grep . || echo 9-21) h; gateway: $(alerts_py status --json | python3 -c 'import json,sys; print("set" if json.load(sys.stdin).get("sms") else "not set")')"
+        echo "Users with a phone : $(echo "SELECT COUNT(*) FROM ml_contact" | db)"
+        echo "Warnings right now : $(echo "SELECT COUNT(*) FROM ml_account WHERE ml_notice(username) <> ''" | db) user(s)   (radius-admin notice list)" ;;
+    set)
+        local k=${1:-} v=${2:-}
+        case $k in
+            days) [[ $v =~ ^[0-9]{1,2}$ ]] || die "days: 0-99"; setting_set notice_days "$v" ;;
+            quota-pct) [[ $v =~ ^[0-9]{1,2}$ ]] || die "quota-pct: 0-99"; setting_set notice_quota_pct "$v" ;;
+            expiry-text|quota-text)
+                [ -n "$v" ] && [ ${#v} -le 200 ] && [[ $v != *$'\n'* ]] || die "text: 1-200 characters, one line ({user} {date} {left} {used} {quota} {contact} {brand})"
+                setting_set "notice_${k%-text}" "$v" ;;
+            hours) [[ $v =~ ^([0-9]|1[0-9]|2[0-3])-([1-9]|1[0-9]|2[0-4])$ ]] && [ "${v%-*}" -lt "${v#*-}" ] || die "hours like 9-21"; setting_set notice_hours "$v" ;;
+            sms) [[ $v =~ ^(on|off)$ ]] || die "sms on|off"; setting_set notice_sms "$([ "$v" = on ] && echo 1 || echo 0)" ;;
+            *) die "usage: radius-admin notice set days N | quota-pct N | expiry-text TEXT | quota-text TEXT | hours 9-21 | sms on|off" ;;
+        esac
+        ok "Saved: $k" ;;
+    gateway)
+        # radius-admin notice gateway 'https://sms.example.pk/api?key=K&to={phone}&msg={text}' [--post 'BODY'] [--ok 'REGEX']
+        local url=${1:-} body="" okre=""; shift || true
+        [ -n "$url" ] || die "usage: radius-admin notice gateway 'https://...{phone}...{text}' [--post 'BODY with {phone} {text}'] [--ok 'success word']"
+        while [ $# -gt 0 ]; do case $1 in --post) body=${2:-}; shift 2 ;; --ok) okre=${2:-}; shift 2 ;; *) die "Unknown option $1" ;; esac; done
+        [[ "$url$body" == *"{text}"* && "$url$body" == *"{phone"* ]] || die "the URL or body must contain {phone} (or {phone0}) and {text}"
+        printf 'SMS_URL=%s\nSMS_METHOD=%s\nSMS_BODY=%s\nSMS_OK=%s\n' "$url" "$([ -n "$body" ] && echo POST || echo GET)" "$body" "$okre" | alerts_py set >/dev/null
+        ok "SMS gateway saved — test: radius-admin notice test 03001234567" ;;
+    gateway-set) alerts_py set >/dev/null && ok "SMS gateway saved — try: Send test SMS" ;;   # dashboard: SMS_* lines on stdin
+    test)
+        local ph=${1:-}; [ -n "$ph" ] || die "usage: radius-admin notice test PHONE"
+        ph=${ph//[ -]/}; [[ $ph =~ ^0[0-9]{10}$ ]] && ph="+92${ph:1}"
+        alerts_py sms "$ph" "Test: $(setting_get brand | grep . || echo WiFi) — SMS warnings work." ;;
+    show)
+        local u=${1:-}; valid_name "$u" username
+        local t; t=$(echo "SELECT ml_notice($(q "$u"))" | db); echo "${t:-(no warning for '$u' right now)}" ;;
+    list)
+        dbt <<<"SELECT a.username, IFNULL(c.phone,'-') AS phone, ml_notice(a.username) AS warning
+                FROM ml_account a LEFT JOIN ml_contact c ON c.username=a.username
+                WHERE ml_notice(a.username) <> '' ORDER BY a.username LIMIT 200" ;;
+    run)
+        # send each warning once (per expiry date / data period) to users with a phone, in the allowed hours
+        local dry=${1:-} hrs a b now rows u ph kind ref text n=0 f=0
+        [ "$dry" = --dry-run ] || [ "$(setting_get notice_sms)" = 1 ] || { echo "SMS warnings are off (radius-admin notice set sms on)"; return 0; }
+        hrs=$(setting_get notice_hours | grep . || echo 9-21); a=${hrs%-*}; b=${hrs#*-}; now=$((10#$(date +%H)))
+        if [ "$dry" != --dry-run ] && { [ "$now" -lt "$a" ] || [ "$now" -ge "$b" ]; }; then echo "outside $hrs h — later"; return 0; fi
+        rows=$(echo "SELECT x.username, x.phone, x.kind, x.ref, x.text FROM (
+                  SELECT a.username, c.phone, 'expiry' AS kind, DATE_FORMAT(a.expires_at,'%Y-%m-%d %H:%i') AS ref, ml_notice_expiry(a.username) AS text
+                    FROM ml_account a JOIN ml_contact c ON c.username=a.username
+                  UNION ALL
+                  SELECT a.username, c.phone, 'quota',
+                         CONCAT(IFNULL(DATE_FORMAT(a.quota_since,'%Y-%m-%d %H:%i'),'-'), '/',
+                                DATE_FORMAT(NOW(), CASE p.quota_period WHEN 'monthly' THEN '%Y-%m' WHEN 'daily' THEN '%Y-%m-%d' ELSE 'all' END)),
+                         ml_notice_quota(a.username)
+                    FROM ml_account a JOIN ml_contact c ON c.username=a.username LEFT JOIN ml_plan p ON p.name=a.plan) x
+                WHERE x.text <> '' AND NOT EXISTS (SELECT 1 FROM ml_notice_sent s WHERE s.username=x.username AND s.kind=x.kind AND s.ref=x.ref
+                                                         AND (s.result LIKE 'sms: ok%' OR s.at < NOW() - INTERVAL 1 DAY))
+                LIMIT 500" | db)
+        while IFS=$'\t' read -r u ph kind ref text; do
+            [ -n "$u" ] || continue
+            if [ "$dry" = --dry-run ]; then echo "would send to $u ($ph): $text"; n=$((n+1)); continue; fi
+            local res; if res=$(alerts_py sms "$ph" "$text" 2>&1); then n=$((n+1)); else f=$((f+1)); fi
+            # a failed one is tried again every hour for a day
+            echo "REPLACE INTO ml_notice_sent (username, kind, ref, phone, text, result) VALUES
+                  ($(q "$u"), $(q "$kind"), $(q "$ref"), $(q "$ph"), $(q "${text:0:255}"), $(q "${res:0:255}"))" | db
+        done <<<"$rows"
+        echo "DELETE FROM ml_notice_sent WHERE at < NOW() - INTERVAL 180 DAY" | db
+        [ "$f" = 0 ] || { echo "$n warning(s) sent, $f failed (radius-admin notice log)"; return 1; }
+        ok "$n warning(s) $([ "$dry" = --dry-run ] && echo 'would be sent' || echo sent)" ;;
+    log)
+        local n=${1:-30}; valid_int "$n" N
+        dbt <<<"SELECT at, username, phone, kind, LEFT(text,60) AS text, LEFT(result,40) AS result FROM ml_notice_sent ORDER BY at DESC LIMIT $n" ;;
+    *) die "usage: radius-admin notice status | set KEY VALUE | gateway URL [--post BODY] [--ok WORD] | test PHONE | show USER | list | run [--dry-run] | log [N]" ;;
+    esac
 }
 
 cmd_update() {
@@ -2132,6 +2225,16 @@ Backup, restore, automatic updates
   update                                all automatic updates now (weekly cron): app catalog, IP owners,
                                         new app names, threat lists, VPN lists, router rules
 
+Warn users before it runs out ("pehle se khabardari")
+  notice                                settings + how many users get a warning now
+  notice set days 2 | quota-pct 90      warn N days before expiry / when N% of the data is used (0 = off)
+  notice set expiry-text|quota-text "..."   own words: {user} {date} {left} {used} {quota} {contact} {brand}
+  notice show USER | list               the warning a user sees now (hotspot status page, login reply)
+  user phone NAME 03001234567|-         phone for SMS warnings
+  notice gateway 'https://...{phone}...{text}' [--post BODY] [--ok WORD]   any SMS / WhatsApp HTTP gateway
+  notice set sms on|off | hours 9-21    send SMS (hourly, once per expiry date / data period, only these hours)
+  notice test PHONE | run [--dry-run] | log
+
 Speed schedule (night boost, peak-hour limit)
   speed list                            all time windows with their speed
   speed add NAME --rate 20M/20M --time 22:00-06:00 [--days mon,tue,...] [--group G | --plan P | --user U]
@@ -2244,6 +2347,7 @@ case ${1:-help} in
     backup)  shift; cmd_backup "$@" ;;
     alerts)  shift; cmd_alerts "$@" ;;
     speed)   shift; cmd_speed "$@" ;;
+    notice)  shift; cmd_notice "$@" ;;
     doctor|health) shift; python3 -I /usr/local/lib/mikrotiklover/health.py --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@" ;;
     backups) cmd_backups ;;
     restore) shift; cmd_restore "$@" ;;

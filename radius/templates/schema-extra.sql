@@ -291,3 +291,22 @@ CREATE TABLE IF NOT EXISTS ml_rate_applied (
   rate VARCHAR(64) NOT NULL,
   applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Users' phone numbers (warning SMS before the package / data runs out)
+CREATE TABLE IF NOT EXISTS ml_contact (
+  username VARCHAR(64) NOT NULL PRIMARY KEY,
+  phone VARCHAR(20) NOT NULL DEFAULT ''
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Warnings already sent to users (each once per expiry date / quota period)
+CREATE TABLE IF NOT EXISTS ml_notice_sent (
+  username VARCHAR(64) NOT NULL,
+  kind VARCHAR(16) NOT NULL,
+  ref VARCHAR(64) NOT NULL,
+  phone VARCHAR(20) NOT NULL DEFAULT '',
+  text VARCHAR(255) NOT NULL DEFAULT '',
+  result VARCHAR(255) NOT NULL DEFAULT '',
+  at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (username, kind, ref),
+  KEY idx_at (at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -358,6 +358,11 @@ async function userDetail(name) {
       h("div", { class: "toolbar" }, policySel,
         h("button", { onclick: () => act(api("POST", `/api/users/${enc}/policy`, { policy: policySel.value })).then(route) }, "Save"))),
     (() => {
+      const phIn = h("input", { value: d.phone || "", placeholder: "03001234567", size: 14, inputmode: "tel" });
+      return h("label", { class: "field" }, "Phone (warning SMS)", h("span", { class: "help" }, "SMS warning before expiry or when the data is almost used up (Settings → Warn users)."),
+        h("div", { class: "toolbar" }, phIn, h("button", { onclick: () => act(api("POST", `/api/users/${enc}/phone`, { phone: phIn.value.trim() })).then(route) }, "Save")));
+    })(),
+    (() => {
       const cur = d.reply.find((r) => r.attribute === "Framed-IP-Address")?.value || "";
       const ipIn = h("input", { value: cur, placeholder: "e.g. 10.20.0.50", size: 14 });
       return h("label", { class: "field" }, "Static IP (PPPoE)", h("span", { class: "help" }, "Empty = an address from the pool."),
@@ -388,6 +393,7 @@ async function userDetail(name) {
       tile("Group", d.group || "—"),
       tile("Policy", ownPolicy || "group"),
       tile("Data 30 days", bytes(days.reduce((a, x) => a + x.down + x.up, 0)))),
+    d.notice ? h("div", { class: "note warn-note" }, h("b", {}, "⚠ Warning this user sees now: "), d.notice) : null,
     subCard,
     h("div", { class: "grid g-2" }, adminBox,
       card("Settings", null, table([{ label: "Type", key: "t" }, { label: "Attribute", key: "attribute" }, { label: "Value", key: "value", wrap: true }],
@@ -710,6 +716,7 @@ ROUTES.settings = async () => {
       h("div", { class: "toolbar" }, h("button", { class: "primary", onclick: async (e) => { e.target.disabled = true; await act(api("POST", "/api/backups")); route(); } }, "Backup now"))));
     wide.push(offsiteCard(bk.offsite || { type: "off" }));
     wide.push(await alertsCard());
+    wide.push(await noticeCard());
     wide.push(card("Automatic updates", "every week (Tuesday night) + hourly lists",
       h("div", { class: "muted" }, "App catalog, IP owner lists, names of newly found apps, threat lists (virus / attacks), VPN lists and the router rules update themselves. Hourly: app inventory, website names, VPN watch, security scan, learned app domains."),
       table([{ label: "Job", key: "name" }, { label: "Last run", key: "when" },
@@ -740,6 +747,48 @@ ROUTES.settings = async () => {
       { label: "Action", key: "action", wrap: true }, { label: "Result", render: (a) => a.result === "ok" ? badge("ok", "ok") : badge(a.result, "bad") }], audit)));
   }
   shell("Settings", h("div", { class: "stack" }, h("div", { class: "grid g-2" }, parts), wide));
+};
+
+// "Pehle se khabardari": warn users before the package or the data runs out
+const noticeCard = async () => {
+  const n = await api("GET", "/api/notice");
+  const st = n.settings;
+  const f = h("form", { class: "form cols", onsubmit: async (e) => {
+    e.preventDefault();
+    const v = formValues(f);
+    if (await act(api("POST", "/api/notice", v))) route();
+  } },
+    h("label", { class: "field" }, "Warn days before expiry (0 = off)", h("input", { name: "notice_days", type: "number", min: 0, max: 99, value: st.notice_days })),
+    h("label", { class: "field" }, "Warn when this % of data is used (0 = off)", h("input", { name: "notice_quota_pct", type: "number", min: 0, max: 99, value: st.notice_quota_pct })),
+    h("label", { class: "field full" }, "Expiry message", h("input", { name: "notice_expiry", maxlength: 200, value: st.notice_expiry })),
+    h("label", { class: "field full" }, "Data message", h("input", { name: "notice_quota", maxlength: 200, value: st.notice_quota })),
+    h("div", { class: "full muted small" }, "Words in { } are filled in: {user} {date} {left} {used} {quota} {contact} {brand}. Hotspot users see it on the status page after login (mikrotik/hotspot-login/status.html); everyone gets it in the login reply."),
+    h("label", { class: "check" }, h("input", { type: "checkbox", name: "notice_sms", checked: st.notice_sms === "1" }), "Also send an SMS to users with a phone number (once per expiry / data period)"),
+    h("label", { class: "field" }, "Send SMS only between (hours)", h("input", { name: "notice_hours", value: st.notice_hours, pattern: "[0-9]{1,2}-[0-9]{1,2}", placeholder: "9-21" })),
+    isAdmin() ? h("div", { class: "full" }, h("button", { class: "primary", type: "submit" }, "Save")) : null);
+  const gw = h("form", { class: "form cols", onsubmit: async (e) => {
+    e.preventDefault();
+    if (await act(api("POST", "/api/notice/gateway", formValues(gw)))) route();
+  } },
+    h("label", { class: "field full" }, n.gateway.set ? `SMS gateway URL (saved, ${n.gateway.method}) — enter again to change` : "SMS gateway URL",
+      h("input", { name: "url", placeholder: "https://sms.provider.pk/api?key=KEY&to={phone0}&msg={text}", required: true })),
+    h("label", { class: "field" }, "POST body (empty = GET)", h("input", { name: "body", placeholder: '{"number":"{phone}","message":"{text}"}' })),
+    h("label", { class: "field" }, "Success word in the answer (optional)", h("input", { name: "ok", placeholder: "OK" })),
+    h("div", { class: "full muted small" }, "Any SMS or WhatsApp gateway with an HTTP API (Pakistani SMS companies, UltraMsg, Green-API …). {phone} = +923001234567, {phone0} = 03001234567, {text} = the message."),
+    isAdmin() ? h("div", { class: "full toolbar" }, h("button", { type: "submit" }, "Save gateway"),
+      (() => { const t = h("input", { placeholder: "03001234567", size: 13, inputmode: "tel" });
+        return h("span", { class: "toolbar" }, t, h("button", { type: "button", disabled: !n.gateway.set, onclick: () => act(api("POST", "/api/notice/test", { phone: t.value.trim() })) }, "Send test SMS")); })()) : null);
+  return card("Warn users before it runs out", `${n.users.length} user(s) warned now · ${n.phones} with a phone`,
+    h("div", { class: "muted" }, "\"Pehle se khabardari\": users see a warning a few days before their package ends or when most of their data is used, so they renew in time."),
+    f,
+    h("details", {}, h("summary", {}, "SMS gateway"), gw),
+    h("details", {}, h("summary", {}, `Users with a warning now (${n.users.length})`),
+      table([{ label: "User", render: (u) => h("a", { href: `#/users/${encodeURIComponent(u.username)}` }, u.username) }, { label: "Phone", key: "phone" },
+        { label: "Warning", key: "text", wrap: true }], n.users, "Nobody right now.")),
+    h("details", {}, h("summary", {}, `SMS sent (${n.log.length})`),
+      table([{ label: "When", render: (x) => String(x.at).slice(0, 16) }, { label: "User", key: "username" }, { label: "Phone", key: "phone" },
+        { label: "Kind", render: (x) => badge(x.kind, "warn") }, { label: "Message", key: "text", wrap: true },
+        { label: "Result", render: (x) => badge(x.result.slice(0, 60), /^sms: ok/.test(x.result) ? "ok" : "bad"), wrap: true }], n.log, "No SMS sent yet.")));
 };
 
 // Alerts: Telegram / WhatsApp / email when something needs attention, plus a daily summary

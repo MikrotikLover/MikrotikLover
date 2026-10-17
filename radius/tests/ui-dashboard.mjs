@@ -358,6 +358,12 @@ try {
     expect400 = false;
   }
   ok("settings: alerts card (Telegram / WhatsApp / email, 8 events), no secrets in page, bad phone refused");
+  {
+    const nc = page.locator(".card", { has: page.locator("h2", { hasText: "Warn users before it runs out" }) });
+    await nc.waitFor({ timeout: 30000 });
+    for (const n of ["notice_days", "notice_quota_pct", "notice_expiry", "notice_quota", "notice_hours"]) await nc.locator(`[name=${n}]`).waitFor();
+  }
+  ok("settings: warn-users card (days, %, messages, SMS)");
 
   // business settings
   await go(page, "#/settings", "Settings");

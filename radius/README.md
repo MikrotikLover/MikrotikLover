@@ -512,7 +512,7 @@ Dashboard mein user ke page par **Package** card: plan, expiry, data bar (kitna 
 
 **Dashboard:** *Plans*, *Vouchers* (batches, print, delete unused), *Sales* (roz ki kamai, plan wise, recent), Dashboard par "Sales today / this month" aur "Active packages / unused vouchers". *Settings → Business & branding*: business naam, currency, hotspot Wi-Fi naam, login address, contact, card ke neeche ka text.
 
-**Hotspot login page:** `mikrotik/hotspot-login/login.html` — mobile-friendly, voucher/PIN ke liye (PIN checkbox), error (package expired wagera) dikhata hai, CHAP (password clear text mein nahi jata). Winbox → Files → `hotspot/login.html` replace karein (`md5.js` wahin rehne dein); `BRAND` text badal dein.
+**Hotspot pages:** `mikrotik/hotspot-login/login.html` (+ `status.html`, `alogin.html`: login ke baad waqt / data baqi aur "khabardar" warning, section 7g) — `login.html` mobile-friendly, voucher/PIN ke liye (PIN checkbox), error (package expired wagera) dikhata hai, CHAP (password clear text mein nahi jata). Winbox → Files → `hotspot/login.html` replace karein (`md5.js` wahin rehne dein); `BRAND` text badal dein.
 
 ## 5e. Users ke liye connect guide (link bhejein)
 
@@ -941,6 +941,33 @@ sudo radius-admin speed apply                          # chalte sessions abhi ba
 - 22:00–06:00 jaisa waqt aadhi raat paar karta hai; din (`--days`) woh hai jis din waqt **shuru** hota hai (Friday 23:00–02:00 = Friday raat se Saturday subah tak).
 - Dashboard → **Speed schedule**: rules ki list, har aik ki 24 ghante ki timeline aur "active / waiting" nishan; quick start buttons (Night boost, Peak-hour limit, Weekend boost); aur "Check a user": kisi bhi user ki kisi bhi waqt ki speed.
 - **Tested:** login reply mein schedule wali speed; chalte session par nakli router ko CoA gaya 10M → 20M → 5M → 10M jaise rules band / chalu kiye; dobara chalane par kuch nahi bheja gaya; FUP wale session ko nahi chheda. `tests/test-speed.sh` (20 checks: aadhi raat, din, priority, off rules, CLI ghaltiyan).
+
+## 7g. Pehle se khabardari — package / data khatam hone se pehle user ko batana
+
+User ko **pehle** pata chal jaye taa ke woh waqt par renew kare:
+- **Expiry se N din pehle** (default 2): "Aap ka package 18 Oct 01:13 ko khatam ho ga (19 ghante baqi). Renew ke liye: 0300-…"
+- **Data ka X% istemal hone par** (default 90%): "Aap ka 920 MB data istemal ho chuka, sirf 80 MB baqi hai …"
+
+Kahan dikhta hai:
+1. **Hotspot status page** (login ke baad) aur `alogin.html` par narangi "⚠ Khabardar" box — `mikrotik/hotspot-login/status.html` aur `alogin.html` router par `hotspot/` mein daalein (login.html ke saath). Message RADIUS `Reply-Message` se aata hai (`$(radius18)`).
+2. **SMS / WhatsApp** — jin users ka phone number ho, aik dafa har expiry date / data period ke liye, sirf din ke waqt (default 9–21). Koi bhi HTTP wala SMS ya WhatsApp gateway (Pakistani SMS companies, UltraMsg, Green-API …).
+3. Dashboard: user ke page par "⚠ Warning this user sees now", aur Settings → **Warn users before it runs out** mein jin users ko abhi warning hai unki list, aur bheje gaye SMS.
+
+```bash
+sudo radius-admin notice                          # settings + kitne users ko abhi warning hai
+sudo radius-admin notice set days 3               # 3 din pehle (0 = band)
+sudo radius-admin notice set quota-pct 85         # 85% data par (0 = band)
+sudo radius-admin notice set expiry-text "{user}, aap ka package {date} ko khatam. Renew: {contact}"
+sudo radius-admin notice list | show ali
+sudo radius-admin user phone ali 03001234567
+sudo radius-admin notice gateway 'https://sms.example.pk/api?key=KEY&to={phone0}&msg={text}' --ok OK
+#   POST/JSON gateway: --post '{"number":"{phone}","message":"{text}"}'
+sudo radius-admin notice test 03001234567
+sudo radius-admin notice set sms on               # har ghante khud bhejta hai
+sudo radius-admin notice run --dry-run | log
+```
+- Fail hua SMS agle ghante dobara (aik din tak); kamyab SMS dobara kabhi nahi (nayi expiry / naya data period par naya).
+- **Tested:** login reply mein warning (din / ghante, data MB); hotspot status page ka preview; SMS nakli gateway par GET (03.. number) aur POST JSON; ghalat key ka error log mein; aik dafa hi bheja; renew ke baad nayi warning. `tests/test-notice.sh` (21 checks) + `tests/test-alerts.py` mein SMS checks.
 
 ## 7e. Health check — sab theek hai?
 

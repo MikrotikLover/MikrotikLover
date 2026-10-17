@@ -39,9 +39,13 @@ KEYS = {
     "SMTP_TLS": r"^(starttls|ssl|none)$",
     "EVENTS": r"^[a-z,]*$",
     "SUMMARY_HOUR": r"^([01]?\d|2[0-3])$",
+    "SMS_URL": r"^https?://[^\s]{4,500}$",
+    "SMS_METHOD": r"^(GET|POST)$",
+    "SMS_BODY": r"^[^\n]{1,1000}$",
+    "SMS_OK": r"^[^\n]{1,100}$",
     "BRAND": r"^[^\n]{0,64}$",
 }
-SECRETS = ("TELEGRAM_TOKEN", "WHATSAPP_APIKEY", "SMTP_PASS")
+SECRETS = ("TELEGRAM_TOKEN", "WHATSAPP_APIKEY", "SMTP_PASS", "SMS_URL", "SMS_BODY")
 SERVICES = [("FreeRADIUS", r"^(/usr/sbin/)?freeradius"), ("MariaDB", r"mariadbd|mysqld"),
             ("DNS logger", r"mikrotiklover.*dnsmasq|dnsmasq.*mikrotiklover"), ("Traffic collector", r"flowcollector[.]py")]
 MAX_LINES = 15
@@ -176,6 +180,43 @@ def send_email(c, subject, text):
             s.send_message(m)
     except (OSError, smtplib.SMTPException) as e:
         raise RuntimeError(f"Email: {e}") from None
+
+
+def send_sms(c, phone, text):
+    """Users' SMS / WhatsApp gateway (any provider with an HTTP API). In SMS_URL / SMS_BODY:
+    {phone} {phone0} (03001234567 style) {text}. SMS_BODY starting with "{" is sent as JSON."""
+    if not c.get("SMS_URL"):
+        raise RuntimeError("SMS gateway is not set up")
+    if not re.match(r"^\+?\d{8,15}$", phone):
+        raise RuntimeError(f"invalid phone number {phone}")
+    p0 = "0" + phone[3:] if phone.startswith("+92") else phone.lstrip("+")
+    url_v = {"{phone}": urllib.parse.quote(phone), "{phone0}": urllib.parse.quote(p0), "{text}": urllib.parse.quote(text)}
+    url = c["SMS_URL"]
+    for k, v in url_v.items():
+        url = url.replace(k, v)
+    data, ctype = None, None
+    if c.get("SMS_METHOD", "GET") == "POST":
+        b = c.get("SMS_BODY", "")
+        if b.lstrip().startswith("{"):
+            for k, v in (("{phone}", phone), ("{phone0}", p0), ("{text}", text)):
+                b = b.replace(k, json.dumps(v)[1:-1])
+            ctype = "application/json"
+        else:
+            for k, v in url_v.items():
+                b = b.replace(k, v)
+            ctype = "application/x-www-form-urlencoded"
+        data = b.encode()
+    req = urllib.request.Request(url, data=data, headers={"User-Agent": "MikrotikLover-alerts", **({"Content-Type": ctype} if ctype else {})})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            out = r.read(2000).decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"SMS gateway: {e.code} {e.read(200).decode('utf-8', 'replace')}") from None
+    except OSError as e:
+        raise RuntimeError(f"SMS gateway: {e}") from None
+    if c.get("SMS_OK") and not re.search(c["SMS_OK"], out, re.I):
+        raise RuntimeError("SMS gateway said: " + re.sub(r"\s+", " ", out)[:150])
+    return out[:200]
 
 
 def deliver(c, title, text, only=None):
@@ -392,7 +433,7 @@ def main():
     c = load_conf(conf)
     if cmd == "status":
         st = load_state(statef)
-        info = {"channels": channels(c), "events": events(c), "all_events": list(EVENTS),
+        info = {"channels": channels(c), "events": events(c), "sms": bool(c.get("SMS_URL")), "sms_method": c.get("SMS_METHOD", "GET"), "all_events": list(EVENTS),
                 "summary_hour": int(c.get("SUMMARY_HOUR", "21")), "settings": mask(c),
                 "last_check": time.strftime("%Y-%m-%d %H:%M", time.localtime(st["last_check"])) if st.get("last_check") else ""}
         if "--json" in a:
@@ -404,6 +445,7 @@ def main():
             print("Email    : " + (f"{m['EMAIL_TO']} via {m['SMTP_HOST']}:{m.get('SMTP_PORT', '587')} ({m.get('SMTP_TLS', 'starttls')})" if "email" in info["channels"] else "off"))
             print("Events   : " + " ".join(info["events"]) + f"   (daily summary at {info['summary_hour']}:00)")
             print("Checked  : " + (info["last_check"] or "never (cron runs it every 5 minutes)"))
+            print("User SMS : " + (f"{c.get('SMS_METHOD', 'GET')} gateway set" if c.get("SMS_URL") else "off (radius-admin notice sms ...)"))
     elif cmd == "set":
         try:
             save_conf(set_values(c, sys.stdin.readlines()), conf)
@@ -451,6 +493,14 @@ def main():
             print("\n".join(f"{k}: {v}" for k, v in res.items()))
         else:
             print(text)
+    elif cmd == "sms":
+        if len(pos) < 3:
+            sys.exit("usage: alerts.py sms PHONE TEXT")
+        try:
+            send_sms(c, pos[1], pos[2])
+            print(f"sms: ok ({pos[1]})")
+        except RuntimeError as e:
+            sys.exit(f"ERROR: {e}")
     elif cmd == "telegram-chats":
         if not c.get("TELEGRAM_TOKEN"):
             sys.exit("ERROR: set the bot token first: radius-admin alerts telegram TOKEN")

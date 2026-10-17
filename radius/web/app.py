@@ -71,7 +71,8 @@ def db():
         g.db = pymysql.connect(unix_socket=CONF.get("DB_SOCKET", "/run/mysqld/mysqld.sock"),
                                user=CONF.get("WEB_DB_USER", "radius_web"), password=CONF.get("WEB_DB_PASS", ""),
                                database=CONF.get("DB_NAME", "radius"), autocommit=True, connect_timeout=5,
-                               cursorclass=pymysql.cursors.DictCursor, charset="utf8mb4")
+                               cursorclass=pymysql.cursors.DictCursor, charset="utf8mb4",
+                           init_command="SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci")
     return g.db
 
 
@@ -413,7 +414,10 @@ def user_detail(name):
     sites = q("""SELECT site, SUM(bytes_down) AS down, SUM(bytes_up) AS up FROM traffic_site
                  WHERE username=%s AND bucket >= NOW() - INTERVAL 7 DAY GROUP BY site
                  ORDER BY SUM(bytes_down+bytes_up) DESC LIMIT 15""", (name,))
+    contact = q1("SELECT phone FROM ml_contact WHERE username=%s", (name,))
+    notice = q1("SELECT ml_notice(%s) AS t", (name,))
     return jsonify(name=name, group=grp["groupname"] if grp else "", account=account_info(name),
+                   phone=contact["phone"] if contact else "", notice=(notice or {}).get("t") or "",
                    check=jsonable(check), reply=jsonable(reply),
                    sessions=jsonable(sessions), logins=jsonable(logins), usage=jsonable(usage), sites=jsonable(sites))
 
@@ -1751,6 +1755,84 @@ def speed_check():
         abort(400, "invalid time")
     ok, out = radius_admin(["speed", "now", u] + ([at] if at else []), log=False)
     return result(ok, out)
+
+
+# ------------------------------------------------------------------ warn users before it runs out
+NOTICE_DEFAULTS = {"notice_days": "2", "notice_quota_pct": "90", "notice_hours": "9-21", "notice_sms": "0",
+                   "notice_expiry": "Aap ka package {date} ko khatam ho ga ({left} baqi). Renew ke liye: {contact}",
+                   "notice_quota": "Aap ka {used} data istemal ho chuka, sirf {left} baqi hai. Renew ke liye: {contact}"}
+
+
+@app.get("/api/notice")
+@login_required()
+def notice_get():
+    st = dict(NOTICE_DEFAULTS)
+    for r in q("SELECT k, v FROM ml_setting WHERE k LIKE 'notice\\_%%'"):
+        if r["k"] in st and r["v"] != "":
+            st[r["k"]] = r["v"]
+    ok, out = radius_admin(["alerts", "status", "--json"], log=False, timeout=20)
+    try:
+        a = json.loads(out) if ok else {}
+    except ValueError:
+        a = {}
+    users = q("""SELECT a.username, IFNULL(c.phone,'') AS phone, ml_notice(a.username) AS text FROM ml_account a
+                 LEFT JOIN ml_contact c ON c.username=a.username WHERE ml_notice(a.username) <> '' ORDER BY a.username LIMIT 100""")
+    log = q("SELECT at, username, phone, kind, text, result FROM ml_notice_sent ORDER BY at DESC LIMIT 30")
+    phones = q1("SELECT COUNT(*) AS n FROM ml_contact")["n"]
+    gw = {"set": bool(a.get("sms")), "method": a.get("sms_method", "GET"), "url": (a.get("settings") or {}).get("SMS_URL", "")}
+    return jsonify(settings=st, gateway=gw, users=jsonable(users), log=jsonable(log), phones=phones)
+
+
+@app.post("/api/notice")
+@login_required("admin")
+def notice_set():
+    d = body()
+    msgs = []
+    for key, arg in (("notice_days", "days"), ("notice_quota_pct", "quota-pct"), ("notice_expiry", "expiry-text"),
+                     ("notice_quota", "quota-text"), ("notice_hours", "hours"), ("notice_sms", "sms")):
+        if key not in d:
+            continue
+        v = d[key]
+        if key == "notice_sms":
+            v = "on" if v in (True, "1", "on", 1) else "off"
+        v = str(v).strip()
+        ok, msg = radius_admin(["notice", "set", arg, v], action=f"notice set {arg}")
+        if not ok:
+            return result(ok, msg)
+    return result(True, "Saved")
+
+
+@app.post("/api/notice/gateway")
+@login_required("admin")
+def notice_gateway():
+    d = body()
+    url = field(d, "url", re.compile(r"^https?://\S{4,500}$"), maxlen=500)
+    post = str(d.get("body") or "").strip()
+    okw = str(d.get("ok") or "").strip()
+    if len(post) > 1000 or len(okw) > 100 or "\n" in post + okw:
+        abort(400, "invalid body / success word")
+    if not url:
+        abort(400, "url is required")
+    if not ("{text}" in url + post and "{phone" in url + post):
+        abort(400, "the URL or body must contain {phone} (or {phone0}) and {text}")
+    lines = f"SMS_URL={url}\nSMS_METHOD={'POST' if post else 'GET'}\nSMS_BODY={post}\nSMS_OK={okw}\n"
+    return result(*radius_admin(["notice", "gateway-set"], stdin=lines, action="notice gateway"))
+
+
+@app.post("/api/notice/test")
+@login_required("admin")
+def notice_test():
+    ph = field(body(), "phone", re.compile(r"^\+?[0-9 -]{8,20}$"), required=True, maxlen=20)
+    return result(*radius_admin(["notice", "test", ph], timeout=60))
+
+
+@app.post("/api/users/<name>/phone")
+@login_required("admin")
+def user_phone(name):
+    if not NAME_RE.match(name):
+        abort(400, "invalid name")
+    ph = field(body(), "phone", re.compile(r"^(\+?[0-9 -]{8,20}|-)$"), maxlen=20) or "-"
+    return result(*radius_admin(["user", "phone", name, ph]))
 
 
 # ------------------------------------------------------------------ health check

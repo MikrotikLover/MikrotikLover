@@ -35,6 +35,10 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        if self.path == "/smsjson":
+            d = json.loads(body)
+            got.append(("smsjson", d["number"], d["message"], self.headers.get("Content-Type")))
+            return self.reply(200, '{"status":"sent"}')
         if self.path == f"/bot{TOKEN}/sendMessage":
             d = json.loads(body)
             got.append(("telegram", d["chat_id"], d["text"]))
@@ -49,6 +53,9 @@ class H(BaseHTTPRequestHandler):
                 return self.reply(200, "<p>APIKey is invalid</p>")
             got.append(("whatsapp", q["phone"], q["text"]))
             return self.reply(200, "<p>Message queued</p>")
+        if u.path == "/sms":
+            got.append(("sms", q.get("to"), q.get("msg")))
+            return self.reply(200, "OK queued" if q.get("key") == "K1" else "ERROR bad key")
         if u.path == f"/bot{TOKEN}/getUpdates":
             return self.reply(200, json.dumps({"ok": True, "result": [{"message": {"chat": {"id": 42, "first_name": "Ali"}}}]}))
         self.reply(404, "{}")
@@ -132,6 +139,26 @@ os.environ["ML_BRAND"] = "Lover Net"
 got.clear()
 alerts.deliver(c, "Branded", "", only="telegram")
 check("brand name in the message", "Lover Net" in got[-1][2])
+
+# ------------------------------------------------------------------ SMS to users (any HTTP gateway)
+got.clear()
+sc = {"SMS_URL": f"http://127.0.0.1:{HP}/sms?key=K1&to={{phone0}}&msg={{text}}", "SMS_OK": "^OK"}
+alerts.send_sms(sc, "+923001234567", "Aap ka package \"kal\" & khatam")
+check("sms GET: 03.. number and the text arrive", got[-1] == ("sms", "03001234567", 'Aap ka package "kal" & khatam'))
+try:
+    alerts.send_sms(dict(sc, SMS_URL=sc["SMS_URL"].replace("K1", "K2")), "+923001234567", "x")
+    check("sms: gateway's error answer -> failure", False)
+except RuntimeError as e:
+    check("sms: gateway's error answer -> failure", "bad key" in str(e))
+alerts.send_sms({"SMS_URL": f"http://127.0.0.1:{HP}/smsjson", "SMS_METHOD": "POST", "SMS_BODY": '{"number":"{phone}","message":"{text}"}'},
+                "+923001234567", 'quote " and \\ backslash')
+check("sms POST JSON: valid JSON with quotes", got[-1] == ("smsjson", "+923001234567", 'quote " and \\ backslash', "application/json"))
+for bad in ("12", "+92 300", "abc"):
+    try:
+        alerts.send_sms(sc, bad, "x")
+        check(f"sms: bad number {bad} refused", False)
+    except RuntimeError:
+        check(f"sms: bad number {bad} refused", True)
 
 # ------------------------------------------------------------------ dedupe + up/down
 st = {}
