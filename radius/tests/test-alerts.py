@@ -229,6 +229,15 @@ cfg2 = {"EVENTS": "jobs"}
 open(upd, "a").write("Security scan\t2026-10-17 03:00\tfailed: x\n")
 check("events switched off are not checked", [k for k, _ in alerts.check(cfg2, db, st, updates=upd)] == ["jobs"])
 
+# security events are written by the hourly scan with the time they happened (before the last check)
+db3, st3 = FakeDB(), {"last_check": time.time()}
+db3.sec = [["attack", "Old event", "10.0.0.8", "", "x", "3", "2026-10-17"]]
+check("first check: events already there are only remembered", [k for k, _ in alerts.check({"EVENTS": "security"}, db3, st3)] == [])
+db3.sec.append(["attack", "Fake DHCP server (rogue router on the LAN)", "192.168.88.250", "NULL", "device 00:0C", "1", "2026-10-17"])
+f = alerts.check({"EVENTS": "security"}, db3, st3)
+check("late-written event is still sent, once; NULL user not shown", len(f) == 1 and "— 192.168.88.250," in f[0][1] and "NULL" not in f[0][1]
+      and alerts.check({"EVENTS": "security"}, db3, st3) == [])
+
 # ------------------------------------------------------------------ message + summary time
 k, t, x = alerts.compose([("router", "a")])
 check("one problem: it is the title", (k, t, x) == ("router", "a", ""))

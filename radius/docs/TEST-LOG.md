@@ -80,3 +80,8 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 05:18 | Khabardari SMS: GET + POST JSON gateways (fake), once only, failed retried, renew => new | OK |
 | 05:18 | UI test caught: new help text broke a page locator | Wording changed; 45/45 UI pass |
 | 05:18 | test-notice (21) + test-alerts (44) + speed + health + 10 suites | All pass |
+| 05:23 | LAN guard: router logs via UDP 514 (fake DHCP, ARP many-ips, ARP takeover) | OK — high events in Security, Telegram alert sent |
+| 05:23 | Bug: rsyslog filter dropped router DHCP/script lines | Fixed — 'dhcp alert' and 'ML-' kept in router.log |
+| 05:23 | Bug: alerts missed security events written later with an older time | Fixed — last 26 h + send once; first run only remembers |
+| 05:23 | Bug: radius-admin wrote to the DB as latin1 (— and Urdu broken) | Fixed — my.cnf utf8mb4 + unicode_ci for the mysql client |
+| 05:23 | Suites after LAN guard: sentinel 33, alerts 46, notice, speed, lint, all others | All pass |

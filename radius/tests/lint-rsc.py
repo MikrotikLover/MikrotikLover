@@ -45,6 +45,7 @@ PROPS = {
     "/system logging action": {"name", "target", "remote", "remote-port"},
     "/system logging": {"topics", "action", "prefix"},
     "/ip hotspot profile": {"use-radius", "radius-accounting", "radius-interim-update", "login-by", "mac-auth-mode"},
+    "/ip dhcp-server alert": {"interface", "valid-server", "alert-timeout", "comment", "on-alert", "disabled"},
     "/system script": {"name", "policy", "source", "comment", "dont-require-permissions"},
     "/system scheduler": {"name", "interval", "start-time", "on-event", "policy", "comment"},
 }

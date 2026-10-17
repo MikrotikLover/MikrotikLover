@@ -969,6 +969,18 @@ sudo radius-admin notice run --dry-run | log
 - Fail hua SMS agle ghante dobara (aik din tak); kamyab SMS dobara kabhi nahi (nayi expiry / naya data period par naya).
 - **Tested:** login reply mein warning (din / ghante, data MB); hotspot status page ka preview; SMS nakli gateway par GET (03.. number) aur POST JSON; ghalat key ka error log mein; aik dafa hi bheja; renew ke baad nayi warning. `tests/test-notice.sh` (21 checks) + `tests/test-alerts.py` mein SMS checks.
 
+## 7h. Nakli router (rogue DHCP) aur ARP spoofing
+
+Koi LAN mein ghar wala router laga de ya "fake DHCP" chala de to phones ko ghalat gateway milta hai aur un ki traffic parhi ja sakti hai. ARP spoofing (ettercap, arpspoof, "WiFi killer" apps) mein aik device doosre devices ka roop dhar leta hai (man in the middle). Dono ab pakray jate hain:
+
+- Router par `mikrotik/lan-guard.rsc` import karein ("bridge" ki jagah apna LAN interface) aur `webfilter-logging.rsc` dobara (is mein `dhcp` aur `script` logs shamil hue):
+  - **DHCP alert**: na-maloom DHCP server → "Fake DHCP server (rogue router on the LAN)" — us ka IP aur MAC.
+  - **`ml-arp-watch`** (har minute ARP table): aik device bahut se addresses ka jawab de → "ARP spoofing (one device answers for many addresses)"; aik device aik din mein 3+ addresses le le → "ARP spoofing (one device took over other addresses)". Aik address ka device badalna (phone dobara connect hua) sirf "low".
+- Server: Security → **Hacker attacks** mein (high), alerts (Telegram / WhatsApp / email) par message, aur monthly report mein.
+- Sakht hifazat (optional, file ke aakhir mein): `add-arp=yes` + bridge `arp=reply-only` — sirf jab har device DHCP se IP leta ho.
+- **Tested** (nakli router logs UDP 514 par): fake DHCP → high event + Telegram alert; 24 addresses wala MAC aur 4 addresses le lene wala MAC → ARP spoofing high; aik address change → low. `tests/test-sentinel.py` (4 naye checks), `tests/lint-rsc.py`.
+- **Isi kaam mein 3 purane bugs mile aur theek hue:** (1) server ka rsyslog router ki DHCP / script lines phenk deta tha; (2) alerts woh security events chhor dete the jo scan baad mein purane waqt ke saath likhta hai; (3) `radius-admin` database mein latin1 se likhta tha, is liye "—" aur Urdu jaise huroof toot jate the (ab utf8mb4).
+
 ## 7e. Health check — sab theek hai?
 
 `sudo radius-admin doctor` ya dashboard → **Health check**: server ka har hissa **sabz** (theek), **peela** (dekh lein) ya **laal** (abhi theek karein), aur kharabi ke saath us ka hal likha hota hai.

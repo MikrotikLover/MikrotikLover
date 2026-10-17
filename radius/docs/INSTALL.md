@@ -133,6 +133,7 @@ Scripts `radius/mikrotik/` mein hain. Har file mein `RADIUS_SERVER_IP`, `RADIUS_
 | 5 | `traffic-flow.rsc` | Data usage, ports, VPN connections, DDoS/hacker detection | `radius-admin traffic collector on` |
 | 6 | **Auto-sync** script (dashboard → Blocking → Router auto-sync → Download) | Policies, app lists, VPN list, threat lists khud aate rehte hain | — |
 | 7 | `security.rsc` | Port scan / password guessing / SYN flood / threat lists ka block | (optional) `radius-admin security autoblock on` |
+| 7 | `lan-guard.rsc` | Nakli router (rogue DHCP) aur ARP spoofing (man-in-the-middle) pakarna | `webfilter-logging.rsc` dobara import (dhcp + script logs) |
 | 8 | Optional: `webfilter-<category>.rsc`, `webfilter-adlists.rsc`, `webfilter-safesearch.rsc`, `webfilter-keywords.rsc`, `webfilter-vpn-protocols.rsc` | Sab users par ek jaisi blocking | — |
 
 Har script ke upar comment mein uski tafseel aur use hatane ka tareeqa likha hai.

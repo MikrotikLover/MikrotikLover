@@ -127,6 +127,20 @@ check("router login failures (12 from one IP)", rl and rl[0][0][4] == "45.1.1.1"
 check("router port-scan rule (WF-scan)", find(ev, "Port scan (router saw it)"))
 check("router threat rule from a LAN device -> virus", any(k[1] == "virus" and k[4] == "192.168.88.35" for k in ev.ev))
 check("blocked website (WF-social) is not a security event", not any(k[4] == "192.168.88.36" for k in ev.ev))
+# LAN guard (lan-guard.rsc): fake DHCP server, ARP spoofing
+lg = [f"{iso(T0)} 192.168.88.1 dhcp,critical,error dhcp alert on bridge: discovered unknown dhcp server, mac 00:0C:29:AA:BB:CC, ip 192.168.88.250",
+      f"{iso(T0 + 5)} 192.168.88.1 script,warning ML-ARP many-ips mac=00:0C:29:DE:AD:01 ip=192.168.88.66 ips=24 if=bridge"]
+lg += [f"{iso(T0 + 10 + i)} 192.168.88.1 script,warning ML-ARP changed ip=192.168.88.{40 + i} old=AA:AA:AA:00:00:{40 + i} new=00:0c:29:de:ad:02 if=bridge" for i in range(4)]
+lg += [f"{iso(T0 + 20)} 192.168.88.1 script,warning ML-ARP changed ip=192.168.88.90 old=AA:AA:AA:00:00:90 new=BB:BB:BB:00:00:90 if=bridge"]
+ev2 = sentinel.scan_logs([], lg, [], threats, LAN, lambda ip, t: {"192.168.88.66": "hacker1"}.get(ip, ""))
+fd = find(ev2, "Fake DHCP server")
+check("rogue DHCP server: attack, high, its IP and MAC", fd and fd[0][0][4] == "192.168.88.250" and fd[0][1]["severity"] == "high" and "00:0C:29:AA:BB:CC" in fd[0][1]["detail"], types(ev2))
+mi = find(ev2, "ARP spoofing (one device answers")
+check("one MAC for 24 addresses: ARP spoofing, high, user", mi and mi[0][1]["user"] == "hacker1" and "24 addresses" in mi[0][1]["detail"], types(ev2))
+to = find(ev2, "ARP spoofing (one device took")
+check("one MAC took over 4 addresses: ARP spoofing, high", len(to) == 4 and all(e["severity"] == "high" for _, e in to) and "00:0C:29:DE:AD:02" in to[0][1]["detail"], types(ev2))
+mv = find(ev2, "Address moved to another device")
+check("a single address change (phone reconnect): low only", len(mv) == 1 and mv[0][1]["severity"] == "low" and mv[0][0][4] == "192.168.88.90", types(ev2))
 q = sentinel.sql(ev, "2026-10-15")
 check("SQL: log/dns events re-built, flows kept", "DELETE FROM ml_security_event WHERE source IN ('dns','log')" in q)
 check("SQL: severity only goes up", "FIELD(VALUES(severity)" in q)

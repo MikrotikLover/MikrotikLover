@@ -80,6 +80,9 @@ cat > "$CONF_DIR/my.cnf" <<EOF
 user=$DB_USER
 password=$DB_PASS
 socket=/run/mysqld/mysqld.sock
+default-character-set=utf8mb4
+[mysql]
+init-command="SET collation_connection=utf8mb4_unicode_ci"
 EOF
 umask 022
 

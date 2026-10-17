@@ -73,6 +73,7 @@ THRESHOLDS = {
     "BOT_FLOWS": 2000,       # LAN device -> one target, small connections (part of a DDoS)
     "DGA_NAMES": 25,         # random-looking names that do not exist, per device and hour
     "ROUTER_LOGIN_FAILS": 5,
+    "ARP_TAKEOVER": 3,          # one device takes over this many addresses in a day = ARP spoofing
     "RADIUS_REJECTS": 15,
     "DASHBOARD_LOGIN_FAILS": 8,
 }
@@ -246,6 +247,10 @@ def looks_random(host):
 
 # ------------------------------------------------------------------ hourly log scan
 LOGIN_FAIL_RE = re.compile(r"login failure for user (\S+) from (\d+\.\d+\.\d+\.\d+) via (\S+)")
+# lan-guard.rsc: fake DHCP servers and ARP spoofing on the LAN
+DHCP_ALERT_RE = re.compile(r"dhcp alert on (\S+): discovered unknown dhcp server, mac ([0-9A-Fa-f:]{17}), ip (\d+\.\d+\.\d+\.\d+)")
+ARP_CHANGED_RE = re.compile(r"ML-ARP changed ip=(\d+\.\d+\.\d+\.\d+) old=([0-9A-Fa-f:]{17}) new=([0-9A-Fa-f:]{17})(?: if=(\S+))?")
+ARP_MANY_RE = re.compile(r"ML-ARP many-ips mac=([0-9A-Fa-f:]{17}) ip=(\d+\.\d+\.\d+\.\d+) ips=(\d+)")
 WF_SEC = {"scan": ("attack", "Port scan (router saw it)", "high"),
           "brute": ("attack", "Password guessing on the router (Winbox/SSH/API)", "high"),
           "synflood": ("ddos", "SYN flood (router limit hit)", "high"),
@@ -301,6 +306,38 @@ def scan_logs(dns_lines, router_lines, wf_lines, threats, lan_nets, who=lambda i
             for t, _, _ in items:
                 ev.add(t, "attack", "Password guessing on the router", "log", src, "",
                        f"{len(items)} failed logins via {', '.join(via)} as {', '.join(users[:5])}", "high" if len(items) >= 4 * th["ROUTER_LOGIN_FAILS"] else "medium")
+    # LAN guard (lan-guard.rsc): fake DHCP server, ARP spoofing
+    changed = defaultdict(list)          # (new mac, day) -> [(t, ip, old mac)]
+    for line in router_lines:
+        t = cdnlearn.ts(line.split(" ", 1)[0])
+        if not t:
+            continue
+        m = DHCP_ALERT_RE.search(line)
+        if m:
+            iface, mac, ip = m.groups()
+            ev.add(t, "attack", "Fake DHCP server (rogue router on the LAN)", "log", ip, "",
+                   f"device {mac.upper()} on {iface} gives out addresses — phones may get a wrong gateway", "high", user=who(ip, t))
+            continue
+        m = ARP_MANY_RE.search(line)
+        if m:
+            mac, ip, n = m.groups()
+            ev.add(t, "attack", "ARP spoofing (one device answers for many addresses)", "log", ip, "",
+                   f"device {mac.upper()} answers for {n} addresses — man in the middle", "high", user=who(ip, t))
+            continue
+        m = ARP_CHANGED_RE.search(line)
+        if m:
+            ip, old, new, _ = m.groups()
+            changed[(new.upper(), day_of(t))].append((t, ip, old.upper()))
+    for (mac, _), items in changed.items():
+        ips = sorted({ip for _, ip, _ in items})
+        if len(ips) >= th.get("ARP_TAKEOVER", 3):
+            for t, ip, old in items:
+                ev.add(t, "attack", "ARP spoofing (one device took over other addresses)", "log", ip, "",
+                       f"device {mac} took over {len(ips)} addresses: {', '.join(ips[:5])}", "high", user=who(ip, t))
+        else:
+            for t, ip, old in items:
+                ev.add(t, "attack", "Address moved to another device (ARP change)", "log", ip, "",
+                       f"{ip}: {old} -> {mac} (normal when a phone reconnects; many of these = spoofing)", "low", user=who(ip, t))
     # router firewall: security rules (WF-scan, WF-brute, WF-synflood, WF-threat)
     for line in wf_lines:
         m = mlreport.WF_RE.search(line)

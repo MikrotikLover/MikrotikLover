@@ -89,7 +89,7 @@ template(name="mikrotiklover_wf" type="string" string="%timegenerated:::date-rfc
 ruleset(name="mikrotiklover") {
     if (\$rawmsg contains "WF-") then {
         action(type="omfile" file="$WF_LOG" template="mikrotiklover_wf" fileCreateMode="0640" fileGroup="adm")
-    } else if (\$rawmsg contains "login failure" or \$rawmsg contains "logged in" or \$rawmsg contains "logged out") then {
+    } else if (\$rawmsg contains "login failure" or \$rawmsg contains "logged in" or \$rawmsg contains "logged out" or \$rawmsg contains "dhcp alert" or \$rawmsg contains "ML-") then {
         action(type="omfile" file="/var/log/mikrotik/router.log" template="mikrotiklover_wf" fileCreateMode="0640" fileGroup="adm")
     }
     stop

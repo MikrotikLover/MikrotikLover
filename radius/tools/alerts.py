@@ -319,12 +319,16 @@ def check(c, db, state, now=None, ping_fn=ping, running_fn=running, updates=UPDA
     since = state.get("last_check") or now - 900
     since_sql = esc(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(since)))
     if "security" in ev:
-        for cat, typ, src, user, detail, hits, day in db.rows(
-                "SELECT category, type, src_ip, username, detail, hits, day FROM ml_security_event "
-                f"WHERE severity='high' AND last_seen >= {since_sql} ORDER BY last_seen DESC LIMIT 50"):
-            if once(state, f"sec:{day}:{cat}:{typ}:{src}", 86400):
-                who = f"{src}" + (f" ({user})" if user else "")
+        # the hourly scan writes events with the time they happened (often before the last check), so
+        # look at the last 26 hours and send each event once; the first run only remembers what is there
+        rows = db.rows("SELECT category, type, src_ip, username, detail, hits, day FROM ml_security_event "
+                       "WHERE severity='high' AND last_seen >= NOW() - INTERVAL 26 HOUR ORDER BY last_seen DESC LIMIT 200")
+        first = not state.get("security_init")
+        for cat, typ, src, user, detail, hits, day in rows:
+            if once(state, f"sec:{day}:{cat}:{typ}:{src}", 3 * 86400) and not first:
+                who = f"{src}" + (f" ({user})" if user and user != "NULL" else "")
                 found.append(("security", f"🔴 {cat.upper()}: {typ} — {who}, {hits} hits. {detail}".strip()))
+        state["security_init"] = 1
     if "quarantine" in ev:
         last = int(state.get("quarantine_id", 0))
         rows = db.rows(f"SELECT id, ip, username, reason, auto FROM ml_quarantine WHERE id > {last} ORDER BY id LIMIT 50")
