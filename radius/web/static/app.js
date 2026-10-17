@@ -1280,12 +1280,16 @@ ROUTES.security = async (tab = "all") => {
       tile("Hacker attacks", num(c("attack").events), `${num(c("attack").high)} high · scans, password guessing`),
       tile("DDoS attacks", num(c("ddos").events), `${num(c("ddos").high)} high · floods by type`),
       tile("Threat lists", num(d.lists.threat_names), `names + ${num(d.lists.threat_networks)} networks · ${d.lists.updated || "not downloaded"}`));
+    const qip = h("input", { placeholder: "e.g. 192.168.88.10", value: d.lists.server_ip || "" });
     if (tab === "setup") {
       const toggle = (label, help, on, action) => h("label", { class: "check" + (on ? " on" : "") }, h("input", { type: "checkbox", checked: on, disabled: !isAdmin(),
         onchange: async (e) => { await act(api("POST", `/api/security/${action}`, { on: e.target.checked })); load(); } }), h("div", {}, h("b", {}, label), h("span", {}, help)));
       holder.replaceChildren(tiles, card("Protection", null, h("div", { class: "checks" },
         toggle("Block attackers on the router automatically", "Outside addresses with a high-severity attack or DDoS in the last 24 h go to the router's ml-attackers list (auto-sync) and are dropped for a day. Needs mikrotik/security.rsc.", d.lists.autoblock, "autoblock"),
-        toggle("Block malware / phishing / mining names (DNS)", "The DNS logger answers 0.0.0.0 for names on the threat lists. The device still shows up here as infected.", d.lists.dns_block, "dns-block")),
+        toggle("Block malware / phishing / mining names (DNS)", "The DNS logger answers 0.0.0.0 for names on the threat lists. The device still shows up here as infected.", d.lists.dns_block, "dns-block"),
+        toggle("Quarantine infected devices automatically", "A device with a HIGH virus alert loses the internet within 5 minutes and only sees a warning page (how to clean it, your contact). Release it on the Virus tab.", d.lists.quarantine_auto, "quarantine-auto")),
+        isAdmin() ? h("label", { class: "field" }, "This server's IP as the routers see it (warning page on port 8081)",
+          h("div", { class: "toolbar" }, qip, h("button", { onclick: async () => { await act(api("POST", "/api/security/quarantine-server", { ip: qip.value.trim() })); load(); } }, "Save"))) : null,
         isAdmin() ? h("div", { class: "toolbar" }, h("button", { onclick: async () => { await act(api("POST", "/api/security/update")); load(); } }, "Update threat lists now"),
           h("button", { onclick: async () => { await act(api("POST", "/api/security/scan")); load(); } }, "Scan logs now")) : null),
         card("What is checked", null, h("div", { class: "steps" },
@@ -1296,8 +1300,23 @@ ROUTES.security = async (tab = "all") => {
       return;
     }
     const parts = [tiles];
+    const inQ = new Set(d.quarantine.flatMap((x) => [x.ip, x.username].filter(Boolean)));
+    const quarantineBtn = (r) => !isAdmin() ? null : (inQ.has(r.src_ip) || (r.username && inQ.has(r.username))) ? badge("in quarantine", "bad")
+      : h("button", { class: "small", onclick: async () => {
+        const target = r.username || r.src_ip;
+        if (await confirmDlg("Quarantine", `Cut ${target} off the internet? It will only see a warning page until you release it.`, "Quarantine")) {
+          await act(api("POST", "/api/security/quarantine", { target, reason: String(r.types || "").slice(0, 110) })); load();
+        } } }, "Quarantine");
+    if (tab === "virus" || d.quarantine.length) parts.push(card("Quarantine", `${d.quarantine.length} device(s) · automatic ${d.lists.quarantine_auto ? "on" : "off"}`,
+      h("div", { class: "muted" }, "Quarantined devices have no internet; every http:// page they open shows a warning with what to do and your contact number."),
+      table([{ label: "Device", render: (x) => h("span", {}, x.username || "", h("div", { class: x.username ? "muted" : "" }, h("code", {}, x.ip || "(any IP of this user)"))) },
+        { label: "Why", key: "reason", wrap: true }, { label: "By", render: (x) => badge(Number(x.auto) ? "automatic" : "admin", Number(x.auto) ? "warn" : "info") },
+        { label: "Since", render: (x) => String(x.since).slice(5, 16) },
+        { label: "", render: (x) => isAdmin() ? h("button", { class: "small", onclick: async () => { await act(api("POST", "/api/security/release", { target: x.username || x.ip })); load(); } }, "Release") : null }],
+        d.quarantine, "Nobody in quarantine.")));
     if (tab === "virus" && d.devices.length) parts.push(card("Infected devices", `${d.devices.length}`, table([{ label: "Device", render: (r) => who(r) },
-      { label: "Signs", key: "types", wrap: true }, { label: "Hits", key: "hits", num: true }, { label: "Last", render: (r) => String(r.last).slice(5, 16) }], d.devices)));
+      { label: "Signs", key: "types", wrap: true }, { label: "Hits", key: "hits", num: true }, { label: "Last", render: (r) => String(r.last).slice(5, 16) },
+      { label: "", render: quarantineBtn }], d.devices)));
     if (tab !== "all" && d.types.length) parts.push(card("By type", null, table([{ label: "Type", key: "type", wrap: true }, { label: "Alerts", key: "events", num: true },
       tab === "ddos" ? null : { label: "Attackers / devices", key: "sources", num: true }, { label: "Hits", key: "hits", num: true },
       { label: "Last", render: (r) => String(r.last).slice(5, 16) }].filter(Boolean), d.types)));

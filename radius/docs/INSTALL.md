@@ -93,6 +93,8 @@ sudo ufw allow from ROUTER_IP to any port 2055 proto udp        # Traffic Flow
 sudo ufw allow from 10.0.0.0/8 to any port 53                   # DNS logger (apne LAN subnets)
 sudo ufw allow from 192.168.0.0/16 to any port 53
 sudo ufw allow 8443/tcp                                          # dashboard + router auto-sync
+sudo ufw allow from 10.0.0.0/8 to any port 8081 proto tcp       # quarantine warning page (apne LAN subnets)
+sudo ufw allow from 192.168.0.0/16 to any port 8081 proto tcp
 sudo ufw enable
 ```
 
@@ -256,6 +258,7 @@ Log files: `/var/log/mikrotik/` (`dns.log`, `webfilter.log`, `router.log`, `traf
 | UDP 2055 | Router → server | Traffic Flow (IPFIX) |
 | UDP 514 | Router → server | Router logs |
 | TCP 8443 | Browser / router → server | Dashboard, connect guide, router auto-sync |
+| TCP 8081 | Quarantined device → server | Warning page for infected devices (plain HTTP) |
 
 | Path | Kya |
 |---|---|

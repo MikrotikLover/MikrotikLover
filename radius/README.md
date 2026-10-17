@@ -807,6 +807,28 @@ sudo radius-admin security dns-block on        # malware/phishing/mining names p
 > - Flow data router ke "active timeout" ke hisaab se aata hai, is liye bahut chhote attacks ka andaza kam lagta hai.
 > - Bade DDoS ko ISP ke level par rokna parta hai; router sirf apne aap ko bacha sakta hai.
 
+### Quarantine — infected device ko internet se alag karna
+
+Virus wala device (spam bot, botnet server se baat, malware site, DGA...) **internet se kat jata hai**. Woh jo bhi `http://` page khole, usay ek warning page dikhta hai (screenshot neeche):
+- "Aap ke device ka internet rok diya gaya hai";
+- kya mila (misaal "Spam bot");
+- saaf karne ke 5 qadam;
+- aap ka contact number.
+
+Android aur iPhone khud "Sign in to network" dikha kar yahi page khol dete hain. DNS chalta rehta hai; baqi sab band hota hai.
+
+```bash
+sudo radius-admin security quarantine ali "spam bot"     # user (har IP par, login ke saath chalta hai)
+sudo radius-admin security quarantine 192.168.88.40      # sirf IP (printer, CCTV, bina login wala device)
+sudo radius-admin security quarantined                   # list (history: purane)
+sudo radius-admin security release ali                   # internet wapas; user ki purani policy wapas lagti hai
+sudo radius-admin security quarantine-auto on            # HIGH virus alert -> 5 minute ke andar khud quarantine
+sudo radius-admin security quarantine-server 192.168.88.10   # server ka IP jo router dekhta hai (warning page :8081)
+```
+- **Dashboard:** Security → **Virus** tab par har infected device ke saath **Quarantine** button hai, aur upar **Quarantine** list mein **Release**. **Protection & lists** tab par "Quarantine automatically" ka switch aur server IP hain.
+- **Auto mode:** sirf **high** virus alert par lagta hai. Admin jis device ko release kare, woh 24 ghante tak dobara khud quarantine nahi hota.
+- **Router par:** rules auto-sync se khud pohanchte hain (address list `ml-quarantine`). Router aur server ke darmiyan TCP 8081 khula hona chahiye.
+
 ## 5l. Blocking logs — kaunsi policy kis user ko kya block kar rahi hai
 
 Dashboard → **Blocking → Blocking logs** (aur Reports → Blocked) par yeh dikhta hai:

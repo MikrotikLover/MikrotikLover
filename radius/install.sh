@@ -377,6 +377,24 @@ EOF
         echo "        proxy_read_timeout 900s;    # backups, Run all updates now and threat-list downloads can take minutes"
         echo "    }"
         echo "}"
+        echo
+        echo "# Quarantine warning page (plain HTTP, any network): the routers send every http:// request of an"
+        echo "# infected device here (radius-admin security quarantine). Nothing else is served on this port."
+        echo "server {"
+        echo "    listen 8081;"
+        [ -e /proc/net/if_inet6 ] && echo "    listen [::]:8081;"
+        echo "    server_name _;"
+        echo "    server_tokens off;"
+        echo "    location = /static/quarantine.css {"
+        echo "        proxy_pass http://127.0.0.1:8099;"
+        echo "    }"
+        echo "    location / {"
+        echo "        rewrite ^ /quarantine break;"
+        echo "        proxy_pass http://127.0.0.1:8099;"
+        echo '        proxy_set_header Host $host;'
+        echo '        proxy_set_header X-Forwarded-For $remote_addr;'
+        echo "    }"
+        echo "}"
     } > /etc/nginx/sites-available/mikrotiklover
     ln -sfn ../sites-available/mikrotiklover /etc/nginx/sites-enabled/mikrotiklover
     # IPv6 disabled on this host: nginx's stock default site would fail on "listen [::]:80"

@@ -413,6 +413,20 @@ sni_rules() { # sni_rules CHAIN PREFIX < patterns
         ao_rules "$a" "ao-$a" "" "wfchain:ao-$a"
     done
     echo
+    echo "# ---- quarantine: infected devices (address list ml-quarantine, filled by the server) get no internet,"
+    echo "#      only DNS and the server's warning page (every http:// address shows it)"
+    if [[ ${QUARANTINE_SERVER:-} =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "/ip firewall nat"
+        echo "add chain=dstnat src-address-list=ml-quarantine protocol=tcp dst-port=80 action=dst-nat to-addresses=$QUARANTINE_SERVER to-ports=8081 comment=\"wfpolicy:quarantine warning page\""
+        echo "/ip firewall filter"
+        echo "add chain=forward src-address-list=ml-quarantine dst-address=$QUARANTINE_SERVER action=accept comment=\"wfpolicy:quarantine server\""
+    fi
+    echo "add chain=forward src-address-list=ml-quarantine protocol=udp dst-port=53 action=accept comment=\"wfpolicy:quarantine dns\""
+    echo "add chain=forward src-address-list=ml-quarantine protocol=tcp dst-port=53 action=accept comment=\"wfpolicy:quarantine dns\""
+    echo "add chain=forward src-address-list=ml-quarantine connection-state=new action=log log-prefix=\"WF-quarantine\" limit=20/1m,10:packet comment=\"wfpolicy:quarantine (log)\""
+    echo "add chain=forward src-address-list=ml-quarantine protocol=tcp action=reject reject-with=tcp-reset comment=\"wfpolicy:quarantine block\""
+    echo "add chain=forward src-address-list=ml-quarantine action=reject reject-with=icmp-admin-prohibited comment=\"wfpolicy:quarantine block\""
+    echo
     echo "# ---- policies"
     cat "$pol_out"
     echo

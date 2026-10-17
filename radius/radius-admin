@@ -433,13 +433,15 @@ valid_policy() { [[ $1 =~ ^[a-z0-9-]{1,40}$ ]] || die "Invalid policy '$1' (a-z 
 #   nas_request USER disconnect|coa "Extra-Attr = value" [quiet] [session-uniqueid]
 nas_request() {
     local u=$1 kind=$2 extra=$3 quiet=${4:-} only=${5:-} rows n=0 nas sid ip mac uid
-    rows=$(echo "SELECT nasipaddress, acctsessionid, IFNULL(framedipaddress,''), IFNULL(callingstationid,''), acctuniqueid
+    # '-' for empty columns: bash "read" with a tab IFS merges empty fields and shifts the rest
+    rows=$(echo "SELECT nasipaddress, IFNULL(NULLIF(acctsessionid,''),'-'), IFNULL(NULLIF(framedipaddress,''),'-'), IFNULL(NULLIF(callingstationid,''),'-'), acctuniqueid
                  FROM radacct WHERE username=$(q "$u") AND acctstoptime IS NULL
                  $( [ -n "$only" ] && echo "AND acctuniqueid=$(q "$only")")" | db)
     if [ -z "$rows" ]; then [ -n "$quiet" ] || echo "No active session for '$u'"; return 0; fi
     local nascount; nascount=$(echo "SELECT COUNT(*) FROM nas" | db)
     local ack=Disconnect-ACK; [ "$kind" = coa ] && ack=CoA-ACK
     while IFS=$'\t' read -r nas sid ip mac uid; do
+        [ "$sid" != - ] || sid=""; [ "$ip" != - ] || ip=""; [ "$mac" != - ] || mac=""
         local target=$nas secret
         secret=$(echo "SELECT secret FROM nas WHERE nasname=$(q "$nas") LIMIT 1" | db)
         if [ -z "$secret" ] && [ "$nascount" = 1 ]; then   # router behind NAT: NAS-IP differs from its public IP
@@ -936,6 +938,7 @@ cmd_subscription() { # user plan|renew|expiry|quota|status NAME ...
 # Every 5 minutes (cron): cut off sessions whose package ran out, slow down sessions that used
 # their quota on a FUP plan. Needed for PPPoE (no Total-Limit there) and running sessions.
 cmd_enforce() {
+    quarantine_auto || true
     local verbose=${1:-} rows u uid c rate n_cut=0 n_fup=0
     rows=$(echo "SELECT DISTINCT r.username, r.acctuniqueid, ml_check(r.username)
                  FROM radacct r JOIN ml_account a ON a.username=r.username
@@ -1157,6 +1160,7 @@ cmd_policy() {
         local lists; lists=$(mktemp -d)
         { echo "SELECT domain FROM ml_vpn_domain ORDER BY domain" | db 2>/dev/null || true; } | grep -E '^[a-z0-9.-]+$' > "$lists/vpn-domains.txt" || true
         if ! WF_OUT="$lists" POLICY_DIR="$POLICY_DIR" VPN_DOMAINS="$lists/vpn-domains.txt" CDNMAP=/usr/local/lib/mikrotiklover/cdnmap.py \
+               QUARANTINE_SERVER="$(setting_get server_ip)" \
                bash "$WF_DIR/build.sh" 2>"$lists/build.log"; then
             cat "$lists/build.log" >&2; rm -rf "${lists:?}"; die "router rules not built"
         fi
@@ -1173,6 +1177,11 @@ cmd_policy() {
             echo "/ip firewall address-list"
             echo "remove [find list=ml-threats]"
             [ ! -f /var/lib/mikrotiklover/threat-ips.txt ] || awk -F'\t' '$1 ~ /^[0-9.]+(\/[0-9]+)?$/ && !seen[$1]++ { gsub(/["\\$]/, "", $2); printf "add list=ml-threats address=%s comment=\"mlsync: %s\"\n", $1, substr($2, 1, 60) }' /var/lib/mikrotiklover/threat-ips.txt
+            echo "remove [find list=ml-quarantine comment~\"^mlsync\"]"
+            { echo "SELECT ip, CONCAT('quarantine ', IF(username<>'', username, ip)) FROM ml_quarantine WHERE released_at IS NULL AND ip<>''
+                    UNION SELECT r.framedipaddress, CONCAT('quarantine ', q.username) FROM ml_quarantine q JOIN radacct r ON r.username=q.username
+                    WHERE q.released_at IS NULL AND q.username<>'' AND r.acctstoptime IS NULL AND r.framedipaddress<>''" | db 2>/dev/null || true; } \
+              | awk -F'\t' '$1 ~ /^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+$/ && !seen[$1]++ { gsub(/["\\$]/, "", $2); printf ":do { /ip firewall address-list add list=ml-quarantine address=%s comment=\"mlsync: %s\" } on-error={}\n", $1, substr($2, 1, 60) }'
             echo "remove [find list=ml-attackers comment~\"^mlsync\"]"
             if [ "$(setting_get security_autoblock)" = 1 ]; then
                 echo "SELECT src_ip, MAX(type) FROM ml_security_event
@@ -1482,8 +1491,25 @@ setting_set() { echo "INSERT INTO ml_setting (k, v) VALUES ($(q "$1"), $(q "$2")
 
 cmd_security() {
     local sub=list days=7 cat="" top=200 sev=""
-    case ${1:-} in list|scan|update|autoblock|dns-block|summary) sub=$1; shift ;; esac
+    case ${1:-} in list|scan|update|autoblock|dns-block|summary|quarantine|release|quarantined|quarantine-auto|quarantine-server) sub=$1; shift ;; esac
     case $sub in
+    quarantine)
+        local t=${1:-}; [ -n "$t" ] || die "usage: radius-admin security quarantine IP|USER [reason ...]"; shift
+        quarantine_add "$t" "${*:-quarantined by the admin}" 0; cmd_policy build >/dev/null; return ;;
+    release)
+        local t=${1:-}; [ -n "$t" ] || die "usage: radius-admin security release IP|USER"
+        quarantine_release "$t" "${SUDO_USER:-admin}"; cmd_policy build >/dev/null; return ;;
+    quarantined) cmd_quarantine "${1:-list}"; return ;;
+    quarantine-auto)
+        case ${1:-status} in
+            on)  setting_set security_quarantine_auto 1; ok "Devices with a high virus alert are quarantined automatically (checked every 5 minutes)" ;;
+            off) setting_set security_quarantine_auto 0; ok "Automatic quarantine off" ;;
+            *)   echo "auto-quarantine: $( [ "$(setting_get security_quarantine_auto)" = 1 ] && echo on || echo off)" ;;
+        esac; return ;;
+    quarantine-server)
+        local ip=${1:-}; valid_ip "$ip"; [[ $ip != */* ]] || die "one address"
+        setting_set server_ip "$ip"; cmd_policy build >/dev/null
+        ok "Quarantined devices are sent to the warning page on http://$ip:8081 (router auto-sync)"; return ;;
     scan)
         local out sql; sql=$(mktemp)
         if ! out=$(python3 -I /usr/local/lib/mikrotiklover/sentinel.py sql --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" 2>&1 >"$sql"); then
@@ -1561,6 +1587,79 @@ cmd_domains() {
     echo "SELECT d.base AS domain, MAX(NULLIF(d.app,'')) AS app, COUNT(*) AS subdomains, MIN(d.first_seen) AS first_seen, MAX(d.last_seen) AS last_seen
           FROM ml_domain d WHERE $w GROUP BY d.base ORDER BY COUNT(*) DESC, MAX(d.last_seen) DESC LIMIT $top;" | dbt
     echo "$(echo "SELECT COUNT(*) FROM ml_domain" | db) website names saved ($(echo "SELECT COUNT(DISTINCT base) FROM ml_domain" | db) domains) — radius-admin domains tree DOMAIN"
+}
+
+# ---------------------------------------------------------------- quarantine (infected devices)
+quarantine_add() { # quarantine_add IP|USER REASON AUTO(0|1)
+    local t=$1 reason=${2:-quarantined by the admin} auto=${3:-0} ip="" user="" prev=""
+    reason=${reason//[^[:print:]]/}; reason=${reason:0:200}
+    if [[ $t =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        valid_ip "$t"; ip=$t
+        # an IP that belongs to a logged-in user: quarantine the user (follows the device to a new IP)
+        user=$(echo "SELECT username FROM radacct WHERE framedipaddress=$(q "$ip") AND acctstoptime IS NULL ORDER BY acctstarttime DESC LIMIT 1" | db)
+    else
+        valid_name "$t" username; user_exists "$t" || die "No such user or IP '$t'"; user=$t
+    fi
+    [ "$(echo "SELECT COUNT(*) FROM ml_quarantine WHERE released_at IS NULL AND ((ip<>'' AND ip=$(q "$ip")) OR (username<>'' AND username=$(q "$user")))" | db)" = 0 ] \
+        || { echo "$t is already in quarantine"; return 0; }
+    if [ -n "$user" ]; then
+        prev=$(echo "SELECT value FROM radreply WHERE username=$(q "$user") AND attribute='Mikrotik-Address-List' LIMIT 1" | db)
+        [ "$prev" != ml-quarantine ] || prev=""
+        echo "START TRANSACTION; DELETE FROM radreply WHERE username=$(q "$user") AND attribute='Mikrotik-Address-List';
+              INSERT INTO radreply (username,attribute,op,value) VALUES ($(q "$user"),'Mikrotik-Address-List',':=','ml-quarantine'); COMMIT;" | db
+    fi
+    echo "INSERT INTO ml_quarantine (ip, username, prev_list, reason, auto) VALUES ($(q "$ip"), $(q "$user"), $(q "$prev"), $(q "$reason"), $auto);" | db
+    [ -z "$user" ] || kick_user "$user" quiet          # the next login gets the quarantine list
+    ok "Quarantined ${user:+user '$user' }${ip:+($ip) }— $reason"
+}
+
+quarantine_release() { # quarantine_release IP|USER BY
+    local t=$1 by=${2:-admin} rows id ip user prev n=0
+    [[ $t =~ ^[0-9.]+$ ]] && valid_ip "$t" || valid_name "$t" "user or IP"
+    rows=$(echo "SELECT id, IFNULL(NULLIF(ip,''),'-'), IFNULL(NULLIF(username,''),'-'), IFNULL(NULLIF(prev_list,''),'-')
+                 FROM ml_quarantine WHERE released_at IS NULL AND (ip=$(q "$t") OR username=$(q "$t"))" | db)
+    [ -n "$rows" ] || die "$t is not in quarantine (radius-admin security quarantined)"
+    while IFS=$'\t' read -r id ip user prev; do
+        [ "$ip" != - ] || ip=""; [ "$user" != - ] || user=""; [ "$prev" != - ] || prev=""
+        if [ -n "$user" ]; then
+            echo "START TRANSACTION; DELETE FROM radreply WHERE username=$(q "$user") AND attribute='Mikrotik-Address-List' AND value='ml-quarantine';
+                  $( [ -z "$prev" ] || echo "INSERT INTO radreply (username,attribute,op,value) VALUES ($(q "$user"),'Mikrotik-Address-List',':=',$(q "$prev"));")
+                  COMMIT;" | db
+            kick_user "$user" quiet </dev/null
+        fi
+        echo "UPDATE ml_quarantine SET released_at=NOW(), released_by=$(q "$by") WHERE id=$id" | db
+        n=$((n + 1))
+    done <<<"$rows"
+    ok "Released $t ($n entry/entries) — internet works again${user:+ after the next login}"
+}
+
+quarantine_auto() { # every 5 minutes (enforce): devices with a HIGH virus alert in the last 2 hours
+    [ "$(setting_get security_quarantine_auto)" = 1 ] || return 0
+    local rows ip user types n=0
+    rows=$(echo "SELECT e.src_ip, IFNULL(MAX(NULLIF(e.username,'')),'-'), LEFT(GROUP_CONCAT(DISTINCT e.type SEPARATOR ', '), 180)
+                 FROM ml_security_event e
+                 WHERE e.category='virus' AND e.severity='high' AND e.last_seen >= NOW() - INTERVAL 2 HOUR
+                   AND e.src_ip REGEXP '^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+\$'
+                   AND NOT EXISTS (SELECT 1 FROM ml_quarantine qa WHERE qa.released_at IS NULL AND (qa.ip=e.src_ip OR (e.username<>'' AND qa.username=e.username)))
+                   AND NOT EXISTS (SELECT 1 FROM ml_quarantine qr WHERE qr.released_at >= NOW() - INTERVAL 1 DAY AND (qr.ip=e.src_ip OR (e.username<>'' AND qr.username=e.username)))
+                 GROUP BY e.src_ip" | db 2>/dev/null || true)
+    while IFS=$'\t' read -r ip user types; do
+        [ -n "$ip" ] || continue
+        if [ "$user" != - ] && user_exists "$user"; then quarantine_add "$user" "auto: $types" 1 >/dev/null </dev/null
+        else quarantine_add "$ip" "auto: $types" 1 >/dev/null </dev/null; fi
+        n=$((n + 1))
+    done <<<"$rows"
+    if [ "$n" -gt 0 ]; then cmd_policy build >/dev/null 2>&1 || true; echo "quarantined $n infected device(s) automatically"; fi
+}
+
+cmd_quarantine() {
+    case ${1:-list} in
+        list|"") echo "SELECT id, NULLIF(username,'') AS user, NULLIF(ip,'') AS ip, IF(auto,'auto','admin') AS by_, since, LEFT(reason,70) AS reason
+                       FROM ml_quarantine WHERE released_at IS NULL ORDER BY since DESC;" | dbt
+                 echo "auto-quarantine: $( [ "$(setting_get security_quarantine_auto)" = 1 ] && echo on || echo off)   warning page server: $(setting_get server_ip || true)" ;;
+        history) echo "SELECT id, NULLIF(username,'') AS user, NULLIF(ip,'') AS ip, since, released_at, released_by, LEFT(reason,60) AS reason
+                       FROM ml_quarantine ORDER BY id DESC LIMIT 100;" | dbt ;;
+    esac
 }
 
 cmd_sales() {
@@ -1686,6 +1785,11 @@ Security detective (virus, hacker attacks, DDoS)
   security scan | update                read the logs now (hourly) | download threat lists (weekly)
   security autoblock on|off             attackers -> router list ml-attackers (auto-sync, mikrotik/security.rsc)
   security dns-block on|off             malware / phishing / mining names answer 0.0.0.0 (DNS logger)
+  security quarantine IP|USER [reason] infected device: no internet, only a warning page (router auto-sync)
+  security release IP|USER              end the quarantine
+  security quarantined [history]        who is in quarantine
+  security quarantine-auto on|off       quarantine devices with a HIGH virus alert automatically (every 5 min)
+  security quarantine-server IP         this server's IP as the routers see it (warning page on port 8081)
 
 Backup, restore, automatic updates
   backup [--encrypt] [--with-logs]      complete backup: database, settings, certificates, FreeRADIUS, policies

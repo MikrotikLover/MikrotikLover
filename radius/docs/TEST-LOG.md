@@ -48,3 +48,4 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
   - asli MikroTik router par scripts ka import aur auto-sync (yahan RouterOS nahi chalta);
   - asal internet se threat lists ke kuch sources (yahan sirf GitHub khulta hai);
   - app catalog ka update (PR merge hone ke baad chalega).
+| 04:17 | NAYA: Quarantine (infected device) | ✅ user/IP quarantine, warning page (phone par), release se purani policy wapas, auto mode (sirf HIGH, release ke baad 24 ghante nahi), router list + rules. 2 bugs mile aur theek: release ke waqt khali IP par fields khisakti thin; aur PURANA bug — IP/MAC ke baghair session ka kick fail hota tha |

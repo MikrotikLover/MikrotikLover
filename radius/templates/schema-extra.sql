@@ -240,3 +240,19 @@ CREATE TABLE IF NOT EXISTS ml_security_event (
   KEY idx_last (last_seen),
   KEY idx_src (src_ip)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Quarantine: infected devices cut off from the internet (they only see a warning page)
+CREATE TABLE IF NOT EXISTS ml_quarantine (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  ip VARCHAR(45) NOT NULL DEFAULT '',
+  username VARCHAR(64) NOT NULL DEFAULT '',
+  prev_list VARCHAR(64) NOT NULL DEFAULT '',
+  reason VARCHAR(255) NOT NULL DEFAULT '',
+  auto TINYINT(1) NOT NULL DEFAULT 0,
+  since DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  released_at DATETIME NULL,
+  released_by VARCHAR(64) NOT NULL DEFAULT '',
+  KEY idx_active (released_at),
+  KEY idx_ip (ip),
+  KEY idx_user (username)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -845,6 +845,53 @@ def public_connect():
     return jsonify({k: st[k] for k in ("brand", "ssid", "hotspot_ssid", "hotspot_url", "radius_domain", "contact")})
 
 
+@app.get("/quarantine")
+def quarantine_page():
+    """Warning page for a quarantined (infected) device — every http:// address it opens lands here
+    (router dst-nat to nginx :8081). Public: the device has no login."""
+    from html import escape
+    ip = client_ip()
+    row = None
+    try:
+        row = q1("""SELECT q.username, q.ip, q.reason, q.since FROM ml_quarantine q
+                    WHERE q.released_at IS NULL AND (q.ip=%s OR q.username IN
+                      (SELECT username FROM radacct WHERE framedipaddress=%s AND acctstoptime IS NULL))
+                    ORDER BY q.since DESC LIMIT 1""", (ip, ip))
+        st = settings_get()
+    except pymysql.MySQLError:
+        st = {}
+    brand, contact = st.get("brand") or "Wi-Fi", st.get("contact") or ""
+    reason = (row or {}).get("reason") or "suspicious traffic from this device"
+    reason = re.sub(r"^auto:\s*", "", reason)
+    info = ""
+    if row:
+        info = (f'<div class="kv"><b>Device</b><span>{escape(ip)}</span>'
+                + (f'<b>User</b><span>{escape(row["username"])}</span>' if row.get("username") else "")
+                + f'<b>Since</b><span>{escape(str(row["since"])[:16])}</span><b>Found</b><span>{escape(reason)}</span></div>')
+    page = f"""<!doctype html><html lang="ur-Latn"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark">
+<title>Device band — {escape(brand)}</title><link rel="stylesheet" href="/static/quarantine.css"></head>
+<body><main class="wrap">
+<div class="card"><div class="icon" aria-hidden="true">!</div>
+<h1>Aap ke device ka internet rok diya gaya hai</h1>
+<p>{escape(brand)} network ne is device se <b>virus / malware</b> jaisi harkat dekhi hai, is liye doosre users ki hifazat ke liye is ka internet band hai.</p>
+<p class="muted">Your device was taken off the internet because it looks infected (virus / malware). Please clean it.</p>
+{info}</div>
+<div class="card"><h2>Kya karein</h2><ol>
+<li>Phone / laptop ko <b>update</b> karein (Settings &rarr; Software update).</li>
+<li>Jo app aap ne haal hi mein <b>Play Store / App Store ke ilawa</b> kahin se install ki ho, use hata dein.</li>
+<li>Antivirus se scan karein (Android: Google Play Protect; Windows: Microsoft Defender &rarr; Full scan).</li>
+<li>Browser mein ajeeb extensions hata dein, aur zaroori passwords badal dein.</li>
+<li>Phir neeche diye number par admin se rabta karein; device saaf hone par internet khol diya jayega.</li>
+</ol></div>
+<div class="card"><h2>Rabta (contact)</h2><p class="contact">{escape(contact) if contact else "Network admin"}</p>
+<p class="muted">Is page ko band kar ke dobara kholne se internet wapas nahi aata — admin "Release" karega.</p></div>
+</main></body></html>"""
+    resp = app.response_class(page, mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 @app.get("/connect")
 def connect_page():
     return send_from_directory(app.static_folder, "connect.html")
@@ -1343,6 +1390,8 @@ def router_autosync():
     server_ip = request.args.get("ip", "") or (host if re.match(r"^\d+\.\d+\.\d+\.\d+$", host) else "")
     if not re.match(r"^\d+\.\d+\.\d+\.\d+$", server_ip):
         abort(400, "give the server's IP address as the router sees it (?ip=...)")
+    if not (q1("SELECT v FROM ml_setting WHERE k='server_ip'") or {}).get("v"):
+        radius_admin(["security", "quarantine-server", server_ip], action=f"server IP {server_ip} (router script)")
     tpl = open(os.path.join(HERE, "autosync.rsc"), encoding="utf-8").read()
     text = (tpl.replace("radius.example.lan", info["host"]).replace("192.168.88.10", server_ip)
                .replace(":8443", f":{port}").replace("PUT-THE-KEY-HERE", key))
@@ -1503,17 +1552,19 @@ def security():
     devices = q(f"""SELECT src_ip, MAX(NULLIF(username,'')) AS username, GROUP_CONCAT(DISTINCT type ORDER BY type SEPARATOR ', ') AS types,
                            SUM(hits) AS hits, MAX(last_seen) AS last FROM ml_security_event WHERE {w} AND category='virus'
                     GROUP BY src_ip ORDER BY MAX(last_seen) DESC LIMIT 200""", args)
-    setting = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k IN ('security_autoblock')")}
+    setting = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k IN ('security_autoblock','security_quarantine_auto','server_ip')")}
+    quarantine = q("""SELECT id, ip, username, reason, auto, since FROM ml_quarantine WHERE released_at IS NULL ORDER BY since DESC""")
     lists = {"threat_names": _count_lines(os.path.join(STATE_DIR, "threat-domains.txt")),
              "threat_networks": _count_lines(os.path.join(STATE_DIR, "threat-ips.txt")),
              "autoblock": setting.get("security_autoblock") == "1",
-             "dns_block": os.path.exists("/etc/mikrotiklover-radius/dnsmasq-threats.conf")}
+             "dns_block": os.path.exists("/etc/mikrotiklover-radius/dnsmasq-threats.conf"),
+             "quarantine_auto": setting.get("security_quarantine_auto") == "1", "server_ip": setting.get("server_ip", "")}
     try:
         lists["updated"] = datetime.fromtimestamp(os.path.getmtime(os.path.join(STATE_DIR, "threat-domains.txt"))).strftime("%Y-%m-%d %H:%M")
     except OSError:
         lists["updated"] = ""
     return jsonify(events=jsonable(events), counts={c["category"]: jsonable([c])[0] for c in counts}, types=jsonable(types),
-                   devices=jsonable(devices), lists=lists)
+                   devices=jsonable(devices), lists=lists, quarantine=jsonable(quarantine))
 
 
 @app.post("/api/security/<action>")
@@ -1524,8 +1575,18 @@ def security_action(action):
         return result(*radius_admin(["security", "scan"], timeout=300))
     if action == "update":
         return result(*radius_admin(["security", "update"], timeout=600))
-    if action in ("autoblock", "dns-block"):
+    if action in ("autoblock", "dns-block", "quarantine-auto"):
         return result(*radius_admin(["security", action, "on" if data.get("on") else "off"], timeout=300))
+    target_re = re.compile(r"^([0-9]{1,3}\.){3}[0-9]{1,3}$|^[A-Za-z0-9._@+-]{1,64}$")
+    if action == "quarantine":
+        target = field(data, "target", target_re, required=True)
+        reason = field(data, "reason", re.compile(r"^[\x20-\x7e]{0,120}$")) or f"quarantined by {session.get('user', 'admin')} (dashboard)"
+        return result(*radius_admin(["security", "quarantine", target, reason], timeout=300))
+    if action == "release":
+        return result(*radius_admin(["security", "release", field(data, "target", target_re, required=True)], timeout=300))
+    if action == "quarantine-server":
+        ip = field(data, "ip", re.compile(r"^([0-9]{1,3}\.){3}[0-9]{1,3}$"), required=True)
+        return result(*radius_admin(["security", "quarantine-server", ip], timeout=300))
     abort(404)
 
 
@@ -1669,7 +1730,7 @@ def main():
     from waitress import serve
     host, _, port = CONF.get("BIND", "127.0.0.1:8099").rpartition(":")
     serve(app, host=host or "127.0.0.1", port=int(port), threads=8, ident="mlweb",
-          trusted_proxy="127.0.0.1", trusted_proxy_headers={"x-forwarded-for", "x-forwarded-proto"},
+          trusted_proxy="127.0.0.1", trusted_proxy_headers={"x-forwarded-for", "x-forwarded-proto", "x-forwarded-port"},
           clear_untrusted_proxy_headers=True)
 
 

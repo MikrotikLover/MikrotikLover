@@ -494,6 +494,14 @@ add chain=ao-whatsapp connection-state=new action=log log-prefix="WF-allowonly" 
 add chain=ao-whatsapp protocol=tcp action=reject reject-with=tcp-reset comment="wfchain:ao-whatsapp block rest"
 add chain=ao-whatsapp action=reject reject-with=icmp-admin-prohibited comment="wfchain:ao-whatsapp block rest"
 
+# ---- quarantine: infected devices (address list ml-quarantine, filled by the server) get no internet,
+#      only DNS and the server's warning page (every http:// address shows it)
+add chain=forward src-address-list=ml-quarantine protocol=udp dst-port=53 action=accept comment="wfpolicy:quarantine dns"
+add chain=forward src-address-list=ml-quarantine protocol=tcp dst-port=53 action=accept comment="wfpolicy:quarantine dns"
+add chain=forward src-address-list=ml-quarantine connection-state=new action=log log-prefix="WF-quarantine" limit=20/1m,10:packet comment="wfpolicy:quarantine (log)"
+add chain=forward src-address-list=ml-quarantine protocol=tcp action=reject reject-with=tcp-reset comment="wfpolicy:quarantine block"
+add chain=forward src-address-list=ml-quarantine action=reject reject-with=icmp-admin-prohibited comment="wfpolicy:quarantine block"
+
 # ---- policies
 # --- policy guests: Guests: everything except torrents, VPNs and adult content
 add chain=forward src-address-list=policy-guests protocol=tcp dst-port=443 action=jump jump-target=wf-torrent-piracy comment="wfpolicy:guests torrent-piracy"

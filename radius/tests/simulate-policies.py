@@ -134,6 +134,10 @@ CASES = [
     ("kids-night: Sat 03:00 (weekend) ok", F("policy-kids-night", "www.google.com", hour=3, day="sat"),  "allow"),
     ("kids-night: games Sat 05:00 blocked",F("policy-kids-night", "api.pubgmobile.com", hour=5, day="sat"), "reject"),
     ("kids-night: games Sat 15:00 ok",     F("policy-kids-night", "api.pubgmobile.com", hour=15, day="sat"), "allow"),
+    # quarantine (infected device): only DNS (+ the server's warning page), everything else refused
+    ("quarantine: https google",           F("ml-quarantine", "www.google.com"),             "reject"),
+    ("quarantine: whatsapp call",          F("ml-quarantine", None, "udp", 3478),            "reject"),
+    ("quarantine: DNS still works",        F("ml-quarantine", None, "udp", 53),              "accept"),
 ]
 fail = 0
 for desc, f, exp in CASES:
