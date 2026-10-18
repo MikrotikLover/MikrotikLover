@@ -1228,6 +1228,7 @@ ROUTES.plans = async () => {
 };
 
 function voucherDialog(plans, preset) {
+  plans = plans.filter((p) => p.name !== "social-free");     // social WiFi's own plan: no cards
   const f = h("form", { class: "form cols", onsubmit: (e) => e.preventDefault() },
     h("label", { class: "field" }, "Plan", h("select", { name: "plan", required: true }, plans.map((p) => h("option", { value: p.name, selected: p.name === preset }, p.name)))),
     h("label", { class: "field" }, "How many", h("input", { name: "count", type: "number", min: 1, max: 1000, value: 20, required: true })),

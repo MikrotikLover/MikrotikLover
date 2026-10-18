@@ -231,13 +231,18 @@ Wi-Fi: guest SSID (misal `Cafe-WiFi`) **bina password** ke banayein aur use `bri
 
 **C. Login page:** dashboard → **Hotspot page** (naam, logo, rang, offer) → "Put these pages on the routers automatically" on (auto-sync script laga ho). Ya haath se: Winbox → Files → `hotspot/` mein `mikrotik/hotspot-login/` ki teeno files (login.html, status.html, alogin.html).
 
-**D. Server par plan aur vouchers:**
+**D. Plan aur vouchers — dashboard se:**
+1. **Plans → New plan**: Name (`1day`), Price (`50`), Validity (`1d`), Data quota (`2G`), Speed (`5M/5M`), Devices at once (`1`) → **Save**. Mahana plan: Validity `30d`, quota `30G`, Quota resets `monthly`.
+2. **Vouchers → Create vouchers**: Plan `1day`, How many `50`, **PIN mode** tick → **Create** → batch kholein → **Print cards**.
+3. Mustaqil user: **Users → Add user** → us user ka page → **Package** mein plan chunein.
+
+Yahi kaam terminal se (optional):
 ```bash
 sudo radius-admin plan add 1day  --price 50  --validity 1d  --quota 2G  --rate 5M/5M --devices 1
 sudo radius-admin plan add 30day --price 500 --validity 30d --quota 30G --period monthly --rate 5M/5M
 sudo radius-admin voucher create 1day 50 --pin          # 50 cards, sirf PIN wale
 ```
-Dashboard → **Vouchers** → batch → **Print** (cards). Ya mustaqil users: `sudo radius-admin user add ali -p 'Pass12345'` phir `user plan ali 30day` (hotspot users **`--nt-hash` ke baghair**).
+Hotspot users **`--nt-hash` ke baghair** banayein (dashboard mein "Store NT-hash" tick na karein).
 Bina card free WiFi (cafe): section 6b → Social WiFi.
 
 **E. Admin / printer jinhe login nahi chahiye:**
