@@ -382,4 +382,18 @@ CREATE TABLE IF NOT EXISTS ml_router_setup (
   created DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   expires DATETIME NOT NULL,
   KEY (expires)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- IP binding: every user keeps the address DHCP gave them (or the one the admin chose); routers get DHCP static leases
+CREATE TABLE IF NOT EXISTS ml_ip_bind (
+  username VARCHAR(64) NOT NULL PRIMARY KEY,
+  ip VARCHAR(15) NOT NULL,
+  mac VARCHAR(17) NOT NULL DEFAULT '',
+  locked TINYINT(1) NOT NULL DEFAULT 0,
+  router_ip VARCHAR(45) NOT NULL DEFAULT '',
+  created DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY (ip),
+  KEY (mac)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

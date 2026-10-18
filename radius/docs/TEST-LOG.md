@@ -109,3 +109,6 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 10:58 | Router setup: API make / router fetch (no login) / status / expired + unknown token 404 / needs login | ok — 41 checks total (tests/test-routersetup.py) |
 | 10:58 | Router setup page: desktop + phone, one-liner, Copy, Download .rsc, 'router downloaded it ✔' | ok — no overflow, no console errors (shots 92-94) |
 | 10:58 | install.sh: routersetup.py + mikrotik/*.rsc to /usr/local/lib/mikrotiklover, ml_router_setup table + grant | ok — rc 0 |
+| 19:30 | IP binding: auto bind (enforce every 5 min), random MAC follows user, conflicts, admin set/lock, free after N days, PPPoE excluded | ok — tests/test-ipbind.sh 34 checks |
+| 19:30 | IP binding: sync.rsc DHCP static leases in one :do block, lint ok; table collation fixed (unicode_ci, also ml_router_setup) | ok |
+| 19:30 | IP binding page: desktop + phone, Change dialog, random MAC badges; full UI suite + social/speed/notice/router-setup regress | ok — no console errors (shots 95-97) |

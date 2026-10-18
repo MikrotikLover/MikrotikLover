@@ -271,3 +271,6 @@ input[type=color] { width: 60px; height: 34px; padding: 2px; }
 .sub-opts { padding: 0 4px 4px 30px; }
 .steps { margin: 0 0 8px 18px; padding: 0; line-height: 1.7; }
 .rsc-view { max-height: 420px; overflow: auto; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 12px; white-space: pre; }
+/* IP binding */
+.w-num { width: 90px; }
+.tips { margin: 0; padding-left: 18px; line-height: 1.6; display: grid; gap: 6px; }

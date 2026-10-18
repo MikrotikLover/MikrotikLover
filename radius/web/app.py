@@ -1640,6 +1640,55 @@ def router_sync():
     return app.response_class(_router_file("sync.rsc"), mimetype="text/plain")
 
 
+# ------------------------------------------------------------------ IP binding (user keeps one LAN address)
+IPV4_RE = re.compile(r"^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$")
+
+
+@app.get("/api/ipbind")
+@login_required()
+def ipbind_list():
+    rows = q("""SELECT b.username, b.ip, b.mac, b.locked, b.router_ip, b.created, b.last_seen,
+                       (SELECT r.framedipaddress FROM radacct r WHERE r.username=b.username AND r.acctstoptime IS NULL
+                         ORDER BY r.acctstarttime DESC LIMIT 1) AS ip_now,
+                       (SELECT r.callingstationid FROM radacct r WHERE r.username=b.username AND r.acctstoptime IS NULL
+                         ORDER BY r.acctstarttime DESC LIMIT 1) AS mac_now
+                FROM ml_ip_bind b ORDER BY INET_ATON(b.ip)""")
+    for r in rows:
+        r["random"] = bool(r["mac"]) and r["mac"][1:2].upper() in "26AE"
+    st = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k IN ('ipbind_auto','ipbind_days')")}
+    return jsonify(bindings=jsonable(rows), auto=st.get("ipbind_auto") == "1", days=int(st.get("ipbind_days") or 7))
+
+
+@app.post("/api/ipbind")
+@login_required("admin")
+def ipbind_set():
+    data = body()
+    user = field(data, "user", NAME_RE, required=True)
+    ip = field(data, "ip", IPV4_RE, required=True, maxlen=15)
+    return result(*radius_admin(["ipbind", "set", user, ip], action=f"ipbind set {user} {ip}"))
+
+
+@app.post("/api/ipbind/<action>")
+@login_required("admin")
+def ipbind_action(action):
+    data = body()
+    if action == "settings":
+        if "auto" in data:
+            ok, msg = radius_admin(["ipbind", "auto", "on" if data.get("auto") else "off"])
+            if not ok:
+                return result(ok, msg)
+        if "days" in data:
+            d = str(data.get("days")).strip()
+            if not re.match(r"^\d{1,4}$", d) or int(d) > 3650:
+                abort(400, "days: 0-3650")
+            return result(*radius_admin(["ipbind", "days", str(int(d))]))
+        return result(True, "saved")
+    if action in ("unlock", "del"):
+        user = field(data, "user", NAME_RE, required=True)
+        return result(*radius_admin(["ipbind", action, user]))
+    abort(404)
+
+
 # ------------------------------------------------------------------ router setup page
 MIKROTIK_DIR = os.environ.get("MLWEB_MIKROTIK", "/usr/local/lib/mikrotiklover/mikrotik")
 SETUP_TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")

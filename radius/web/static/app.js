@@ -37,6 +37,7 @@ const ICONS = {
   settings: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6m7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14.5 3h-4l-.4 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7 7 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2l.4 2.6h4l.4-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2",
   menu: "M4 6h16M4 12h16M4 18h16",
   term: "M3 4h18v16H3zM7 9l3 3-3 3M13 15h4",
+  pin: "M12 21s-7-6.5-7-12a7 7 0 0 1 14 0c0 5.5-7 12-7 12zM12 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4",
   plan: "M4 4h16v16H4zM8 9h8M8 13h8M8 17h5",
   voucher: "M3 7h18v4a2 2 0 0 0 0 4v4H3v-4a2 2 0 0 0 0-4zM14 7v12",
   money: "M3 6h18v12H3zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6M6 9v.01M18 15v.01",
@@ -209,7 +210,7 @@ const legend = () => h("div", { class: "legend" }, h("span", {}, h("i", { class:
 // ------------------------------------------------------------------ shell + router
 const NAV = [
   ["dashboard", "Dashboard", "home"], ["users", "Users", "users"], ["groups", "Groups & policies", "groups"],
-  ["macs", "MAC devices", "mac"], ["routers", "Routers", "router"], ["setup", "Router setup", "term"], "-",
+  ["macs", "MAC devices", "mac"], ["ipbind", "IP binding", "pin"], ["routers", "Routers", "router"], ["setup", "Router setup", "term"], "-",
   ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], ["speed", "Speed schedule", "clock"], ["hotspot", "Hotspot page", "brush"], ["social", "Social WiFi", "phone"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["insights", "Insights (samajh)", "bulb"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
   ["data", "Data usage", "data"], ["apps", "Apps on network", "apps"], ["ports", "Ports & protocols", "ports"], "-",
@@ -1093,6 +1094,64 @@ ROUTES.speed = async () => {
           h("button", { class: "small danger", onclick: async () => { if (await confirmDlg("Delete", `Delete speed schedule ${r.name}?`, "Delete")) if (await act(api("POST", `/api/speed/${r.id}/del`, {}))) route(); } }, "Delete")) : null }],
         d.rules, "No speed schedule yet — everyone has their normal speed all day.")),
     card("Check a user", "which speed, and why", check, out)));
+};
+
+// ------------------------------------------------------------------ IP binding: every user keeps one address
+ROUTES.ipbind = async () => {
+  const d = await api("GET", "/api/ipbind");
+  const edit = (b) => {
+    const form = h("form", { class: "form", onsubmit: (e) => e.preventDefault() },
+      h("label", { class: "field" }, "User", h("input", { name: "user", required: true, value: b ? b.username : "", readonly: !!b, placeholder: "ali" })),
+      h("label", { class: "field" }, "Address", h("span", { class: "help" }, "in the router's LAN, e.g. 192.168.88.50 — better outside the DHCP pool"),
+        h("input", { name: "ip", required: true, value: b ? b.ip : "", placeholder: "192.168.88.50", pattern: "^\\d{1,3}(\\.\\d{1,3}){3}$" })));
+    dialog(b ? `Change address of ${b.username}` : "Bind a user to an address", form, [{ label: "Cancel" }, { label: "Save", class: "primary", action: async () => {
+      if (!form.reportValidity()) return false;
+      if (!(await act(api("POST", "/api/ipbind", formValues(form))))) return false;
+      route();
+    } }]);
+  };
+  const auto = h("label", { class: "check" + (d.auto ? " on" : "") }, h("input", { type: "checkbox", checked: d.auto, disabled: !isAdmin(),
+    onchange: async (e) => { await act(api("POST", "/api/ipbind/settings", { auto: e.target.checked })); route(); } }),
+    h("div", {}, h("b", {}, "Every user keeps the first address DHCP gives them"),
+      h("span", {}, "Checked every 5 minutes. The routers get a DHCP static lease (auto-sync, 15 min); the device gets it at its next DHCP renewal or Wi-Fi off/on. PPPoE users: static IP on the user (Users → user → IP).")));
+  const days = h("input", { type: "number", min: 0, max: 3650, value: d.days, class: "w-num" });
+  const settings = h("div", { class: "toolbar wrap" }, h("span", {}, "Free an automatic address after"), days, h("span", {}, "days without a login (0 = never)"),
+    isAdmin() ? h("button", { class: "small", onclick: async () => { if (await act(api("POST", "/api/ipbind/settings", { days: days.value }))) route(); } }, "Save") : null);
+  const search = h("input", { type: "search", placeholder: "Search user, address or MAC", class: "grow" });
+  const holder = h("div");
+  const draw = () => {
+    const f = search.value.trim().toLowerCase();
+    const rows = d.bindings.filter((b) => !f || `${b.username} ${b.ip} ${b.mac}`.toLowerCase().includes(f));
+    holder.replaceChildren(table([
+      { label: "User", render: (b) => h("b", {}, b.username) },
+      { label: "Address", render: (b) => h("code", {}, b.ip) },
+      { label: "Device", render: (b) => b.mac ? h("span", {}, h("code", {}, b.mac), " ", b.random ? badge("random MAC", "warn") : null) : h("span", { class: "muted" }, "known at the next login") },
+      { label: "How", render: (b) => b.locked ? badge("set by admin", "ok") : badge("auto") },
+      { label: "Now", render: (b) => !b.ip_now ? h("span", { class: "muted" }, "offline") : b.ip_now === b.ip ? badge("online on it", "ok")
+          : h("span", {}, h("code", {}, b.ip_now), " ", badge("moves at the next DHCP renewal", "warn")) },
+      { label: "Last seen", render: (b) => ago(b.last_seen) },
+      { label: "", render: (b) => isAdmin() ? h("div", { class: "row-actions" },
+          h("button", { class: "small", onclick: () => edit(b) }, "Change"),
+          b.locked ? h("button", { class: "small", onclick: async () => { if (await act(api("POST", "/api/ipbind/unlock", { user: b.username }))) route(); } }, "Auto") : null,
+          h("button", { class: "small danger", onclick: async () => {
+            if (await confirmDlg("Remove binding", `${b.username} will get any free address again.`, "Remove"))
+              if (await act(api("POST", "/api/ipbind/del", { user: b.username }))) route();
+          } }, "Remove")) : null }],
+      rows, d.auto ? "No bindings yet — they appear after users log in." : "No bindings. Turn on the automatic binding above, or bind a user yourself."));
+  };
+  search.addEventListener("input", draw);
+  draw();
+  const nRandom = d.bindings.filter((b) => b.random).length;
+  shell("IP binding", h("div", { class: "stack" },
+    card("Fixed address per user", `${d.bindings.length} bound · ${d.bindings.filter((b) => b.locked).length} by the admin`, auto, settings),
+    card(null, null, h("div", { class: "toolbar" }, search, isAdmin() ? h("button", { class: "primary", onclick: () => edit(null) }, icon("plus"), "Bind a user") : null), holder),
+    card("Random (private) MAC addresses", nRandom ? `${nRandom} device(s) here use one` : null,
+      h("ul", { class: "tips" },
+        h("li", {}, h("b", {}, "The address follows the user, not the MAC. "), "When a phone comes back with a new random MAC, the binding moves to the new MAC by itself after the login."),
+        h("li", {}, "Android 10+ and iPhone (iOS 14+) use one random MAC per Wi-Fi name that normally stays the same — nothing to do."),
+        h("li", {}, "iPhone 'Rotating' and Android 'non-persistent' change it now and then: the user logs in again once (hotspot), then keeps the same address."),
+        h("li", {}, "Things that work by MAC (MAC devices, hotspot auto-login cookie) need the real MAC: Wi-Fi settings → this network → Private address ", h("b", {}, "Off"), " (iPhone) / ", h("b", {}, "Use device MAC"), " (Android)."),
+        h("li", {}, "Staff Wi-Fi with username + password (WPA-Enterprise) never depends on the MAC.")))));
 };
 
 // ------------------------------------------------------------------ router setup: one line for the MikroTik terminal

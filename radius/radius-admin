@@ -139,7 +139,7 @@ cmd_user() {
     del|delete|rm)
         local u=${1:-}; valid_name "$u" username
         user_exists "$u" || die "No such user '$u'"
-        echo "DELETE FROM radcheck WHERE username=$(q "$u"); DELETE FROM radreply WHERE username=$(q "$u"); DELETE FROM radusergroup WHERE username=$(q "$u"); DELETE FROM ml_account WHERE username=$(q "$u"); DELETE FROM ml_contact WHERE username=$(q "$u");" | db
+        echo "DELETE FROM radcheck WHERE username=$(q "$u"); DELETE FROM radreply WHERE username=$(q "$u"); DELETE FROM radusergroup WHERE username=$(q "$u"); DELETE FROM ml_account WHERE username=$(q "$u"); DELETE FROM ml_contact WHERE username=$(q "$u"); DELETE FROM ml_ip_bind WHERE username=$(q "$u");" | db
         ok "User '$u' deleted"
         ;;
     disable)
@@ -705,6 +705,137 @@ cmd_log() {
     echo "SELECT authdate AS time, username AS user, reply AS result FROM radpostauth ORDER BY id DESC LIMIT $n;" | dbt
 }
 
+# ======================================================================= IP binding
+# Every user keeps one LAN address: the first one DHCP gave them (auto) or the one the admin chose (locked).
+# The routers get DHCP static leases (MAC -> IP) by auto-sync. The binding follows the USER: when the
+# phone shows up with a new (random) MAC, the lease moves to the new MAC. PPPoE uses user ip (Framed-IP).
+random_mac() { [[ ${1:1:1} =~ [26AEae] ]]; }   # "locally administered" bit = private / random MAC
+
+ipbind_rsc() {   # router part of sync.rsc
+    local rows keep="" u ip mac
+    rows=$(echo "SELECT username, ip, mac FROM ml_ip_bind WHERE mac<>'' ORDER BY ip" | db 2>/dev/null || true)
+    echo "# IP binding (radius-admin ipbind): DHCP static leases, user -> fixed address"
+    while IFS=$'\t' read -r u ip mac; do
+        [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ && $mac =~ ^([0-9A-F]{2}-){5}[0-9A-F]{2}$ ]] || continue
+        keep+="${keep:+;}\"${mac//-/:}=$ip\""
+    done <<<"$rows"
+    echo ":do {"
+    echo ":local mlKeep {$keep}"
+    echo ':foreach l in=[/ip dhcp-server lease find where comment~"^mlbind"] do={'
+    echo '  :local k ([:tostr [/ip dhcp-server lease get $l mac-address]] . "=" . [:tostr [/ip dhcp-server lease get $l address]])'
+    echo '  :if ([:typeof [:find $mlKeep $k]] = "nil") do={ /ip dhcp-server lease remove $l }'
+    echo '}'
+    while IFS=$'\t' read -r u ip mac; do
+        [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ && $mac =~ ^([0-9A-F]{2}-){5}[0-9A-F]{2}$ && $u =~ ^[A-Za-z0-9._@+-]+$ ]] || continue
+        mac=${mac//-/:}
+        echo ":if ([:len [/ip dhcp-server lease find where comment~\"^mlbind\" mac-address=$mac address=$ip]] = 0) do={ :do {"
+        echo "  /ip dhcp-server lease remove [find where dynamic=yes mac-address=$mac]"
+        echo "  /ip dhcp-server lease add mac-address=$mac address=$ip comment=\"mlbind: $u\""
+        echo "} on-error={ :log warning \"ml-sync: IP binding $u $ip not set (address in use?)\" } }"
+    done <<<"$rows"
+    echo '} on-error={ :log warning "ml-sync: IP binding not applied" }'
+}
+
+# auto: bind users online now to the address they have; move the binding to a new MAC. Prints changes.
+ipbind_auto() {
+    local verbose=${1:-} rows u ip mac nas cur cip cmac clocked other n=0 days
+    days=$(setting_get ipbind_days); [[ $days =~ ^[0-9]+$ ]] || days=7
+    if [ "$days" -gt 0 ]; then
+        n=$(echo "SELECT COUNT(*) FROM ml_ip_bind WHERE locked=0 AND last_seen < NOW() - INTERVAL $days DAY;
+                  DELETE FROM ml_ip_bind WHERE locked=0 AND last_seen < NOW() - INTERVAL $days DAY;" | db)
+        [ "$n" = 0 ] || [ -z "$verbose" ] || echo "freed $n address(es) not used for $days days"
+    fi
+    echo "DELETE b FROM ml_ip_bind b LEFT JOIN radcheck c ON c.username=b.username WHERE c.username IS NULL;" | db
+    rows=$(echo "SELECT r.username, r.framedipaddress, r.callingstationid, r.nasipaddress FROM radacct r
+                 WHERE r.acctstoptime IS NULL AND r.framedipaddress REGEXP '^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+\$'
+                   AND COALESCE(r.framedprotocol,'') <> 'PPP'
+                   AND r.callingstationid REGEXP '^([0-9A-Fa-f]{2}[-:.]?){5}[0-9A-Fa-f]{2}\$'
+                   AND EXISTS (SELECT 1 FROM radcheck c WHERE c.username=r.username)
+                   AND NOT EXISTS (SELECT 1 FROM radreply p WHERE p.username=r.username AND p.attribute='Framed-IP-Address')
+                 ORDER BY r.acctstarttime, r.radacctid" | db)
+    while IFS=$'\t' read -r u ip mac nas; do
+        [ -n "$u" ] || continue
+        mac=$(norm_mac "$mac" 2>/dev/null) || continue
+        cur=$(echo "SELECT ip, IF(mac='','-',mac), locked FROM ml_ip_bind WHERE username=$(q "$u")" | db)
+        if [ -z "$cur" ]; then
+            [ "$(setting_get ipbind_auto)" = 1 ] || continue
+            other=$(echo "SELECT username FROM ml_ip_bind WHERE ip=$(q "$ip")" | db)
+            [ -z "$other" ] || continue           # someone else's address (their lease is not on the router yet)
+            echo "UPDATE ml_ip_bind SET mac='' WHERE mac=$(q "$mac");
+                  INSERT INTO ml_ip_bind (username, ip, mac, router_ip) VALUES ($(q "$u"), $(q "$ip"), $(q "$mac"), $(q "$nas"));" | db
+            [ -z "$verbose" ] || echo "bind $u -> $ip ($mac$(random_mac "$mac" && echo ', random MAC'))"
+            n=$((n+1)); continue
+        fi
+        IFS=$'\t' read -r cip cmac clocked <<<"$cur"; [ "$cmac" != - ] || cmac=""
+        echo "UPDATE ml_ip_bind SET last_seen=NOW() WHERE username=$(q "$u")" | db
+        if [ "$cmac" != "$mac" ]; then              # new device or a new random MAC: the address follows the user
+            echo "UPDATE ml_ip_bind SET mac='' WHERE mac=$(q "$mac") AND username<>$(q "$u");
+                  UPDATE ml_ip_bind SET mac=$(q "$mac"), router_ip=$(q "$nas"), updated=NOW() WHERE username=$(q "$u");" | db
+            [ -z "$verbose" ] || echo "move $u $cip: ${cmac:-no device} -> $mac"
+            n=$((n+1))
+        fi
+    done <<<"$rows"
+    echo "$n"
+}
+
+cmd_ipbind() {
+    local sub=${1:-status}; shift || true
+    case $sub in
+    status|"")
+        echo "Auto binding : $([ "$(setting_get ipbind_auto)" = 1 ] && echo on || echo off)   (radius-admin ipbind auto on|off)"
+        local d; d=$(setting_get ipbind_days); echo "Free after   : ${d:-7} day(s) not seen (0 = never; admin-set addresses are kept)"
+        echo "Bindings     : $(echo "SELECT COUNT(*) FROM ml_ip_bind" | db) ($(echo "SELECT COUNT(*) FROM ml_ip_bind WHERE locked=1" | db) set by the admin)" ;;
+    list)
+        echo "SELECT b.username AS user, b.ip, IF(b.mac='','(no device yet)',b.mac) AS mac,
+                     IF(b.mac REGEXP '^.[26AEae]','random','') AS mac_kind, IF(b.locked,'admin','auto') AS how,
+                     COALESCE((SELECT r.framedipaddress FROM radacct r WHERE r.username=b.username AND r.acctstoptime IS NULL
+                               ORDER BY r.acctstarttime DESC LIMIT 1),'-') AS ip_now, b.last_seen
+              FROM ml_ip_bind b ORDER BY INET_ATON(b.ip)" | dbt ;;
+    auto)
+        case ${1:-} in
+            on)  setting_set ipbind_auto 1; ok "Auto IP binding on: users keep the address DHCP gave them (checked every 5 min)" ;;
+            off) setting_set ipbind_auto 0; ok "Auto IP binding off (existing bindings stay; remove with: ipbind del USER)" ;;
+            *) die "usage: radius-admin ipbind auto on|off" ;;
+        esac ;;
+    days)
+        valid_int "${1:-}" days; [ "$1" -le 3650 ] || die "days: 0-3650"
+        setting_set ipbind_days "$1"; ok "Auto bindings are freed after $1 day(s) without a login$([ "$1" = 0 ] && echo ' — never')" ;;
+    set)
+        local u=${1:-} ip=${2:-} other mac nas
+        [ -n "$ip" ] || die "usage: radius-admin ipbind set USER IP"
+        valid_name "$u" username; user_exists "$u" || die "No such user '$u'"
+        valid_ip "$ip"; [[ $ip != */* ]] || die "A single IPv4 address, not a subnet"
+        [ -z "$(echo "SELECT 1 FROM radreply WHERE username=$(q "$u") AND attribute='Framed-IP-Address'" | db)" ] \
+            || die "'$u' has a PPPoE static IP — change that with: radius-admin user ip $u $ip"
+        other=$(echo "SELECT username FROM ml_ip_bind WHERE ip=$(q "$ip") AND username<>$(q "$u")" | db)
+        [ -z "$other" ] || die "$ip is already bound to '$other'"
+        other=$(echo "SELECT username FROM radacct WHERE acctstoptime IS NULL AND framedipaddress=$(q "$ip") AND username<>$(q "$u") LIMIT 1" | db)
+        [ -z "$other" ] || die "$ip is in use right now by '$other' — choose another address"
+        read -r mac nas < <(echo "SELECT callingstationid, nasipaddress FROM radacct WHERE username=$(q "$u") AND callingstationid<>''
+                                 ORDER BY acctstarttime DESC LIMIT 1" | db | tr '\t' ' ') || true
+        mac=$(norm_mac "${mac:-x}" 2>/dev/null) || mac=""
+        echo "INSERT INTO ml_ip_bind (username, ip, mac, locked, router_ip) VALUES ($(q "$u"), $(q "$ip"), $(q "$mac"), 1, $(q "${nas:-}"))
+              ON DUPLICATE KEY UPDATE ip=VALUES(ip), locked=1, updated=NOW(), mac=IF(mac='', VALUES(mac), mac);" | db
+        cmd_policy build >/dev/null 2>&1 || true
+        ok "User '$u' -> $ip$([ -z "$mac" ] && echo ' (device will be known at the first login)'). Routers get it by auto-sync (15 min); the device at its next DHCP renewal or Wi-Fi off/on" ;;
+    unlock)
+        local u=${1:-}; valid_name "$u" username
+        [ -n "$(echo "SELECT 1 FROM ml_ip_bind WHERE username=$(q "$u")" | db)" ] || die "'$u' has no IP binding"
+        echo "UPDATE ml_ip_bind SET locked=0 WHERE username=$(q "$u")" | db; ok "'$u' keeps the address, but it is freed after the unused days" ;;
+    del)
+        local u=${1:-}; valid_name "$u" username
+        [ -n "$(echo "SELECT 1 FROM ml_ip_bind WHERE username=$(q "$u")" | db)" ] || die "'$u' has no IP binding"
+        echo "DELETE FROM ml_ip_bind WHERE username=$(q "$u")" | db
+        cmd_policy build >/dev/null 2>&1 || true
+        ok "IP binding of '$u' removed (routers drop the lease at the next auto-sync)" ;;
+    run)
+        local n; n=$(ipbind_auto "${1:-}")
+        [ "${n##*$'\n'}" = 0 ] || cmd_policy build >/dev/null 2>&1 || true
+        [ -z "${1:-}" ] && ok "IP binding: ${n##*$'\n'} change(s)" || echo "$n" ;;
+    *) die "usage: radius-admin ipbind status | list | auto on|off | days N | set USER IP | unlock USER | del USER | run [-v]" ;;
+    esac
+}
+
 # ======================================================================= hotspot business: plans, vouchers, subscriptions
 parse_duration() { # 30d 12h 90m 45s or plain seconds -> seconds ("0" allowed)
     [[ $1 =~ ^([0-9]{1,6})([dhms]?)$ ]] || die "Invalid duration '$1' (e.g. 30d, 12h, 90m)"
@@ -973,6 +1104,9 @@ cmd_enforce() {
     done <<<"$rows"
     echo "DELETE FROM ml_fup WHERE applied_at < NOW() - INTERVAL 40 DAY;" | db
     local n_speed; n_speed=$(speed_enforce "$verbose")
+    local n_bind; n_bind=$(ipbind_auto "$verbose" 2>/dev/null) || n_bind=0
+    [ -z "$verbose" ] || [ "$n_bind" = "${n_bind##*$'\n'}" ] || echo "${n_bind%$'\n'*}"
+    [ "${n_bind##*$'\n'}" = 0 ] || cmd_policy build >/dev/null 2>&1 || true
     [ -z "$verbose" ] || ok "Enforcer: $n_cut session(s) disconnected, $n_fup slowed to FUP speed, $n_speed speed change(s) by schedule"
 }
 
@@ -1360,6 +1494,8 @@ RSC
             cat "$lists/security.rsc"
             echo
             cat "$lists/hotspot.rsc"
+            echo
+            ipbind_rsc
         } > "$lists/sync.rsc"
         install -m 644 "$lists/webfilter-policies.rsc" "$lists/vpn-servers.rsc" "$lists/sync.rsc" "$ROUTER_DIR/"
         sha256sum "$ROUTER_DIR/sync.rsc" | cut -c1-16 > "$ROUTER_DIR/version.tmp"
@@ -2463,6 +2599,15 @@ Warn users before it runs out ("pehle se khabardari")
   notice set sms on|off | hours 9-21    send SMS (hourly, once per expiry date / data period, only these hours)
   notice test PHONE | run [--dry-run] | log
 
+IP binding: every user keeps one address (DHCP static lease on the routers, follows a new / random MAC)
+  ipbind                                settings + how many bindings
+  ipbind auto on|off                    bind every user to the first address DHCP gives them (checked every 5 min)
+  ipbind days 7                         free an auto binding after N days without a login (0 = never)
+  ipbind list                           user, address, device (random MAC?), auto/admin, address now
+  ipbind set USER 192.168.88.50         the admin chooses the address (kept for ever)
+  ipbind unlock USER | del USER         back to auto / remove
+  (PPPoE: user ip USER IP)
+
 Social WiFi (cafe): free WiFi with the phone number (code by SMS / WhatsApp)
   social                                on/off, free time + data per day, customers
   social on | off                       needs: notice gateway (SMS), security quarantine-server IP
@@ -2602,6 +2747,7 @@ case ${1:-help} in
     alerts)  shift; cmd_alerts "$@" ;;
     speed)   shift; cmd_speed "$@" ;;
     notice)  shift; cmd_notice "$@" ;;
+    ipbind)  shift; cmd_ipbind "$@" ;;
     hotspot) shift; cmd_hotspot "$@" ;;
     social)  shift; cmd_social "$@" ;;
     insights) shift; python3 -I /usr/local/lib/mikrotiklover/insights.py "${1:-report}" --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "${@:2}" ;;

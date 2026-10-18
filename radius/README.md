@@ -1063,6 +1063,17 @@ Page sab `mikrotik/*.rsc` files ko sahi tarteeb mein jor kar server IP, router k
 Winbox → New Terminal → paste → Enter. Link 1 ghante ka hai (random token, table `ml_router_setup`); page dikhata hai ke router ne download kar liya. Ya **Download .rsc** se file le kar haath se import karein.
 Galat input (interface, SSID, secret mein `"` ya `;`) wahin rok diya jata hai. Tests: `tests/test-routersetup.py` (script builder + API + lint).
 
+## 7n. IP binding — har user ka apna pakka IP
+
+Dashboard → **IP binding** → "Every user keeps the first address DHCP gives them" on (ya `radius-admin ipbind auto on`).
+- Har 5 min (cron `enforce`) online users dekhe jate hain: jis user ko DHCP ne jo IP diya, woh us ke **username** ke sath bind ho jata hai (table `ml_ip_bind`).
+- Routers ko auto-sync se **DHCP static lease** (MAC → IP, comment `mlbind: USER`) milti hai; device agli DHCP renewal (ya Wi-Fi off/on) par wahi IP leta hai.
+- Admin **Change** se koi bhi IP de sakta hai (`ipbind set USER IP`) — yeh "set by admin" ho jata hai aur kabhi khud nahi badalta. Jo IP kisi aur ka ho ya abhi kisi aur ke paas ho, woh mana.
+- Automatic IP itne din login na ho to azad (default 7, `ipbind days N`, 0 = kabhi nahi) — cafe mein voucher walon se pool khatam na ho.
+- **Random (private) MAC:** binding MAC ki nahi, **user** ki hai. Phone naye random MAC se aaye to login ke baad lease naye MAC par chali jati hai, IP wahi rehta hai. Dashboard par "random MAC" nishan. Ek hi phone par doosra user login kare to device naye user ke paas chala jata hai.
+- PPPoE users par nahi (un ke liye `user ip USER IP` — Framed-IP-Address).
+- Tests: `tests/test-ipbind.sh` (34 checks: auto, random MAC, takraao, admin, din, lint, API).
+
 ## 7e. Health check — sab theek hai?
 
 `sudo radius-admin doctor` ya dashboard → **Health check**: server ka har hissa **sabz** (theek), **peela** (dekh lein) ya **laal** (abhi theek karein), aur kharabi ke saath us ka hal likha hota hai.

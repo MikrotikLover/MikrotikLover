@@ -47,6 +47,8 @@ PROPS = {
     "/ip hotspot profile": {"use-radius", "radius-accounting", "radius-interim-update", "login-by", "mac-auth-mode",
                             "name", "hotspot-address", "dns-name", "html-directory"},
     "/ip hotspot": {"name", "interface", "address-pool", "profile", "disabled"},
+    "/ip hotspot walled-garden ip": {"action", "dst-address", "protocol", "dst-port", "comment", "dst-host"},
+    "/ip dhcp-server lease": {"mac-address", "address", "comment", "server", "disabled"},
     "/ip address": {"address", "interface", "comment", "disabled"},
     "/interface bridge port": {"bridge", "interface", "comment"},
     "/interface list member": {"list", "interface", "comment"},
@@ -77,7 +79,7 @@ def lint(path):
             script_depth += bare.count("{") - bare.count("}")
             depth += bare.count("{") - bare.count("}")
             continue
-        if s.startswith(COMMANDS) or s.startswith((":delay", ":if", ":do", ":log", ":local", ":global", ":put")):
+        if s.startswith(COMMANDS) or s.startswith((":delay", ":if", ":do", ":log", ":local", ":global", ":put", ":set", ":foreach")):
             bare = strip_quoted(s)
             depth += bare.count("{") - bare.count("}")
             continue

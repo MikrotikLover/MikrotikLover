@@ -309,6 +309,7 @@ Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein
 | Feature | Dashboard | CLI (server par `sudo`) |
 |---|---|---|
 | Server ka IP (routers ki nazar se) — quarantine page aur social WiFi ke liye | Security → Protection & lists | `radius-admin security quarantine-server 192.168.88.10` |
+| Har user ka pakka IP (DHCP walon ke liye; admin badal sakta hai) | IP binding | `radius-admin ipbind auto on` · `ipbind set ali 192.168.88.50` · `ipbind days 7` |
 | Alerts phone par (Telegram / WhatsApp / Email) | Settings → Alerts | `radius-admin alerts telegram BOT_TOKEN` · `alerts whatsapp 923001234567 APIKEY` · `alerts test` |
 | Off-site backup (doosra server / Google Drive) | Settings → Off-site copy | `radius-admin backup offsite ssh user@host:/backups` ya `backup offsite rclone gdrive:ml` |
 | Infected device quarantine (khud) | Security → Protection | `radius-admin security quarantine-auto on` |
