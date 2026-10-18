@@ -103,3 +103,4 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 11:19 | Social WiFi limits: rate limits, old code, other device, 5 wrong tries, daily limit | OK |
 | 11:19 | Bugs fixed: 'returning' is a reserved SQL word; CSV export lost lines starting with +; consent reset by CLI | Fixed + re-tested |
 | 11:19 | test-social (18) + UI (50) + all suites | All pass |
+| 10:22 | ZIP install test: unzip + bash install.sh on the server | OK — rc 0, test login OK, dashboard 200, doctor: only the unreachable test router red |
