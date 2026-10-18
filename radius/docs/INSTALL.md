@@ -41,6 +41,54 @@ Yeh guide ek khali server se le kar poore chalte hue system tak har qadam batati
 
 ---
 
+## 1b. Cable kaise lagayein (WAN, LAN, RADIUS server)
+
+```
+   ISP modem / fiber ONT
+          │
+       ether1  (WAN — internet)
+   ┌────────────────────────┐
+   │        MikroTik         │
+   │ ether2 ether3 ether4    │ ether5
+   └──┬──────┬──────┬────────┴──┬──────────
+      │      │      │           │
+   switch / Wi-Fi access points  RADIUS server (PC / mini PC / VM wala Windows PC)
+   (users: LAN bridge,           alag network: 10.10.10.0/24
+    misal 192.168.88.0/24)       router 10.10.10.1  ·  server 10.10.10.10
+```
+
+- **ether1** = internet (ISP). **ether2–4** = users (bridge / switch / access points). **ether5** = sirf RADIUS server — **apna alag network**, users wale bridge mein nahi (DNS logger is ke baghair theek kaam nahi karta).
+- Ports ke naam apne router ke hisaab se badal lein.
+
+**Router par (Terminal) — ether5 ko server ka port banana:**
+```
+/interface bridge port remove [find interface=ether5]
+/ip address add address=10.10.10.1/24 interface=ether5 comment="RADIUS server"
+/interface list member add list=LAN interface=ether5
+```
+(Interface list `LAN` pehle se na ho to: `/interface list add name=LAN` aur bridge ko bhi us mein daalein. Server ko internet router ki maujooda masquerade (NAT) se milta hai.)
+
+**Server par — fixed IP** (Ubuntu, `/etc/netplan/01-net.yaml`; `eth0` ki jagah `ip a` mein jo naam dikhe):
+```yaml
+network:
+  version: 2
+  ethernets:
+    eth0:
+      addresses: [10.10.10.10/24]
+      routes: [{to: default, via: 10.10.10.1}]
+      nameservers: {addresses: [10.10.10.1]}
+```
+`sudo netplan apply` → `ping 10.10.10.1` aur `ping 8.8.8.8` dono chalne chahiyein.
+
+**Phir:**
+- Server par router add karein: `sudo radius-admin nas add 10.10.10.1` (router isi IP se RADIUS bhejta hai).
+- Router ki saari scripts mein `RADIUS_SERVER_IP` = `10.10.10.10`.
+- Dashboard: admin ke PC se `https://10.10.10.10:8443` (users ke LAN se router ke raaste khulta hai).
+
+**Doosri jagahen:** server internet par (VPS) ya doosri branch mein ho to cable ki jagah **WireGuard** tunnel lagayein, aur upar wala `10.10.10.x` tunnel ke IPs ban jate hain. Kai routers hon to har router aik `nas add` aur wohi scripts.
+
+---
+
 ## 2. Server tayyar karein
 
 ```bash
