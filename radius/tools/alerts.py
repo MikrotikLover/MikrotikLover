@@ -11,7 +11,7 @@
   alerts.py log [N]                      last N alerts sent
 Common options: --cnf FILE --db NAME (database), --conf FILE (settings), --state FILE.
 
-Events (EVENTS=, comma separated): security quarantine router service jobs disk expiring anomaly summary weekly
+Events (EVENTS=, comma separated): security quarantine router service jobs disk expiring anomaly requests summary weekly
   alerts.py weekly                       this week's report (sent by check on Monday at SUMMARY_HOUR)
   alerts.py monthly [--month YYYY-MM]    security report PDF (sent by check on the 1st at SUMMARY_HOUR)
 Settings live in /etc/mikrotiklover-radius/alerts.conf (root only, mode 600).
@@ -24,8 +24,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # insights.py (
 CONF = "/etc/mikrotiklover-radius/alerts.conf"
 STATE = "/var/lib/mikrotiklover/alerts-state.json"
 UPDATES = "/var/lib/mikrotiklover/updates.txt"
-EVENTS = ("security", "quarantine", "router", "service", "jobs", "disk", "expiring", "anomaly", "summary", "weekly", "monthly")
-DEFAULT_EVENTS = "security,quarantine,router,service,jobs,disk,anomaly,summary,weekly,monthly"
+EVENTS = ("security", "quarantine", "router", "service", "jobs", "disk", "expiring", "anomaly", "requests", "summary", "weekly", "monthly")
+DEFAULT_EVENTS = "security,quarantine,router,service,jobs,disk,anomaly,requests,summary,weekly,monthly"
 KEYS = {
     "TELEGRAM_TOKEN": r"^\d{3,15}:[A-Za-z0-9_-]{20,100}$",
     "TELEGRAM_CHAT": r"^-?\d{1,20}$|^@[A-Za-z0-9_]{4,64}$",
@@ -410,6 +410,22 @@ def check(c, db, state, now=None, ping_fn=ping, running_fn=running, updates=UPDA
             state["quarantine_id"] = max(int(qid), int(state.get("quarantine_id", 0)))
             found.append(("quarantine", f"🚫 Quarantined {'automatically' if auto == '1' else 'by an admin'}: {user or ip} — {reason}"))
         state.setdefault("quarantine_id", 0)
+    if "requests" in ev:
+        # "please open this site" from the block page (radius-admin unblock / dashboard Blocking -> Requests)
+        try:
+            last = int(state.get("unblock_id", 0))
+            rows = db.rows(f"SELECT id, IF(username='', ip, username), host, policy, note FROM ml_unblock "
+                           f"WHERE id > {last} AND status='pending' ORDER BY id LIMIT 20")
+            if "unblock_id" not in state:
+                rows = []
+                state["unblock_id"] = int(db.rows("SELECT IFNULL(MAX(id),0) FROM ml_unblock")[0][0])
+            for rid, who, host, pol, note in rows:
+                state["unblock_id"] = max(int(rid), int(state.get("unblock_id", 0)))
+                found.append(("requests", f"🔓 Request #{rid}: {who} wants {host} (policy {pol or '-'})"
+                              + (f" — \"{note}\"" if note and note != "NULL" else "")
+                              + f". Dashboard → Blocking → Requests, or: radius-admin unblock approve {rid} 1h"))
+        except Exception:                          # noqa: BLE001 — table missing on an old install
+            pass
     if "router" in ev:
         for addr, name in db.rows("SELECT nasname, shortname FROM nas ORDER BY nasname"):
             if "/" in addr or not re.match(r"^[A-Za-z0-9.:-]+$", addr):
@@ -488,7 +504,8 @@ def compose(found):
         lines.append(f"… and {len(found) - MAX_LINES} more (dashboard → Security / Settings)")
     kinds = sorted({k for k, _ in found})
     names = {"security": "security", "quarantine": "quarantine", "router": "routers", "service": "services",
-             "jobs": "jobs", "disk": "disk", "expiring": "expiring users", "anomaly": "unusual data use"}
+             "jobs": "jobs", "disk": "disk", "expiring": "expiring users", "anomaly": "unusual data use",
+             "requests": "unblock requests"}
     return ",".join(kinds), f"{len(found)} alerts: " + ", ".join(names.get(k, k) for k in kinds), "\n".join(lines)
 
 

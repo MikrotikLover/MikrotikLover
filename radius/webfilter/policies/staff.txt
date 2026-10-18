@@ -4,3 +4,5 @@ block video-streaming time=9h-17h,mon,tue,wed,thu,fri,sat
 block gaming
 block torrent-piracy
 block keywords
+allow-site linkedin.com
+block-site example-bet.com

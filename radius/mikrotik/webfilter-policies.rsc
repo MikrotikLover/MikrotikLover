@@ -10,6 +10,8 @@
 # Policies: guests kids-night night-off no-internet no-tiktok-pubg no-video-day no-video no-vpn staff students whatsapp-only 
 # Checks the HTTPS site name (SNI), so it works per device even when DNS answers are cached.
 
+/ip firewall address-list
+remove [find comment~"^wfpolicy:"]
 /ip firewall filter
 remove [find comment~"^wfpolicy:"]
 remove [find comment~"^wfchain:"]
@@ -459,6 +461,8 @@ add chain=wf-app-tiktok protocol=tcp tls-host="tiktok.com" action=reject reject-
 add chain=wf-app-tiktok protocol=tcp tls-host="*.tiktok.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-app-tiktok" comment="wfchain:wf-app-tiktok"
 add chain=wf-app-tiktok protocol=tcp tls-host="tiktokcdn-eu.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-app-tiktok" comment="wfchain:wf-app-tiktok"
 add chain=wf-app-tiktok protocol=tcp tls-host="*.tiktokcdn-eu.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-app-tiktok" comment="wfchain:wf-app-tiktok"
+add chain=wf-app-tiktok protocol=tcp tls-host="tiktokcdn-new.net" action=reject reject-with=tcp-reset log=yes log-prefix="WF-app-tiktok" comment="wfchain:wf-app-tiktok"
+add chain=wf-app-tiktok protocol=tcp tls-host="*.tiktokcdn-new.net" action=reject reject-with=tcp-reset log=yes log-prefix="WF-app-tiktok" comment="wfchain:wf-app-tiktok"
 add chain=wf-app-tiktok protocol=tcp tls-host="tiktokcdn-us.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-app-tiktok" comment="wfchain:wf-app-tiktok"
 add chain=wf-app-tiktok protocol=tcp tls-host="*.tiktokcdn-us.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-app-tiktok" comment="wfchain:wf-app-tiktok"
 add chain=wf-app-tiktok protocol=tcp tls-host="tiktokcdn.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-app-tiktok" comment="wfchain:wf-app-tiktok"
@@ -504,71 +508,92 @@ add chain=forward src-address-list=ml-quarantine action=reject reject-with=icmp-
 
 # ---- policies
 # --- policy guests: Guests: everything except torrents, VPNs and adult content
-add chain=forward src-address-list=policy-guests protocol=tcp dst-port=443 action=jump jump-target=wf-torrent-piracy comment="wfpolicy:guests torrent-piracy"
-add chain=forward src-address-list=policy-guests action=jump jump-target=wf-vpn comment="wfpolicy:guests vpn"
-add chain=forward src-address-list=policy-guests protocol=tcp dst-port=443 action=jump jump-target=wf-keywords comment="wfpolicy:guests keywords"
-add chain=forward src-address-list=policy-guests protocol=udp dst-port=443 action=drop comment="wfpolicy:guests no QUIC"
+add chain=forward src-address-list=policy-guests action=jump jump-target=wfp-guests comment="wfpolicy:guests"
+add chain=wfp-guests protocol=tcp dst-port=443 action=jump jump-target=wf-torrent-piracy comment="wfpolicy:guests torrent-piracy"
+add chain=wfp-guests action=jump jump-target=wf-vpn comment="wfpolicy:guests vpn"
+add chain=wfp-guests protocol=tcp dst-port=443 action=jump jump-target=wf-keywords comment="wfpolicy:guests keywords"
+add chain=wfp-guests protocol=udp dst-port=443 action=drop comment="wfpolicy:guests no QUIC"
 /ip firewall nat
 add chain=dstnat src-address-list=policy-guests protocol=udp dst-port=53 action=dst-nat to-addresses=1.1.1.3 comment="wfpolicy:guests dns family"
 add chain=dstnat src-address-list=policy-guests protocol=tcp dst-port=53 action=dst-nat to-addresses=1.1.1.3 comment="wfpolicy:guests dns family"
 /ip firewall filter
 # --- policy kids-night: Kids night: no internet 22:00-06:00 on school nights, games blocked 21:00-07:00
-add chain=forward src-address-list=policy-kids-night connection-state=new action=log log-prefix="WF-noinet" limit=20/1m,10:packet time=22h-23h59m59s,sun,mon,tue,wed,thu comment="wfpolicy:kids-night no internet (log)"
-add chain=forward src-address-list=policy-kids-night protocol=tcp action=reject reject-with=tcp-reset time=22h-23h59m59s,sun,mon,tue,wed,thu comment="wfpolicy:kids-night no internet"
-add chain=forward src-address-list=policy-kids-night action=reject reject-with=icmp-admin-prohibited time=22h-23h59m59s,sun,mon,tue,wed,thu comment="wfpolicy:kids-night no internet"
-add chain=forward src-address-list=policy-kids-night connection-state=new action=log log-prefix="WF-noinet" limit=20/1m,10:packet time=0s-6h,mon,tue,wed,thu,fri comment="wfpolicy:kids-night no internet (log)"
-add chain=forward src-address-list=policy-kids-night protocol=tcp action=reject reject-with=tcp-reset time=0s-6h,mon,tue,wed,thu,fri comment="wfpolicy:kids-night no internet"
-add chain=forward src-address-list=policy-kids-night action=reject reject-with=icmp-admin-prohibited time=0s-6h,mon,tue,wed,thu,fri comment="wfpolicy:kids-night no internet"
-add chain=forward src-address-list=policy-kids-night protocol=tcp dst-port=443 action=jump jump-target=wf-gaming time=21h-23h59m59s,mon,tue,wed,thu,fri,sat,sun comment="wfpolicy:kids-night gaming"
-add chain=forward src-address-list=policy-kids-night protocol=tcp dst-port=443 action=jump jump-target=wf-gaming time=0s-7h,tue,wed,thu,fri,sat,sun,mon comment="wfpolicy:kids-night gaming"
-add chain=forward src-address-list=policy-kids-night protocol=udp dst-port=443 action=drop time=0s-7h,tue,wed,thu,fri,sat,sun,mon comment="wfpolicy:kids-night no QUIC"
-add chain=forward src-address-list=policy-kids-night protocol=udp dst-port=443 action=drop time=21h-23h59m59s,mon,tue,wed,thu,fri,sat,sun comment="wfpolicy:kids-night no QUIC"
+add chain=forward src-address-list=policy-kids-night action=jump jump-target=wfp-kids-night comment="wfpolicy:kids-night"
+add chain=wfp-kids-night connection-state=new action=log log-prefix="WF-noinet" limit=20/1m,10:packet time=22h-23h59m59s,sun,mon,tue,wed,thu comment="wfpolicy:kids-night no internet (log)"
+add chain=wfp-kids-night protocol=tcp action=reject reject-with=tcp-reset time=22h-23h59m59s,sun,mon,tue,wed,thu comment="wfpolicy:kids-night no internet"
+add chain=wfp-kids-night action=reject reject-with=icmp-admin-prohibited time=22h-23h59m59s,sun,mon,tue,wed,thu comment="wfpolicy:kids-night no internet"
+add chain=wfp-kids-night connection-state=new action=log log-prefix="WF-noinet" limit=20/1m,10:packet time=0s-6h,mon,tue,wed,thu,fri comment="wfpolicy:kids-night no internet (log)"
+add chain=wfp-kids-night protocol=tcp action=reject reject-with=tcp-reset time=0s-6h,mon,tue,wed,thu,fri comment="wfpolicy:kids-night no internet"
+add chain=wfp-kids-night action=reject reject-with=icmp-admin-prohibited time=0s-6h,mon,tue,wed,thu,fri comment="wfpolicy:kids-night no internet"
+add chain=wfp-kids-night protocol=tcp dst-port=443 action=jump jump-target=wf-gaming time=21h-23h59m59s,mon,tue,wed,thu,fri,sat,sun comment="wfpolicy:kids-night gaming"
+add chain=wfp-kids-night protocol=tcp dst-port=443 action=jump jump-target=wf-gaming time=0s-7h,tue,wed,thu,fri,sat,sun,mon comment="wfpolicy:kids-night gaming"
+add chain=wfp-kids-night protocol=udp dst-port=443 action=drop time=0s-7h,tue,wed,thu,fri,sat,sun,mon comment="wfpolicy:kids-night no QUIC"
+add chain=wfp-kids-night protocol=udp dst-port=443 action=drop time=21h-23h59m59s,mon,tue,wed,thu,fri,sat,sun comment="wfpolicy:kids-night no QUIC"
 # --- policy night-off: Internet off at night (00:00–06:00), otherwise like guests
-add chain=forward src-address-list=policy-night-off connection-state=new action=log log-prefix="WF-noinet" limit=20/1m,10:packet time=0s-6h,sun,mon,tue,wed,thu,fri,sat comment="wfpolicy:night-off no internet (log)"
-add chain=forward src-address-list=policy-night-off protocol=tcp action=reject reject-with=tcp-reset time=0s-6h,sun,mon,tue,wed,thu,fri,sat comment="wfpolicy:night-off no internet"
-add chain=forward src-address-list=policy-night-off action=reject reject-with=icmp-admin-prohibited time=0s-6h,sun,mon,tue,wed,thu,fri,sat comment="wfpolicy:night-off no internet"
-add chain=forward src-address-list=policy-night-off protocol=tcp dst-port=443 action=jump jump-target=wf-torrent-piracy comment="wfpolicy:night-off torrent-piracy"
-add chain=forward src-address-list=policy-night-off protocol=tcp dst-port=443 action=jump jump-target=wf-keywords comment="wfpolicy:night-off keywords"
-add chain=forward src-address-list=policy-night-off protocol=udp dst-port=443 action=drop comment="wfpolicy:night-off no QUIC"
+add chain=forward src-address-list=policy-night-off action=jump jump-target=wfp-night-off comment="wfpolicy:night-off"
+add chain=wfp-night-off connection-state=new action=log log-prefix="WF-noinet" limit=20/1m,10:packet time=0s-6h,sun,mon,tue,wed,thu,fri,sat comment="wfpolicy:night-off no internet (log)"
+add chain=wfp-night-off protocol=tcp action=reject reject-with=tcp-reset time=0s-6h,sun,mon,tue,wed,thu,fri,sat comment="wfpolicy:night-off no internet"
+add chain=wfp-night-off action=reject reject-with=icmp-admin-prohibited time=0s-6h,sun,mon,tue,wed,thu,fri,sat comment="wfpolicy:night-off no internet"
+add chain=wfp-night-off protocol=tcp dst-port=443 action=jump jump-target=wf-torrent-piracy comment="wfpolicy:night-off torrent-piracy"
+add chain=wfp-night-off protocol=tcp dst-port=443 action=jump jump-target=wf-keywords comment="wfpolicy:night-off keywords"
+add chain=wfp-night-off protocol=udp dst-port=443 action=drop comment="wfpolicy:night-off no QUIC"
 # --- policy no-internet: No internet at all (single user / device / range punishment, unpaid, etc.)
-add chain=forward src-address-list=policy-no-internet connection-state=new action=log log-prefix="WF-noinet" limit=20/1m,10:packet comment="wfpolicy:no-internet no internet (log)"
-add chain=forward src-address-list=policy-no-internet protocol=tcp action=reject reject-with=tcp-reset comment="wfpolicy:no-internet no internet"
-add chain=forward src-address-list=policy-no-internet action=reject reject-with=icmp-admin-prohibited comment="wfpolicy:no-internet no internet"
+add chain=forward src-address-list=policy-no-internet action=jump jump-target=wfp-no-internet comment="wfpolicy:no-internet"
+add chain=wfp-no-internet protocol=tcp tls-host="moe.gov.pk" action=return comment="wfpolicy:no-internet allow moe.gov.pk"
+add chain=wfp-no-internet protocol=tcp tls-host="*.moe.gov.pk" action=return comment="wfpolicy:no-internet allow moe.gov.pk"
+/ip firewall address-list
+add list=wfallow-no-internet address=moe.gov.pk comment="wfpolicy:no-internet allow moe.gov.pk"
+/ip firewall filter
+add chain=wfp-no-internet dst-address-list=wfallow-no-internet action=return comment="wfpolicy:no-internet allow (addresses)"
+add chain=wfp-no-internet connection-state=new action=log log-prefix="WF-noinet" limit=20/1m,10:packet comment="wfpolicy:no-internet no internet (log)"
+add chain=wfp-no-internet protocol=tcp action=reject reject-with=tcp-reset comment="wfpolicy:no-internet no internet"
+add chain=wfp-no-internet action=reject reject-with=icmp-admin-prohibited comment="wfpolicy:no-internet no internet"
 # --- policy no-tiktok-pubg: Example of single apps: TikTok and PUBG Mobile blocked (all their known domains, learned ones too)
-add chain=forward src-address-list=policy-no-tiktok-pubg protocol=tcp action=jump jump-target=wf-app-tiktok comment="wfpolicy:no-tiktok-pubg app tiktok"
-add chain=forward src-address-list=policy-no-tiktok-pubg protocol=tcp action=jump jump-target=wf-app-pubg-mobile comment="wfpolicy:no-tiktok-pubg app pubg-mobile"
-add chain=forward src-address-list=policy-no-tiktok-pubg protocol=udp dst-port=443 action=drop comment="wfpolicy:no-tiktok-pubg no QUIC"
+add chain=forward src-address-list=policy-no-tiktok-pubg action=jump jump-target=wfp-no-tiktok-pubg comment="wfpolicy:no-tiktok-pubg"
+add chain=wfp-no-tiktok-pubg protocol=tcp action=jump jump-target=wf-app-tiktok comment="wfpolicy:no-tiktok-pubg app tiktok"
+add chain=wfp-no-tiktok-pubg protocol=tcp action=jump jump-target=wf-app-pubg-mobile comment="wfpolicy:no-tiktok-pubg app pubg-mobile"
+add chain=wfp-no-tiktok-pubg protocol=udp dst-port=443 action=drop comment="wfpolicy:no-tiktok-pubg no QUIC"
 # --- policy no-video-day: No video during the day (8:00-20:00 every day); videos allowed at night
-add chain=forward src-address-list=policy-no-video-day protocol=tcp dst-port=443 action=jump jump-target=wf-social-video time=8h-20h,mon,tue,wed,thu,fri,sat,sun comment="wfpolicy:no-video-day social-video"
-add chain=forward src-address-list=policy-no-video-day protocol=udp dst-port=443 action=drop time=8h-20h,mon,tue,wed,thu,fri,sat,sun comment="wfpolicy:no-video-day no QUIC"
+add chain=forward src-address-list=policy-no-video-day action=jump jump-target=wfp-no-video-day comment="wfpolicy:no-video-day"
+add chain=wfp-no-video-day protocol=tcp dst-port=443 action=jump jump-target=wf-social-video time=8h-20h,mon,tue,wed,thu,fri,sat,sun comment="wfpolicy:no-video-day social-video"
+add chain=wfp-no-video-day protocol=udp dst-port=443 action=drop time=8h-20h,mon,tue,wed,thu,fri,sat,sun comment="wfpolicy:no-video-day no QUIC"
 # --- policy no-video: No video: Facebook/Instagram videos & Reels, YouTube and TikTok do not play; chat, photos, WhatsApp, Google work
-add chain=forward src-address-list=policy-no-video protocol=tcp dst-port=443 action=jump jump-target=wf-social-video comment="wfpolicy:no-video social-video"
-add chain=forward src-address-list=policy-no-video protocol=udp dst-port=443 action=drop comment="wfpolicy:no-video no QUIC"
+add chain=forward src-address-list=policy-no-video action=jump jump-target=wfp-no-video comment="wfpolicy:no-video"
+add chain=wfp-no-video protocol=tcp dst-port=443 action=jump jump-target=wf-social-video comment="wfpolicy:no-video social-video"
+add chain=wfp-no-video protocol=udp dst-port=443 action=drop comment="wfpolicy:no-video no QUIC"
 # --- policy no-vpn: No VPN: VPN apps, websites, servers and protocols blocked (and logged); everything else works
-add chain=forward src-address-list=policy-no-vpn action=jump jump-target=wf-vpn comment="wfpolicy:no-vpn vpn"
-add chain=forward src-address-list=policy-no-vpn protocol=udp dst-port=443 action=drop comment="wfpolicy:no-vpn no QUIC"
+add chain=forward src-address-list=policy-no-vpn action=jump jump-target=wfp-no-vpn comment="wfpolicy:no-vpn"
+add chain=wfp-no-vpn action=jump jump-target=wf-vpn comment="wfpolicy:no-vpn vpn"
+add chain=wfp-no-vpn protocol=udp dst-port=443 action=drop comment="wfpolicy:no-vpn no QUIC"
 # --- policy staff: Staff: social media and video only blocked during office hours
-add chain=forward src-address-list=policy-staff protocol=tcp dst-port=443 action=jump jump-target=wf-social time=9h-17h,mon,tue,wed,thu,fri,sat comment="wfpolicy:staff social"
-add chain=forward src-address-list=policy-staff protocol=tcp dst-port=443 action=jump jump-target=wf-video-streaming time=9h-17h,mon,tue,wed,thu,fri,sat comment="wfpolicy:staff video-streaming"
-add chain=forward src-address-list=policy-staff protocol=tcp dst-port=443 action=jump jump-target=wf-gaming comment="wfpolicy:staff gaming"
-add chain=forward src-address-list=policy-staff protocol=tcp dst-port=443 action=jump jump-target=wf-torrent-piracy comment="wfpolicy:staff torrent-piracy"
-add chain=forward src-address-list=policy-staff protocol=tcp dst-port=443 action=jump jump-target=wf-keywords comment="wfpolicy:staff keywords"
-add chain=forward src-address-list=policy-staff protocol=udp dst-port=443 action=drop comment="wfpolicy:staff no QUIC"
+add chain=forward src-address-list=policy-staff action=jump jump-target=wfp-staff comment="wfpolicy:staff"
+add chain=wfp-staff protocol=tcp tls-host="linkedin.com" action=return comment="wfpolicy:staff allow linkedin.com"
+add chain=wfp-staff protocol=tcp tls-host="*.linkedin.com" action=return comment="wfpolicy:staff allow linkedin.com"
+add chain=wfp-staff protocol=tcp dst-port=443 action=jump jump-target=wf-social time=9h-17h,mon,tue,wed,thu,fri,sat comment="wfpolicy:staff social"
+add chain=wfp-staff protocol=tcp dst-port=443 action=jump jump-target=wf-video-streaming time=9h-17h,mon,tue,wed,thu,fri,sat comment="wfpolicy:staff video-streaming"
+add chain=wfp-staff protocol=tcp dst-port=443 action=jump jump-target=wf-gaming comment="wfpolicy:staff gaming"
+add chain=wfp-staff protocol=tcp dst-port=443 action=jump jump-target=wf-torrent-piracy comment="wfpolicy:staff torrent-piracy"
+add chain=wfp-staff protocol=tcp dst-port=443 action=jump jump-target=wf-keywords comment="wfpolicy:staff keywords"
+add chain=wfp-staff protocol=tcp tls-host="example-bet.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-site" comment="wfpolicy:staff site example-bet.com"
+add chain=wfp-staff protocol=tcp tls-host="*.example-bet.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-site" comment="wfpolicy:staff site example-bet.com"
+add chain=wfp-staff protocol=udp dst-port=443 action=drop comment="wfpolicy:staff no QUIC"
 # --- policy students: Students / kids: no social media, video, games, VPN, torrents, adult words; family-safe DNS
-add chain=forward src-address-list=policy-students protocol=tcp dst-port=443 action=jump jump-target=wf-social comment="wfpolicy:students social"
-add chain=forward src-address-list=policy-students protocol=tcp dst-port=443 action=jump jump-target=wf-video-streaming comment="wfpolicy:students video-streaming"
-add chain=forward src-address-list=policy-students protocol=tcp dst-port=443 action=jump jump-target=wf-gaming comment="wfpolicy:students gaming"
-add chain=forward src-address-list=policy-students action=jump jump-target=wf-vpn comment="wfpolicy:students vpn"
-add chain=forward src-address-list=policy-students protocol=tcp dst-port=443 action=jump jump-target=wf-torrent-piracy comment="wfpolicy:students torrent-piracy"
-add chain=forward src-address-list=policy-students protocol=tcp dst-port=443 action=jump jump-target=wf-keywords comment="wfpolicy:students keywords"
-add chain=forward src-address-list=policy-students protocol=tcp dst-port=443 tls-host="cloudflare-ech.com" action=reject reject-with=tcp-reset comment="wfpolicy:students no ECH"
-add chain=forward src-address-list=policy-students protocol=udp dst-port=443 action=drop comment="wfpolicy:students no QUIC"
+add chain=forward src-address-list=policy-students action=jump jump-target=wfp-students comment="wfpolicy:students"
+add chain=wfp-students protocol=tcp dst-port=443 action=jump jump-target=wf-social comment="wfpolicy:students social"
+add chain=wfp-students protocol=tcp dst-port=443 action=jump jump-target=wf-video-streaming comment="wfpolicy:students video-streaming"
+add chain=wfp-students protocol=tcp dst-port=443 action=jump jump-target=wf-gaming comment="wfpolicy:students gaming"
+add chain=wfp-students action=jump jump-target=wf-vpn comment="wfpolicy:students vpn"
+add chain=wfp-students protocol=tcp dst-port=443 action=jump jump-target=wf-torrent-piracy comment="wfpolicy:students torrent-piracy"
+add chain=wfp-students protocol=tcp dst-port=443 action=jump jump-target=wf-keywords comment="wfpolicy:students keywords"
+add chain=wfp-students protocol=tcp dst-port=443 tls-host="cloudflare-ech.com" action=reject reject-with=tcp-reset comment="wfpolicy:students no ECH"
+add chain=wfp-students protocol=udp dst-port=443 action=drop comment="wfpolicy:students no QUIC"
 /ip firewall nat
 add chain=dstnat src-address-list=policy-students protocol=udp dst-port=53 action=dst-nat to-addresses=185.228.168.168 comment="wfpolicy:students dns cleanbrowsing-family"
 add chain=dstnat src-address-list=policy-students protocol=tcp dst-port=53 action=dst-nat to-addresses=185.228.168.168 comment="wfpolicy:students dns cleanbrowsing-family"
 /ip firewall filter
 # --- policy whatsapp-only: WhatsApp only: chat, calls, photos and status work; every other app and website is blocked
-add chain=forward src-address-list=policy-whatsapp-only action=jump jump-target=ao-whatsapp comment="wfpolicy:whatsapp-only allow only whatsapp"
+add chain=forward src-address-list=policy-whatsapp-only action=jump jump-target=wfp-whatsapp-only comment="wfpolicy:whatsapp-only"
+add chain=wfp-whatsapp-only action=jump jump-target=ao-whatsapp comment="wfpolicy:whatsapp-only allow only whatsapp"
 
 # Policy rules above every other forward rule; DNS rules above the base DNS redirect.
 /ip firewall filter

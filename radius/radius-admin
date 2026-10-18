@@ -706,6 +706,76 @@ cmd_log() {
     echo "SELECT authdate AS time, username AS user, reply AS result FROM radpostauth ORDER BY id DESC LIMIT $n;" | dbt
 }
 
+# ======================================================================= unblock requests / temporary exceptions
+unblock_until() {   # 1h..24h | today -> SQL expression
+    case $1 in
+        today) echo "CONCAT(CURDATE(), ' 23:59:59')" ;;
+        [0-9]h|[12][0-9]h) local n=${1%h}; (( n >= 1 && n <= 24 )) || die "1h .. 24h or today"; echo "NOW() + INTERVAL $n HOUR" ;;
+        *) die "How long: 1h .. 24h, or today" ;;
+    esac
+}
+cmd_unblock() {
+    local sub=${1:-list}; shift || true
+    local by=${SUDO_USER:-admin} a=() x
+    while [ $# -gt 0 ]; do     # --by NAME: the dashboard admin who decided
+        if [ "$1" = --by ] && [ $# -ge 2 ]; then valid_name "$2" admin; by=$2; shift 2; else a+=("$1"); shift; fi
+    done
+    set -- "${a[@]}"
+    case $sub in
+    list)
+        echo "Waiting for an answer:"
+        echo "SELECT id, at, IF(username='', ip, username) AS who, host, policy, code, note FROM ml_unblock WHERE status='pending' ORDER BY id" | dbt
+        echo "Open now (temporary):"
+        echo "SELECT id, IF(username='', ip, username) AS who, host, until, decided_by AS by_admin FROM ml_unblock WHERE status='allowed' AND until > NOW() ORDER BY until" | dbt ;;
+    approve)
+        local id=${1:-} how=${2:-}; valid_int "$id" ID
+        local row; row=$(echo "SELECT username, ip, host, policy, status FROM ml_unblock WHERE id=$id" | db)
+        [ -n "$row" ] || die "No request $id"
+        local u ip host pol st; IFS=$'\t' read -r u ip host pol st <<<"$row"
+        [ -n "$how" ] || die "usage: radius-admin unblock approve ID 1h|2h|..|24h|today|always"
+        if [ "$how" = always ]; then
+            local cur="$pol" site=${host#www.}
+            if [ -n "$u" ]; then
+                local lst; lst=$(echo "SELECT value FROM radreply WHERE username=$(q "$u") AND attribute='Mikrotik-Address-List' LIMIT 1" | db)
+                [ -n "$lst" ] || lst=$(echo "SELECT gr.value FROM radusergroup g JOIN radgroupreply gr ON gr.groupname=g.groupname
+                                             AND gr.attribute='Mikrotik-Address-List' WHERE g.username=$(q "$u") ORDER BY g.priority LIMIT 1" | db)
+                [[ $lst != policy-* ]] || cur=${lst#policy-}
+            fi
+            [[ $cur =~ ^[a-z0-9-]{1,40}$ ]] && [ -f "$POLICY_DIR/$cur.txt" ] || die "No policy to add the exception to"
+            if ! grep -qx "allow-site $site" "$POLICY_DIR/$cur.txt"; then
+                { cat "$POLICY_DIR/$cur.txt"; echo "allow-site $site"; } | cmd_policy set "$cur" >/dev/null
+            fi
+            echo "UPDATE ml_unblock SET status='always', until=NULL, decided_by=$(q "$by"), decided_at=NOW() WHERE id=$id" | db
+            ok "Request $id: $site is always open for policy '$cur' (everyone in it). Routers: auto-sync"
+        else
+            local until; until=$(unblock_until "$how")
+            echo "UPDATE ml_unblock SET status='allowed', until=$until, decided_by=$(q "$by"), decided_at=NOW() WHERE id=$id" | db
+            ok "Request $id: ${u:-$ip} may open $host until $(echo "SELECT until FROM ml_unblock WHERE id=$id" | db). Routers: within a minute"
+        fi ;;
+    deny)
+        local id=${1:-}; valid_int "$id" ID
+        [ -n "$(echo "SELECT 1 FROM ml_unblock WHERE id=$id" | db)" ] || die "No request $id"
+        echo "UPDATE ml_unblock SET status='denied', until=NULL, decided_by=$(q "$by"), decided_at=NOW() WHERE id=$id" | db
+        ok "Request $id refused" ;;
+    end)
+        local id=${1:-}; valid_int "$id" ID
+        [ -n "$(echo "SELECT 1 FROM ml_unblock WHERE id=$id AND status='allowed'" | db)" ] || die "Request $id is not open"
+        echo "UPDATE ml_unblock SET status='ended', until=NOW(), decided_by=$(q "$by"), decided_at=NOW() WHERE id=$id" | db
+        ok "Exception $id ended (routers: within a minute)" ;;
+    allow)   # unblock allow USER SITE 1h|today   (without a request)
+        local u=${1:-} site=${2:-} how=${3:-}
+        [ -n "$how" ] || die "usage: radius-admin unblock allow USER SITE 1h..24h|today"
+        valid_name "$u" username; user_exists "$u" || die "No such user '$u'"
+        site=${site,,}; site=${site#*://}; site=${site%%/*}
+        [[ $site =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] || die "Not a website name: '$2'"
+        local until; until=$(unblock_until "$how")
+        local till; till=$(echo "INSERT INTO ml_unblock (username, host, status, until, decided_by, decided_at, note) VALUES ($(q "$u"), $(q "$site"), 'allowed', $until, $(q "$by"), NOW(), 'given by the admin');
+                                 SELECT until FROM ml_unblock WHERE id=LAST_INSERT_ID()" | db)
+        ok "$u may open $site until $till. Routers: within a minute" ;;
+    *) die "usage: radius-admin unblock list | approve ID 1h..24h|today|always | deny ID | end ID | allow USER SITE 1h..24h|today" ;;
+    esac
+}
+
 # ======================================================================= block page (plain HTTP)
 # Users with a web-filter policy: their http:// requests go through this server (nginx :8082). Blocked ->
 # branded page with a reference code; else the request goes on. HTTPS is not touched (no certificates).
@@ -839,18 +909,31 @@ dept_rsc() {
     echo '  /ip firewall filter add chain=forward action=accept connection-state=established,related src-address-list=ml-dept-all comment="mldept" place-before=[:pick [/ip firewall filter find action=fasttrack-connection] 0]'
     echo '  /ip firewall filter add chain=forward action=accept connection-state=established,related dst-address-list=ml-dept-all comment="mldept" place-before=[:pick [/ip firewall filter find action=fasttrack-connection] 0]'
     echo '}'
-    # who is in which department: the router asks every minute (logins change the addresses)
+    # who is in which department: ml-live asks the server every minute (live_rsc)
+    echo '/system scheduler remove [find name="ml-dept"]'
+    echo '/system script remove [find name="ml-dept"]'
+}
+
+# ml-live: every minute the router loads what changes often (department members, temporary exceptions)
+live_rsc() {
+    local base key
+    [ -s "$ROUTER_DIR/key" ] || return 0
     base=$(setting_get radius_domain); base="https://${base:-${RADIUS_DOMAIN:-radius.local}}:${WEB_PORT:-8443}/api/public/router"
     key=$(cat "$ROUTER_DIR/key")
-    echo '/system script remove [find name="ml-dept"]'
-    echo "/system script add name=ml-dept policy=read,write,test comment=\"mikrotiklover: department members\" source={"
+    echo "# ml-live: every minute department members and temporary exceptions (radius-admin unblock)"
+    echo '/system script remove [find name="ml-live"]'
+    echo "/system script add name=ml-live policy=read,write,test comment=\"mikrotiklover: departments + temporary exceptions\" source={"
     echo ':do {'
-    echo "  :local r [/tool fetch url=\"$base/dept.rsc?key=$key\" check-certificate=yes-without-crl output=user as-value]"
+    echo "  :local r [/tool fetch url=\"$base/live.rsc?key=$key\" check-certificate=yes-without-crl output=user as-value]"
     echo '  :if (($r->"status") = "finished") do={ :local f [:parse ($r->"data")]; $f }'
-    echo '} on-error={ :log warning "ml-dept: department members not downloaded" }'
+    echo '} on-error={ :log warning "ml-live: not downloaded from the RADIUS server" }'
     echo '}'
-    echo '/system scheduler remove [find name="ml-dept"]'
-    echo '/system scheduler add name=ml-dept interval=1m start-time=startup on-event="/system script run ml-dept" comment="mikrotiklover: department members"'
+    echo '/system scheduler remove [find name="ml-live"]'
+    echo '/system scheduler add name=ml-live interval=1m start-time=startup on-event="/system script run ml-live" comment="mikrotiklover: departments + temporary exceptions"'
+    echo '# policy rules were just rebuilt: put the temporary exceptions back on top now'
+    echo ':global mlTempSig'
+    echo ':set mlTempSig ""'
+    echo ':do { /system script run ml-live } on-error={}'
 }
 
 cmd_dept() {
@@ -1706,6 +1789,8 @@ RSC
             dept_rsc
             echo
             blockpage_rsc
+            echo
+            live_rsc
         } > "$lists/sync.rsc"
         install -m 644 "$lists/webfilter-policies.rsc" "$lists/vpn-servers.rsc" "$lists/sync.rsc" "$ROUTER_DIR/"
         sha256sum "$ROUTER_DIR/sync.rsc" | cut -c1-16 > "$ROUTER_DIR/version.tmp"
@@ -1932,6 +2017,7 @@ GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_stat TO 'radius_web'@'loc
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_setup TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE ON \`$DB_NAME\`.ml_traffic TO 'radius_web'@'localhost';
 GRANT INSERT, DELETE ON \`$DB_NAME\`.ml_block_event TO 'radius_web'@'localhost';
+GRANT INSERT ON \`$DB_NAME\`.ml_unblock TO 'radius_web'@'localhost';
 GRANT EXECUTE ON \`$DB_NAME\`.* TO 'radius_web'@'localhost';
 FLUSH PRIVILEGES;
 EOF
@@ -2824,6 +2910,10 @@ Why blocked?
   why SITE [USER|IP]                    which list / policy rule blocks a site for a user, and is it active now
   blockpage on|off                      users with a policy see a page (logo, reason, code) for blocked http:// sites
   blockpage ref CODE | status           look up the code a user read from the page
+  unblock list                          requests from the block page + exceptions open now
+  unblock approve ID 1h|today|always    open the site for that user (always = allow-site in their policy)
+  unblock deny ID | end ID              refuse / end an exception now
+  unblock allow USER SITE 2h|today      open a site for a user without a request
 
 Departments: one shared speed for a team (1 user online gets all of it, 10 users share it)
   dept list | show NAME                 departments, members, who is online
@@ -2975,6 +3065,7 @@ case ${1:-help} in
     dept)    shift; cmd_dept "$@" ;;
     why)     shift; cmd_why "$@" ;;
     blockpage) shift; cmd_blockpage "$@" ;;
+    unblock) shift; cmd_unblock "$@" ;;
     traffic-collect) traffic_collect; ok "Traffic counted" ;;
     hotspot) shift; cmd_hotspot "$@" ;;
     social)  shift; cmd_social "$@" ;;

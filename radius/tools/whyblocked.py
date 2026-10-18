@@ -168,6 +168,8 @@ def explain(host, policy=None, policy_text="", at=None, wf_dir=WF_DIR, catalog=N
             why, router = f"{host} belongs to the app {v}", "WF-app-" + re.sub(r"[^a-z0-9]+", "-", v.lower()).strip("-")
         elif k == "block-vpn" and any(h["kind"] == "vpn" for h in lists):
             why, router = "VPN / proxy website or app", "WF-vpn"
+        elif k == "block-site" and domain_hit(host, v.lower()):
+            why, router = f"{v} is blocked by name in this policy", "WF-site"
         elif k == "block-all":
             why, router = "no internet for this policy", "WF-noinet"
         elif k == "allow-only" and not allow_only_ok(host, v, wf_dir):
@@ -178,7 +180,14 @@ def explain(host, policy=None, policy_text="", at=None, wf_dir=WF_DIR, catalog=N
             except ValueError:
                 active = True
             out.append({"rule": r["line"], "why": why, "active": active, "time": r["time"], "router": router})
-    if any(x["active"] for x in out):
+    allow = next((r for r in parse_policy(policy_text) if r["kind"] == "allow-site" and domain_hit(host, r["value"].lower())), None) if policy else None
+    if allow:
+        for x in out:
+            x["active"] = False
+            x["why"] += f" — but '{allow['line']}' comes first"
+    if allow:
+        verdict = "allowed"
+    elif any(x["active"] for x in out):
         verdict = "blocked"
     elif out:
         verdict = "blocked-other-times"
@@ -191,6 +200,8 @@ def explain(host, policy=None, policy_text="", at=None, wf_dir=WF_DIR, catalog=N
         summary = f"Blocked by policy '{policy}': {first['rule']} — {first['why']}."
     elif verdict == "blocked-other-times":
         summary = f"Policy '{policy}' blocks it only at: " + "; ".join(x["time"] for x in out) + " (not now)."
+    elif verdict == "allowed" and allow:
+        summary = f"Policy '{policy}' allows it: {allow['line']} (an exception, before every block)."
     elif verdict == "allowed":
         summary = f"Policy '{policy}' does not block {host}."
     else:
@@ -202,6 +213,7 @@ def explain(host, policy=None, policy_text="", at=None, wf_dir=WF_DIR, catalog=N
         summary += " It is on: " + ", ".join(f"{h['kind']} {h['name']}" for h in lists) + \
                    " — blocked for everyone only if that list's webfilter-*.rsc is imported on the router."
     return {"host": host, "lists": lists, "policy": policy or "", "rules": out, "verdict": verdict, "summary": summary, "dns": dns,
+            "allow": allow["line"] if allow else "",
             "at": at.strftime("%Y-%m-%d %H:%M")}
 
 

@@ -351,7 +351,7 @@ try {
     const ac = page.locator(".card", { has: page.locator("h2", { hasText: /^Alerts/ }) });
     await ac.waitFor({ timeout: 30000 });
     await page.waitForLoadState("networkidle");
-    if ((await ac.locator(".alert-events input[type=checkbox]").count()) !== 11) throw new Error("alerts: 11 event switches expected");
+    if ((await ac.locator(".alert-events input[type=checkbox]").count()) !== 12) throw new Error("alerts: 12 event switches expected");
     for (const ch of ["Telegram", "WhatsApp", "Email"]) await ac.locator(".sub-card", { hasText: ch }).first().waitFor();
     if (/AAFake|SmtpPass/.test(await page.content())) throw new Error("alerts: a secret reached the browser");
     await ac.locator("input[name=WHATSAPP_PHONE]").fill("12ab");
@@ -419,7 +419,7 @@ try {
   for (const [hash, title, name] of [["#/online", "Online", "08-online"], ["#/live", "Live log", "09-live"],
     ["#/reports/sites", "Reports", "10-reports-sites"], ["#/reports/blocked", "Reports", "11-reports-blocked"],
     ["#/data/site", "Data usage", "12-data-site"], ["#/data/ip", "Data usage", "13-data-ip"],
-    ["#/settings", "Settings", "14-settings"], ["#/health", "Health check", "14b-health"], ["#/speed", "Speed schedule", "14c-speed"], ["#/insights", "Insights", "14d-insights"], ["#/security/reports", "Security", "14e-security-reports"], ["#/hotspot", "Hotspot page", "14f-hotspot"], ["#/blocking/parental", "Blocking", "14g-parental"], ["#/social", "Social WiFi", "14h-social"], ["#/setup", "Router setup", "14i-router-setup"], ["#/ipbind", "IP binding", "14j-ipbind"], ["#/traffic", "Traffic graphs", "14k-traffic"], ["#/departments", "Departments", "14l-departments"], ["#/blocking/why/facebook.com/kid1", "Blocking", "14m-why-blocked"], ["#/blocking/why/XVR6JW", "Blocking", "14n-block-code"]]) {
+    ["#/settings", "Settings", "14-settings"], ["#/health", "Health check", "14b-health"], ["#/speed", "Speed schedule", "14c-speed"], ["#/insights", "Insights", "14d-insights"], ["#/security/reports", "Security", "14e-security-reports"], ["#/hotspot", "Hotspot page", "14f-hotspot"], ["#/blocking/parental", "Blocking", "14g-parental"], ["#/social", "Social WiFi", "14h-social"], ["#/setup", "Router setup", "14i-router-setup"], ["#/ipbind", "IP binding", "14j-ipbind"], ["#/traffic", "Traffic graphs", "14k-traffic"], ["#/departments", "Departments", "14l-departments"], ["#/blocking/why/facebook.com/kid1", "Blocking", "14m-why-blocked"], ["#/blocking/why/XVR6JW", "Blocking", "14n-block-code"], ["#/blocking/requests", "Blocking", "14o-requests"]]) {
     await go(page, hash, title);
     if (hash === "#/health") await page.locator(".health-row").first().waitFor({ timeout: 60000 });
     if (hash === "#/insights") await page.locator(".insight-words li").first().waitFor({ timeout: 60000 });

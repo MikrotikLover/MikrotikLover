@@ -1114,6 +1114,25 @@ Dashboard → **Blocking → Why blocked? → Block page for users** on (ya `rad
 - LAN / private addresses kabhi redirect nahi hote; server band ho to router ka netwatch yeh rasta khud band kar deta hai (internet nahi rukta).
 - Tests: `tests/test-blockpage.sh` (27 checks).
 
+## 7r. Ek site band / khuli (policy ke andar) aur unblock ki darkhwast
+
+**Policy mein single sites** (dashboard → Blocking → policy → Edit, ya policy file):
+```
+block social
+allow-site linkedin.com          # exception: social band, LinkedIn khula (subdomains bhi)
+block-site example-bet.com       # sirf yeh site band (time= bhi chalta hai)
+```
+- Router par har policy ab apni chain `wfp-NAAM` mein chalti hai: pehle `allow-site` (return), phir blocks. "No internet" / "WhatsApp only" policies mein allow-site address se bhi kaam karta hai (pehla packet).
+- Router-wide DNS lists (webfilter-*.rsc import) par allow-site asar nahi karta — woh sab ke liye hain.
+
+**Unblock ki darkhwast** (block page ke saath):
+1. User ko block page par **"Khulwane ki darkhwast bhejein"** (wajah likh sakta hai).
+2. Admin ko alert (Telegram / WhatsApp / email — Settings → Alerts → *Unblock requests*).
+3. Dashboard → **Blocking → Requests**: **1 hour / Today / Always / Refuse** (aur **Why?**). CLI: `radius-admin unblock list | approve ID 1h|today|always | deny ID | end ID | allow USER SITE 2h`.
+4. Arzi ijazat router par **1 minute** mein (script `ml-live`: user ke IP + site ke return rules policy chain ke upar), waqt khatam hone par khud band. **Always** = us policy mein `allow-site` (us policy ke sab users ke liye).
+- Hifazat: darkhwast sirf usi device se jise block page dikha (code + IP + site), ek site ki ek pending darkhwast, din mein 10 tak.
+- Tests: `tests/test-unblock.sh` (33 checks), simulator mein naye cases.
+
 ## 7e. Health check — sab theek hai?
 
 `sudo radius-admin doctor` ya dashboard → **Health check**: server ka har hissa **sabz** (theek), **peela** (dekh lein) ya **laal** (abhi theek karein), aur kharabi ke saath us ka hal likha hota hai.

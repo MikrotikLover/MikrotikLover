@@ -798,6 +798,8 @@ def block_decision(host, ip):
     policy = lst[7:] if lst.startswith("policy-") and POLICY_RE.match(lst[7:]) else ""
     if not policy:
         return False, {"user": user, "policy": ""}
+    if temp_allowed(user, ip, host):
+        return False, {"user": user, "policy": policy}
     try:
         text = open(os.path.join(POLICY_DIR, policy + ".txt"), encoding="utf-8").read()
     except OSError:
@@ -839,6 +841,10 @@ def block_page_html(host, reason, rule, code, user, ip, when, st, logo=""):
     c2 = st.get("hs_color2") if re.match(r"^#[0-9a-fA-F]{6}$", st.get("hs_color2") or "") else "#0ea5e9"
     brand, contact = st.get("hs_title") or st.get("brand") or "WiFi", st.get("contact") or ""
     img = f'<img class="logo" src="{logo}" alt="">' if re.match(r"^data:image/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$", logo or "") else ""
+    form = ('<form method="post" action="/__mlrequest" class="req">'
+            f'<input type="hidden" name="code" value="{e(code)}">'
+            '<input name="note" maxlength="200" placeholder="Kyun chahiye? (zaroori nahi)">'
+            '<button type="submit">Khulwane ki darkhwast bhejein</button></form>')
     rows = "".join(f"<b>{k}</b><span>{e(v)}</span>" for k, v in (("Site", host), ("Wajah (reason)", reason), ("Rule", rule),
                                                                   ("User", user or "-"), ("Device", ip), ("Waqt", when)) if v)
     return f"""<!doctype html><html lang="ur-Latn"><head><meta charset="utf-8">
@@ -851,11 +857,13 @@ min-height:100vh;display:flex;align-items:center;justify-content:center;padding:
 .icon{{width:58px;height:58px;border-radius:50%;background:#fee2e2;color:#b91c1c;font-size:30px;font-weight:800;line-height:58px;margin:0 auto 10px}}
 h1{{font-size:21px;margin:0 0 6px}}p{{margin:6px 0;color:#334155;line-height:1.5}}.muted{{color:#64748b;font-size:13px}}
 .kv{{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;text-align:left;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:12px;margin:14px 0;font-size:14px;word-break:break-word}}
-.kv b{{color:#475569;font-weight:600}}.ref{{display:inline-block;font:700 22px ui-monospace,Menlo,monospace;letter-spacing:3px;background:#0f172a;color:#fff;border-radius:10px;padding:8px 14px;margin:6px 0}}
+.kv b{{color:#475569;font-weight:600}}.req{{display:flex;flex-direction:column;gap:8px;margin:14px 0 4px}}
+.req input{{font:inherit;padding:10px 12px;border:1px solid #cbd5e1;border-radius:10px}}.req button{{font:inherit;font-weight:700;padding:11px;border:0;border-radius:10px;background:{c1};color:#fff;cursor:pointer}}.ref{{display:inline-block;font:700 22px ui-monospace,Menlo,monospace;letter-spacing:3px;background:#0f172a;color:#fff;border-radius:10px;padding:8px 14px;margin:6px 0}}
 </style></head><body><main class="card">{img}<div class="brand">{e(brand)}</div><div class="icon" aria-hidden="true">!</div>
 <h1>Yeh website band hai</h1><p>This website is blocked on this network.</p>
 <div class="kv">{rows}</div>
 <p>Ghalti se band lag rahi hai? Admin ko yeh code batayein:</p><div class="ref">{e(code)}</div>
+{form}
 <p class="muted">{e(contact) if contact else "Network admin"}</p></main></body></html>"""
 
 
@@ -895,7 +903,79 @@ def blockpage():
     page = block_page_html(host, info.get("why", ""), info.get("rule", ""), code, info.get("user", ""), ip,
                            datetime.now().strftime("%Y-%m-%d %H:%M"), st, logo)
     return app.response_class(page, status=403, mimetype="text/html",
-                              headers={"X-ML-CSP": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'"})
+                              headers={"X-ML-CSP": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'self'"})
+
+
+@app.post("/internal/unblockrequest")
+def unblock_request():
+    """The 'please open it' button of the block page (nginx :8082 /__mlrequest)."""
+    if not _bp_key_ok():
+        abort(404)
+    import whyblocked
+    from html import escape as e
+    host = whyblocked.clean_host(request.headers.get("X-ML-Host", ""))
+    ip = request.headers.get("X-Real-IP", "")[:45]
+    code = re.sub(r"[^A-Z0-9]", "", str(request.form.get("code", "")).upper())[:6]
+    note = re.sub(r"[\x00-\x1f<>]", " ", str(request.form.get("note", "")))[:200].strip()
+    ev = q1("SELECT username, policy FROM ml_block_event WHERE code=%s AND ip=%s AND host=%s", (code, ip, host)) if host else None
+    if not ev:
+        msg, ok = "Yeh darkhwast is device se is site ke liye nahi bheji ja sakti.", False
+    elif q1("SELECT 1 FROM ml_unblock WHERE ip=%s AND host=%s AND status='pending'", (ip, host)):
+        msg, ok = "Is site ki darkhwast pehle se bheji hui hai — admin ke jawab ka intezar karein.", True
+    elif int(q1("SELECT COUNT(*) AS n FROM ml_unblock WHERE ip=%s AND at > NOW() - INTERVAL 1 DAY", (ip,))["n"]) >= 10:
+        msg, ok = "Aaj ke liye bahut darkhwastein ho chuki hain. Kal dobara koshish karein.", False
+    else:
+        q("INSERT INTO ml_unblock (ip, username, host, policy, code, note) VALUES (%s,%s,%s,%s,%s,%s)",
+          (ip, ev["username"], host, ev["policy"], code, note))
+        msg, ok = "Darkhwast admin ko bhej di gayi. Manzoor hone par yeh site khul jayegi (aam tor par 1 minute mein).", True
+    page = f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Darkhwast</title><style>body{{margin:0;font-family:system-ui,sans-serif;background:#f1f5f9;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}}
+.card{{background:#fff;border-radius:16px;max-width:420px;padding:24px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.12)}}
+.i{{font-size:34px}}p{{color:#334155;line-height:1.5}}</style></head><body><main class="card"><div class="i">{"✅" if ok else "⚠️"}</div>
+<p><b>{e(msg)}</b></p><p style="color:#64748b">Code: {e(code)}</p></main></body></html>"""
+    return app.response_class(page, status=200 if ok else 400, mimetype="text/html",
+                              headers={"X-ML-CSP": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"})
+
+
+@app.get("/api/unblock")
+@login_required()
+def unblock_list():
+    pending = jsonable(q("SELECT id, at, ip, username, host, policy, code, note FROM ml_unblock WHERE status='pending' ORDER BY id DESC LIMIT 200"))
+    open_now = jsonable(q("""SELECT id, at, ip, username, host, policy, until, decided_by, note FROM ml_unblock
+                             WHERE status='allowed' AND until > NOW() ORDER BY until"""))
+    recent = jsonable(q("""SELECT id, at, ip, username, host, policy, status, until, decided_by, decided_at FROM ml_unblock
+                           WHERE status <> 'pending' AND NOT (status='allowed' AND until > NOW()) ORDER BY id DESC LIMIT 50"""))
+    return jsonify(pending=pending, open=open_now, recent=recent)
+
+
+@app.post("/api/unblock/<int:rid>")
+@login_required("admin")
+def unblock_decide(rid):
+    how = str(body().get("how", ""))
+    if how == "deny":
+        args = ["unblock", "deny", str(rid)]
+    elif how == "end":
+        args = ["unblock", "end", str(rid)]
+    elif how in ("always", "today") or re.match(r"^([1-9]|1\d|2[0-4])h$", how):
+        args = ["unblock", "approve", str(rid), how]
+    else:
+        abort(400, "how: 1h..24h, today, always, deny or end")
+    return result(*radius_admin(args + ["--by", session.get("user", "admin")]))
+
+
+@app.post("/api/unblock/allow")
+@login_required("admin")
+def unblock_allow():
+    import whyblocked
+    data = body()
+    user = field(data, "user", NAME_RE, required=True)
+    site = whyblocked.clean_host(data.get("site", ""))
+    how = str(data.get("how", ""))
+    if not site:
+        abort(400, "write a website name, e.g. example.com")
+    if how != "today" and not re.match(r"^([1-9]|1\d|2[0-4])h$", how):
+        abort(400, "how: 1h..24h or today")
+    return result(*radius_admin(["unblock", "allow", user, site, how, "--by", session.get("user", "admin")]))
 
 
 @app.get("/api/blockpage")
@@ -998,6 +1078,10 @@ def why_blocked():
                      "for an IP range or a DHCP lease are not known here.")
     quar = q1("""SELECT reason, since FROM ml_quarantine WHERE released_at IS NULL AND
                  ((%s <> '' AND username=%s) OR (%s <> '' AND ip=%s)) ORDER BY since DESC LIMIT 1""", (user, user, ip, ip))
+    tmp = temp_allowed(user, ip, host) if (user or ip) else None
+    if tmp and not quar:
+        res["verdict"] = "allowed"
+        notes.insert(0, f"Temporarily OPEN for this user until {tmp['until']} (exception #{tmp['id']}, Blocking → Requests).")
     if quar:
         res["verdict"] = "blocked"
         notes.insert(0, f"QUARANTINE since {quar['since']}: {quar['reason']} — no internet at all until released (Security).")
@@ -1932,12 +2016,92 @@ def dept_users(dept):
     return sorted(u for u, d in dept_of_users().items() if d == dept)
 
 
+def _router_key_ok():
+    key = request.args.get("key", "")
+    return bool(key) and bool(router_key()) and hmac.compare_digest(key, router_key())
+
+
 @app.get("/api/public/router/dept.rsc")
 def router_dept():
-    """Every minute from each router (sync.rsc: ml-dept): who is in which department now (address lists)."""
-    key = request.args.get("key", "")
-    if not key or not router_key() or not hmac.compare_digest(key, router_key()):
+    """Who is in which department now (address lists). Also part of live.rsc."""
+    if not _router_key_ok():
         abort(403)
+    return app.response_class(dept_script(), mimetype="text/plain", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/public/router/live.rsc")
+def router_live():
+    """Every minute from each router (sync.rsc: ml-live): department members + temporary exceptions."""
+    if not _router_key_ok():
+        abort(403)
+    text = (dept_script() if q1("SELECT 1 FROM ml_department LIMIT 1") else "") + temp_script()
+    return app.response_class(text, mimetype="text/plain", headers={"Cache-Control": "no-store"})
+
+
+def active_exceptions():
+    """Temporary exceptions open now: [{id, username, ip, host, policy, until}]."""
+    return q("SELECT id, username, ip, host, policy, until FROM ml_unblock WHERE status='allowed' AND until > NOW() ORDER BY id")
+
+
+def user_policy_list(user):
+    r = q1("SELECT value FROM radreply WHERE username=%s AND attribute='Mikrotik-Address-List' LIMIT 1", (user,)) or \
+        q1("""SELECT gr.value FROM radusergroup g JOIN radgroupreply gr ON gr.groupname=g.groupname
+              AND gr.attribute='Mikrotik-Address-List' WHERE g.username=%s ORDER BY g.priority LIMIT 1""", (user,))
+    return r["value"] if r else ""
+
+
+def temp_script():
+    """RouterOS script: the open temporary exceptions as return rules at the top of the user's policy chain."""
+    import hashlib
+    import whyblocked
+    rows = q("""SELECT framedipaddress AS ip, username, nasipaddress AS nas FROM radacct
+                WHERE acctstoptime IS NULL AND framedipaddress REGEXP '^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+$'
+                  AND COALESCE(acctupdatetime, acctstarttime) >= NOW() - INTERVAL 20 MINUTE""")
+    mine = [r for r in rows if r["nas"] == client_ip()]
+    ips_of = {}
+    for r in (mine or rows):
+        ips_of.setdefault(r["username"], []).append(r["ip"])
+    body = []
+    for e in active_exceptions():
+        host = whyblocked.clean_host(e["host"])
+        if not host:
+            continue
+        if e["username"]:
+            lst, ips = user_policy_list(e["username"]), ips_of.get(e["username"], [])
+            pol = lst[7:] if lst.startswith("policy-") else ""
+        else:
+            pol, ips = e["policy"], [e["ip"]] if re.match(r"^\d+\.\d+\.\d+\.\d+$", e["ip"] or "") else []
+        if not POLICY_RE.match(pol or "") or not ips:
+            continue
+        n = int(e["id"])
+        body.append(f':local f [/ip firewall filter find chain="wfp-{pol}"]')
+        body.append(":if ([:len $f] > 0) do={")
+        body.append(f'  /ip firewall address-list add list=mltemp-{n} address={host} comment="mltemp:{n}"')
+        for ip in sorted(set(ips)):
+            for pat in (host, "*." + host):
+                body.append(f'  /ip firewall filter add chain=wfp-{pol} src-address={ip} protocol=tcp tls-host="{pat}" action=return comment="mltemp:{n}" place-before=[:pick $f 0]')
+            body.append(f'  /ip firewall filter add chain=wfp-{pol} src-address={ip} dst-address-list=mltemp-{n} action=return comment="mltemp:{n}" place-before=[:pick $f 0]')
+        body.append("}")
+    sig = hashlib.sha1("\n".join(body).encode()).hexdigest()[:16]
+    return ("\n:global mlTempSig\n"
+            f':if ($mlTempSig != "{sig}") do={{\n'
+            '/ip firewall filter remove [find comment~"^mltemp:"]\n'
+            '/ip firewall address-list remove [find comment~"^mltemp:"]\n'
+            + "".join(l + "\n" for l in body)
+            + f':set mlTempSig "{sig}"\n}}\n')
+
+
+def temp_allowed(user, ip, host):
+    """An open temporary exception for this user (or device) and site?"""
+    for e in active_exceptions():
+        if (user and e["username"] == user) or (not e["username"] and e["ip"] == ip):
+            h = (e["host"] or "").lower()
+            if host == h or host.endswith("." + h):
+                return e
+    return None
+
+
+def dept_script():
     of = dept_of_users()
     rows = q("""SELECT framedipaddress AS ip, username, nasipaddress AS nas FROM radacct
                 WHERE acctstoptime IS NULL AND framedipaddress REGEXP '^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+$'
@@ -1950,7 +2114,7 @@ def router_dept():
         if d and DEPT_RE.match(d):
             want[r["ip"]] = d
     pairs = ";".join(f'"{ip}"="{d}"' for ip, d in sorted(want.items()))
-    text = f""":local w {{{pairs}}}
+    return f""":local w {{{pairs}}}
 :foreach e in=[/ip firewall address-list find comment="mldept"] do={{
   :local a [:tostr [/ip firewall address-list get $e address]]
   :local l [/ip firewall address-list get $e list]
@@ -1962,7 +2126,6 @@ def router_dept():
   :if ([:len [/ip firewall address-list find list="ml-dept-all" address=$a comment="mldept"]] = 0) do={{ /ip firewall address-list add list="ml-dept-all" address=$a comment="mldept" }}
 }}
 """
-    return app.response_class(text, mimetype="text/plain", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/departments")

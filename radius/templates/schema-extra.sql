@@ -452,3 +452,21 @@ CREATE TABLE IF NOT EXISTS ml_block_event (
   KEY (at),
   KEY (ip, host)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Unblock requests from the block page, and temporary exceptions the admin gave (router: ml-live, every minute)
+CREATE TABLE IF NOT EXISTS ml_unblock (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ip VARCHAR(45) NOT NULL DEFAULT '',
+  username VARCHAR(64) NOT NULL DEFAULT '',
+  host VARCHAR(253) NOT NULL,
+  policy VARCHAR(40) NOT NULL DEFAULT '',
+  code CHAR(6) NOT NULL DEFAULT '',
+  note VARCHAR(200) NOT NULL DEFAULT '',
+  status VARCHAR(10) NOT NULL DEFAULT 'pending',    -- pending | allowed | always | denied | ended
+  until DATETIME NULL,
+  decided_by VARCHAR(64) NOT NULL DEFAULT '',
+  decided_at DATETIME NULL,
+  KEY (status, until),
+  KEY (ip, host)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

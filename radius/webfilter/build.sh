@@ -276,9 +276,9 @@ for pf in $(policy_files); do
     p=$(basename "$pf" .txt)
     [[ $p =~ ^[a-z0-9-]{1,40}$ ]] || { echo "build.sh: bad policy name $p" >&2; exit 1; }
     L="policy-$p" C="wfpolicy:$p"
-    any=0 ech=0 dns=router untimed=0 qtimes=() ao=""
+    any=0 ech=0 dns=router untimed=0 qtimes=() ao="" allows=() hard=0
+    pbody=$(mktemp)
     {
-        echo "# --- policy $p: $(head -1 "$pf" | sed 's/^# *//')"
         while IFS= read -r line || [ -n "$line" ]; do
             line=${line%%#*}; read -r key val extra _ <<<"$line" || true
             [ -n "${key:-}" ] || continue
@@ -314,8 +314,23 @@ for pf in $(policy_files); do
                     for tt in "${TT[@]}"; do echo "add chain=forward src-address-list=$L action=jump jump-target=wf-vpn$tt comment=\"$C vpn\""; done ;;
                 allow-only)
                     [[ $val =~ ^[a-z0-9-]+$ && -f allowonly/$val.txt && $val != meta-ipv4 ]] || { echo "build.sh: unknown allow-only profile '$val' in $pf" >&2; exit 1; }
-                    ao=$val; used_ao+=("$val") ;;
+                    ao=$val; used_ao+=("$val"); hard=1 ;;
+                block-site)
+                    # block-site example.com [time=...]   one site (and its subdomains) for this policy only
+                    [[ $val =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] || { echo "build.sh: bad site '$val' in $pf" >&2; exit 1; }
+                    any=1
+                    if [ -z "$t" ]; then untimed=1; else qtimes+=("${TT[@]}"); fi
+                    for tt in "${TT[@]}"; do
+                        for pat in "$val" "*.$val"; do
+                            echo "add chain=forward src-address-list=$L protocol=tcp tls-host=\"$pat\" action=reject reject-with=tcp-reset log=yes log-prefix=\"WF-site\"$tt comment=\"$C site $val\""
+                        done
+                    done ;;
+                allow-site)
+                    # allow-site example.com   an exception: never blocked by this policy (subdomains too)
+                    [[ $val =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] || { echo "build.sh: bad site '$val' in $pf" >&2; exit 1; }
+                    allows+=("$val") ;;
                 block-all)
+                    hard=1
                     [[ -z $val || $val == time=* ]] || { echo "build.sh: bad block-all in $pf" >&2; exit 1; }
                     for tt in "${TT[@]}"; do
                         echo "add chain=forward src-address-list=$L connection-state=new action=log log-prefix=\"WF-noinet\" limit=20/1m,10:packet$tt comment=\"$C no internet (log)\""
@@ -349,7 +364,27 @@ for pf in $(policy_files); do
             echo "add chain=dstnat src-address-list=$L protocol=tcp dst-port=53 action=dst-nat to-addresses=${DNS_IP[$dns]} comment=\"$C dns $dns\""
             echo "/ip firewall filter"
         fi
+    } > "$pbody"
+    # Everything of this policy runs in its own chain wfp-NAME: the exceptions first (return = not blocked by
+    # this policy), then the blocks. The server adds approved temporary exceptions at the top (ml-live).
+    {
+        echo "# --- policy $p: $(head -1 "$pf" | sed 's/^# *//')"
+        echo "add chain=forward src-address-list=$L action=jump jump-target=wfp-$p comment=\"$C\""
+        for d in "${allows[@]}"; do
+            for pat in "$d" "*.$d"; do
+                echo "add chain=wfp-$p protocol=tcp tls-host=\"$pat\" action=return comment=\"$C allow $d\""
+            done
+        done
+        if [ "$hard" = 1 ] && [ ${#allows[@]} -gt 0 ]; then
+            # no internet / allow-only refuse the connection before the site name is sent: allow by address too
+            echo "/ip firewall address-list"
+            for d in "${allows[@]}"; do echo "add list=wfallow-$p address=$d comment=\"$C allow $d\""; done
+            echo "/ip firewall filter"
+            echo "add chain=wfp-$p dst-address-list=wfallow-$p action=return comment=\"$C allow (addresses)\""
+        fi
+        sed "s/^add chain=forward src-address-list=$L /add chain=wfp-$p /" "$pbody"
     } >> "$pol_out"
+    rm -f "$pbody"
     echo "build.sh: policy $p" >&2
 done
 
@@ -373,6 +408,8 @@ sni_rules() { # sni_rules CHAIN PREFIX < patterns
     echo "# Policies: $(for f in $(policy_files); do printf '%s ' "$(basename "$f" .txt)"; done)"
     echo "# Checks the HTTPS site name (SNI), so it works per device even when DNS answers are cached."
     echo
+    echo "/ip firewall address-list"
+    echo "remove [find comment~\"^wfpolicy:\"]"
     echo "/ip firewall filter"
     echo "remove [find comment~\"^wfpolicy:\"]"
     echo "remove [find comment~\"^wfchain:\"]"

@@ -330,6 +330,7 @@ GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_stat TO 'radius_web'@'loc
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_setup TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE ON \`$DB_NAME\`.ml_traffic TO 'radius_web'@'localhost';
 GRANT INSERT, DELETE ON \`$DB_NAME\`.ml_block_event TO 'radius_web'@'localhost';
+GRANT INSERT ON \`$DB_NAME\`.ml_unblock TO 'radius_web'@'localhost';
 GRANT EXECUTE ON \`$DB_NAME\`.* TO 'radius_web'@'localhost';
 FLUSH PRIVILEGES;
 EOF
@@ -442,6 +443,13 @@ EOF
         echo "        proxy_pass http://127.0.0.1:8099/internal/blockcheck;"
         echo "        proxy_pass_request_body off;"
         echo '        proxy_set_header Content-Length "";'
+        echo "        proxy_set_header X-ML-Block $BLOCK_KEY;"
+        echo '        proxy_set_header X-ML-Host $host;'
+        echo '        proxy_set_header X-Real-IP $remote_addr;'
+        echo "    }"
+        echo "    location = /__mlrequest {     # the 'please open it' button of the block page"
+        echo "        proxy_pass http://127.0.0.1:8099/internal/unblockrequest;"
+        echo "        client_max_body_size 4k;"
         echo "        proxy_set_header X-ML-Block $BLOCK_KEY;"
         echo '        proxy_set_header X-ML-Host $host;'
         echo '        proxy_set_header X-Real-IP $remote_addr;'

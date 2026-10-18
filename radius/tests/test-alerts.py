@@ -120,7 +120,7 @@ for bad in ("TELEGRAM_TOKEN=nope", "WHATSAPP_PHONE=12", "EVENTS=security,foo", "
     except ValueError:
         check(f"settings: {bad} refused", True)
 check("settings: empty value removes it", "WHATSAPP_PHONE" not in alerts.set_values(dict(c), ["WHATSAPP_PHONE="]))
-check("settings: default events", alerts.events({}) == ["security", "quarantine", "router", "service", "jobs", "disk", "anomaly", "summary", "weekly", "monthly"])
+check("settings: default events", alerts.events({}) == ["security", "quarantine", "router", "service", "jobs", "disk", "anomaly", "requests", "summary", "weekly", "monthly"])
 m = alerts.mask(c)
 check("status hides secrets", TOKEN not in json.dumps(m) and "SmtpPass123" not in json.dumps(m) and m["TELEGRAM_CHAT"] == "42")
 d = tempfile.mkdtemp()

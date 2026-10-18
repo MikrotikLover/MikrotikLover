@@ -877,7 +877,7 @@ const ALERT_EVENTS = [
   ["security", "Virus, hacker attack, DDoS", "only HIGH danger"], ["quarantine", "Device quarantined", "automatic or by an admin"],
   ["router", "Router down / back", "router stops answering (2 checks)"], ["service", "Server service stopped", "FreeRADIUS, database, DNS logger, traffic"],
   ["jobs", "Backup / update failed", "nightly backup, off-site copy, updates"], ["disk", "Disk almost full", "under 10% free"],
-  ["expiring", "Users expiring", "subscription ends within 24 hours"], ["anomaly", "Unusual data use", "a user uses 10x a normal day"],
+  ["expiring", "Users expiring", "subscription ends within 24 hours"], ["anomaly", "Unusual data use", "a user uses 10x a normal day"], ["requests", "Unblock requests", "a user asks to open a blocked site (block page)"],
   ["summary", "Daily summary", "users, data, sales, security"], ["weekly", "Weekly report", "Monday: top users & apps, this week vs last"],
   ["monthly", "Monthly security report", "1st of the month: PDF by email / Telegram"]];
 const alertsCard = async () => {
@@ -1771,6 +1771,8 @@ function ruleLabel(r) {
     case "block": return badge(`${r.value === "keywords" ? "adult words" : r.value}${t}`, "bad");
     case "block-app": return badge(`app: ${r.value}${t}`, "bad");
     case "block-vpn": return badge(`VPN blocked${t}`, "bad");
+    case "block-site": return badge(`site: ${r.value}${t}`, "bad");
+    case "allow-site": return badge(`always open: ${r.value}`, "ok");
     case "allow-only": return badge(`ONLY ${r.value}`, "warn");
     case "block-all": return badge(`no internet${t}`, "bad");
     case "dns": return badge(`DNS: ${r.value}`, "info");
@@ -1826,11 +1828,19 @@ function policyEditor(meta, pol) {
   const dnsSel = h("select", {}, [["router", "Router DNS (normal)"], ["family", "Cloudflare Family (no adult)"], ["adguard-family", "AdGuard Family"], ["cleanbrowsing-family", "CleanBrowsing Family"], ["cleanbrowsing-adult", "CleanBrowsing Adult filter"]]
     .map(([v, l]) => h("option", { value: v, selected: (rules.find((r) => r.kind === "dns")?.value || "router") === v }, l)));
   const ech = check("Block hidden site names (ECH)", "Stops browsers from hiding the site name; a few Cloudflare sites may not open.", has("strict-ech"));
+  const siteList = (kind) => rules.filter((r) => r.kind === kind).map((r) => r.value).join("\n");
+  const sitesHelp = "one per line, like example.com — its subdomains too";
+  const blockSites = h("textarea", { rows: 3, placeholder: "example-bet.com\nsomegame.io", spellcheck: "false" }, siteList("block-site"));
+  const allowSites = h("textarea", { rows: 3, placeholder: "linkedin.com\nschool.edu.pk", spellcheck: "false" }, siteList("allow-site"));
+  const sites = (ta) => [...new Set(ta.value.split(/[\s,]+/).map((x) => x.trim().toLowerCase().replace(/^[a-z]+:\/\//, "").replace(/\/.*$/, "").replace(/^\*\./, ""))
+    .filter((x) => /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(x)))];
+  [blockSites, allowSites].forEach((ta) => ta.addEventListener("input", () => preview()));
   const out = h("pre", { class: "code-box" });
   const blockSection = h("div", { class: "stack" },
     h("label", { class: "field" }, "Categories", h("span", { class: "help" }, "Whole groups of sites and apps. Lists are kept up to date on the server."), h("div", { class: "checks" }, cats)),
     vpn,
     h("label", { class: "field" }, "Single apps", h("span", { class: "help" }, "Every known domain of the app is blocked, the ones learned on your network too. \"new\" = discovered automatically."), appSearch, appBox, chosenBox),
+    h("label", { class: "field" }, "Single websites to block", h("span", { class: "help" }, sitesHelp), blockSites),
     h("label", { class: "field" }, "When", whenSel, timeRow),
     h("label", { class: "field" }, "DNS for these users", dnsSel), ech);
   function text() {
@@ -1842,9 +1852,11 @@ function policyEditor(meta, pol) {
       cats.filter((c) => c.cb.checked).forEach((c) => lines.push(`block ${c.value}${tm}`));
       [...appChosen].forEach((a) => lines.push(`block-app ${a}${tm}`));
       if (vpn.cb.checked) lines.push(`block-vpn${tm}`);
+      sites(blockSites).forEach((d) => lines.push(`block-site ${d}${tm}`));
       if (dnsSel.value !== "router") lines.push(`dns ${dnsSel.value}`);
       if (ech.cb.checked) lines.push("strict-ech");
     }
+    sites(allowSites).forEach((d) => lines.push(`allow-site ${d}`));
     return lines.join("\n") + "\n";
   }
   function preview() {
@@ -1862,6 +1874,7 @@ function policyEditor(meta, pol) {
     h("label", { class: "field" }, "What should these users get?", modeSel),
     onlyNote,
     blockSection,
+    h("label", { class: "field" }, "Always open — exceptions", h("span", { class: "help" }, `${sitesHelp}. Never blocked by this policy, also not by "no internet" or "WhatsApp only" (e.g. a school or bank site).`), allowSites),
     h("label", { class: "field" }, "Policy file (what the server stores)", out));
   modeSel.addEventListener("change", () => { onlyNote.hidden = modeSel.value !== "only"; });
   return { form, text, name: () => name.value.trim() };
@@ -1871,6 +1884,7 @@ ROUTES.blocking = async (tab = "policies", ...rest) => {
   if (tab === "logs") return blockingLogs();
   if (tab === "parental") return parentalPage();
   if (tab === "why") return whyBlocked(...rest);
+  if (tab === "requests") return unblockRequests();
   const [meta, ul] = await Promise.all([api("GET", "/api/blocking"), api("GET", "/api/users")]);
   const r = meta.router;
   const openEditor = (pol) => {
@@ -2042,8 +2056,48 @@ async function parentalPage() {
     card("For the parents", null, h("div", { class: "muted" }, "Which sites and apps a child used: Users → the child → Top sites (7 days), or Insights for the whole network. A blocked try shows up in Blocking logs."))));
 }
 
-const blockingTabs = (tab) => h("div", { class: "tabs" }, [["policies", "Policies"], ["parental", "Parental controls"], ["logs", "Blocking logs"], ["why", "Why blocked?"]]
+const blockingTabs = (tab) => h("div", { class: "tabs" }, [["policies", "Policies"], ["parental", "Parental controls"], ["logs", "Blocking logs"], ["why", "Why blocked?"], ["requests", "Requests"]]
   .map(([k, l]) => h("a", { href: `#/blocking/${k}`, class: k === tab ? "active" : "" }, l)));
+async function unblockRequests() {
+  const d = await api("GET", "/api/unblock");
+  const who = (r) => h("span", {}, r.username || h("span", { class: "muted" }, "(no login)"), h("div", { class: "muted small" }, r.ip || ""));
+  const decide = (r, how) => async (e) => {
+    if (how === "always" && !(await confirmDlg("Always open", `${r.host.replace(/^www\./, "")} will never be blocked for policy ${r.policy || "of this user"} — for everyone in it.`, "Always open"))) return;
+    e.target.disabled = true;
+    if (await act(api("POST", `/api/unblock/${r.id}`, { how }))) route(); else e.target.disabled = false;
+  };
+  const site = h("input", { type: "search", placeholder: "site, e.g. example.com", class: "grow" });
+  const user = h("input", { type: "search", placeholder: "user", list: "req-users" });
+  const howSel = h("select", {}, [["1h", "1 hour"], ["2h", "2 hours"], ["4h", "4 hours"], ["today", "Today"]].map(([v, l]) => h("option", { value: v }, l)));
+  const users = await api("GET", "/api/users").then((r) => (r.users || []).map((u) => u.username)).catch(() => []);
+  const give = h("form", { class: "toolbar wrap", onsubmit: async (e) => {
+    e.preventDefault();
+    if (await act(api("POST", "/api/unblock/allow", { user: user.value.trim(), site: site.value.trim(), how: howSel.value }))) route();
+  } }, user, site, howSel, h("button", { class: "primary", type: "submit", disabled: !isAdmin() }, "Open for this user"), h("datalist", { id: "req-users" }, users.map((u) => h("option", { value: u }))));
+  const STATUS = { always: ["always open (policy)", "ok"], allowed: ["was open", ""], ended: ["ended", ""], denied: ["refused", "bad"] };
+  shell("Blocking", h("div", { class: "stack" }, blockingTabs("requests"),
+    h("div", { class: "note" }, "Users ask from the block page (\"Khulwane ki darkhwast\"). You get an alert (Settings → Alerts: Unblock requests). Temporary openings reach the routers within a minute and close by themselves."),
+    card("Waiting for an answer", `${d.pending.length}`, table([
+      { label: "When", render: (r) => r.at.slice(5, 16) }, { label: "User", render: who },
+      { label: "Site", render: (r) => h("code", {}, r.host), wrap: true }, { label: "Policy", render: (r) => r.policy ? badge(r.policy, "info") : "—" },
+      { label: "Note", render: (r) => r.note || h("span", { class: "muted" }, "—"), wrap: true },
+      { label: "", render: (r) => h("div", { class: "row-actions wrap" },
+          h("a", { class: "btn small", href: `#/blocking/why/${encodeURIComponent(r.host)}/${encodeURIComponent(r.username || r.ip)}/${r.code || ""}` }, "Why?"),
+          isAdmin() ? [h("button", { class: "small primary", onclick: decide(r, "1h") }, "1 hour"), h("button", { class: "small", onclick: decide(r, "today") }, "Today"),
+            h("button", { class: "small", onclick: decide(r, "always") }, "Always"), h("button", { class: "small danger", onclick: decide(r, "deny") }, "Refuse")] : null) }],
+      d.pending, "No requests waiting.")),
+    card("Open now (temporary)", `${d.open.length}`, table([
+      { label: "User", render: who }, { label: "Site", render: (r) => h("code", {}, r.host), wrap: true },
+      { label: "Until", render: (r) => r.until.slice(5, 16) }, { label: "By", key: "decided_by" },
+      { label: "", render: (r) => isAdmin() ? h("button", { class: "small danger", onclick: decide(r, "end") }, "End now") : null }],
+      d.open, "Nothing is open temporarily."), isAdmin() ? h("div", { class: "stack" }, h("b", {}, "Open a site for a user (without a request)"), give) : null),
+    card("Decided", "last 50", table([
+      { label: "When", render: (r) => (r.decided_at || r.at).slice(5, 16) }, { label: "User", render: who },
+      { label: "Site", render: (r) => h("code", {}, r.host), wrap: true },
+      { label: "Answer", render: (r) => { const [l, k] = STATUS[r.status] || [r.status, ""]; return badge(l, k); } }, { label: "By", key: "decided_by" }],
+      d.recent, "Nothing yet."))));
+}
+
 async function whyBlocked(site = "", who = "", ref = "") {
   const siteIn = h("input", { type: "search", value: site, placeholder: "website, link, or the 6-letter code from the block page", class: "grow" });
   const whoIn = h("input", { type: "search", value: who, placeholder: "user or IP (optional)", list: "why-users" });

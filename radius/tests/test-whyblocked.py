@@ -71,6 +71,16 @@ t("allow-only: its own host allowed", r["verdict"] == "allowed", r)
 r = w.explain("facebook.com", None, "", MON_10, WF, Cat())
 t("no policy: lists named, router-wide hint", r["verdict"] == "no-policy" and "webfilter-*.rsc" in r["summary"], r)
 
+POL2 = "block social\nallow-site linkedin.com\nblock-site example-bet.com time=0s-1s\nblock-site other-bet.com\n"
+r = w.explain("www.linkedin.com", "staff", POL2, MON_10, WF, Cat())
+t("allow-site wins over the category", r["verdict"] == "allowed" and "allow-site linkedin.com" in r["summary"] and not any(x["active"] for x in r["rules"]), r)
+r = w.explain("m.other-bet.com", "staff", POL2, MON_10, WF, Cat())
+t("block-site (subdomain too)", r["verdict"] == "blocked" and r["rules"][0]["router"] == "WF-site", r)
+r = w.explain("example-bet.com", "staff", POL2, MON_10, WF, Cat())
+t("block-site with time=, outside it", r["verdict"] == "blocked-other-times", r)
+r = w.explain("www.facebook.com", "staff", POL2, MON_10, WF, Cat())
+t("rest of the category still blocked", r["verdict"] == "blocked", r)
+
 URL = os.environ.get("URL")
 if URL:
     ctx = ssl._create_unverified_context()

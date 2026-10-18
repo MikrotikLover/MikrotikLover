@@ -10,6 +10,8 @@ First line: "# description". Directives (one per line):
                               time= uses RouterOS syntax, e.g. time=9h-17h,mon,tue,wed,thu,fri
   block-app APP [time=...]    block one app with every domain the CDN detective knows for it, the ones
                               learned on your network included (radius-admin cdn apps), e.g. block-app PUBG Mobile
+  block-site example.com [time=...]   one website (and its subdomains) for this policy only
+  allow-site example.com      an exception: this policy never blocks it (e.g. block social, allow-site linkedin.com)
   block-vpn [time=...]        VPN apps/websites (by name, and any name with "vpn"), the VPN servers seen on
                               your network (address list vpn-servers, kept up to date by the server) and the
                               VPN protocols (OpenVPN, WireGuard, WARP, IPsec, L2TP, PPTP, SoftEther, Tor).

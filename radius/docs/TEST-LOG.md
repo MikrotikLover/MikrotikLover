@@ -121,3 +121,6 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 20:01 | Why blocked? tab + 'Why?' button in Blocking logs, CLI radius-admin why; fix: 0s-1s windows need seconds | ok — desktop + phone, no console errors (shots 104-106); all suites regress ok |
 | 20:16 | Block page (safe): router sends http:// of policy users to nginx :8082; blocked -> branded page (hotspot logo/colours) + 6-letter code; else on to the checked public address | ok |
 | 20:16 | Block page safety: nginx key needed, localhost / LAN / server ports refused, images get a short answer, same code within 10 min, netwatch off when server down, lint ok | ok — tests/test-blockpage.sh 27 checks; all suites + UI regress ok (shots 107-109) |
+| 20:44 | Policies: own chain wfp-NAME, allow-site first (also by address for no-internet / allow-only), block-site with time=, WF-site log; simulator 79 cases | ok |
+| 20:44 | Unblock requests: block page button -> ml_unblock (code+IP+site check, 1 pending per site, 10/day) -> alert 'requests' -> Requests tab 1h/today/always/refuse -> ml-live 1-minute router rules -> expires by itself | ok — tests/test-unblock.sh 33 checks |
+| 20:44 | Regression: all 13 suites + lint + UI suite (event switch count 11 -> 12, leftover ui-user from the aborted run cleaned) | ok (shots 110-114) |

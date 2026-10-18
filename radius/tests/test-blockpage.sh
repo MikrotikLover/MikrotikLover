@@ -62,7 +62,7 @@ if [ -n "${URL:-}" ]; then
     t "API: unknown code 404" "$(api GET /api/why/ref/ZZZZZ9)" "404"
     t "API: bad code 400" "$(api GET /api/why/ref/abc)" "400"
     t "API: status" "$(api GET /api/blockpage)$(python3 -c 'import json; d=json.load(open("/tmp/bp.json")); print(d["on"], d["today"] >= 1)')" "200True True"
-    t "API: preview page" "$(api GET /api/blockpage/preview)$(grep -c 'AB3K7Q' /tmp/bp.json)" "2001"
+    t "API: preview page" "$(api GET /api/blockpage/preview)$(grep -c 'class="ref">AB3K7Q' /tmp/bp.json)" "2001"
     t "API: turn off" "$(api POST /api/blockpage '{"on":false}')$(db "SELECT v FROM ml_setting WHERE k='blockpage_on'")" "2000"
     rm -f "$jar"
 fi

@@ -315,6 +315,8 @@ Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein
 | Department ki shared speed (maslan Sales 10M: 1 user ho to poori, 10 hon to baant lein) | Departments | `radius-admin dept add sales 10M 5M` · `dept member sales user ali` / `group staff` |
 | Traffic graphs (interface / user / group / department) | Traffic graphs | khud chalta hai: interfaces router report se (auto-sync), users accounting se (har 5 min) |
 | Site kyun band hai? (kaun si list / policy rule, abhi active?) | Blocking → Why blocked? | `radius-admin why facebook.com ali` |
+| Policy mein ek site band / hamesha khuli | Blocking → policy → Edit (Single websites / Always open) | policy file: `block-site x.com` · `allow-site y.com` |
+| Unblock darkhwast + arzi ijazat (1 ghanta / aaj / hamesha) | Blocking → Requests | `radius-admin unblock list` · `unblock approve ID 1h` |
 | Block page users ke liye (logo, wajah, code — http:// sites) | Blocking → Why blocked? → Block page | `radius-admin blockpage on` · `blockpage ref CODE` (ufw: 8082/tcp LAN se) |
 | Alerts phone par (Telegram / WhatsApp / Email) | Settings → Alerts | `radius-admin alerts telegram BOT_TOKEN` · `alerts whatsapp 923001234567 APIKEY` · `alerts test` |
 | Off-site backup (doosra server / Google Drive) | Settings → Off-site copy | `radius-admin backup offsite ssh user@host:/backups` ya `backup offsite rclone gdrive:ml` |

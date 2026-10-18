@@ -60,7 +60,7 @@ t "512k and 0 (no limit)" "$(db "SELECT CONCAT(down_kbps,'/',up_kbps) FROM ml_de
 S=/var/lib/mikrotiklover/router/sync.rsc
 t "router: shared download queue with PCQ" "$(grep -c 'name="dept tr-sales down" parent=global packet-mark=mld-tr-sales-down max-limit=10000k queue=ml-pcq-down' $S)" "1"
 t "router: no upload queue when 0" "$(grep -c 'dept tr-acc up' $S)" "0"
-t "router: PCQ types, marks, fasttrack bypass, 1-minute member script" "$(grep -c 'pcq-classifier=dst-address pcq-rate=0' $S)$(grep -c 'src-address-list=ml-dept-tr-sales action=mark-packet' $S)$(grep -c 'connection-state=established,related src-address-list=ml-dept-all' $S)$(grep -c 'name=ml-dept interval=1m' $S)" "1111"
+t "router: PCQ types, marks, fasttrack bypass, 1-minute member script" "$(grep -c 'pcq-classifier=dst-address pcq-rate=0' $S)$(grep -c 'src-address-list=ml-dept-tr-sales action=mark-packet' $S)$(grep -c 'connection-state=established,related src-address-list=ml-dept-all' $S)$(grep -c 'name=ml-live interval=1m' $S)" "1111"
 t "sync.rsc passes the RouterOS lint" "$(python3 "$HERE/lint-rsc.py" $S | head -1)" "ok   sync.rsc"
 t "member: unknown user refused" "$(radius-admin dept member tr-sales user nosuch9 2>&1 | grep -c 'No such user')" "1"
 t "member: unknown department refused" "$(radius-admin dept member tr-x user tr-a 2>&1 | grep -c 'No department')" "1"
