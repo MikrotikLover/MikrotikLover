@@ -227,10 +227,16 @@ try {
   } else console.log("     (no discovered app on this server — skipped)");
 
   // ports & protocols
-  await go(page, "#/ports/port", "Ports & protocols");
+  // the test data may be some days old: look at the last 30 days
+  const ports30 = async (hash) => {
+    await go(page, hash, "Ports & protocols");
+    await page.locator(".toolbar select").first().selectOption("30");
+    await page.getByRole("button", { name: "Show", exact: true }).click();
+  };
+  await ports30("#/ports/port");
   await page.locator("code", { hasText: "443/udp" }).first().waitFor({ timeout: 15000 });
   await shot(page, "30-ports");
-  await go(page, "#/ports/in", "Ports & protocols");
+  await ports30("#/ports/in");
   await page.locator("code", { hasText: "37777/tcp" }).first().waitFor({ timeout: 15000 });
   await go(page, "#/ports/profile", "Ports & protocols");
   await page.locator("h2", { hasText: "whatsapp.com" }).first().waitFor({ timeout: 15000 });
