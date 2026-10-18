@@ -1093,6 +1093,17 @@ radius-admin dept member sales user ali             # ya: dept member sales grou
 - User ka apna entry group wale se upar: ali group staff (Accounts) mein ho magar khud Sales mein dala ho to Sales.
 - Tests: `tests/test-traffic.sh` (45 checks).
 
+## 7p. Why blocked? — admin ke liye block dhoondna
+
+User kahe "yeh site nahi khul rahi": dashboard → **Blocking → Why blocked?** → site (ya poora link) aur user/IP likhein → **Check**.
+- Site kin lists mein hai: category (social, gaming …), app (TikTok, PUBG …), adult words, VPN.
+- User ki policy (apni ya group ki) ka **kaun sa rule** block karta hai, **abhi active hai ya sirf kisi aur waqt** (`time=`), aur router log mein us ka naam (`WF-social`, `WF-app-tiktok` …).
+- Quarantine, `web-filter-exempt`, family DNS jaisi baatein upar note mein.
+- Pichle 7 din ke router log ke blocked attempts us site ke.
+- **Blocking logs** mein har line ke saath **Why?** button — seedha yahan bhar deta hai.
+- CLI: `radius-admin why facebook.com ali` (ya IP). Engine: `tools/whyblocked.py` — router wale qaayde (subdomain, `*`, ^keyword, time=). Tests: `tests/test-whyblocked.py` (34 checks).
+- Users ke liye logo wala block page abhi nahi (HTTPS ki wajah se sirf certificate wale devices par dikh sakta hai) — baad mein.
+
 ## 7e. Health check — sab theek hai?
 
 `sudo radius-admin doctor` ya dashboard → **Health check**: server ka har hissa **sabz** (theek), **peela** (dekh lein) ya **laal** (abhi theek karein), aur kharabi ke saath us ka hal likha hota hai.

@@ -706,6 +706,29 @@ cmd_log() {
     echo "SELECT authdate AS time, username AS user, reply AS result FROM radpostauth ORDER BY id DESC LIMIT $n;" | dbt
 }
 
+# ======================================================================= why blocked?
+cmd_why() {
+    local site=${1:-} who=${2:-} u="" lst="" pol=""
+    [ -n "$site" ] || die "usage: radius-admin why SITE [USER|IP]     e.g. why facebook.com ali"
+    if [[ $who =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        u=$(echo "SELECT username FROM radacct WHERE framedipaddress=$(q "$who") ORDER BY acctstoptime IS NULL DESC, acctstarttime DESC LIMIT 1" | db)
+        echo "IP $who = user ${u:-(unknown)}"
+    elif [ -n "$who" ]; then
+        valid_name "$who" username; user_exists "$who" || die "No such user '$who'"; u=$who
+    fi
+    if [ -n "$u" ]; then
+        lst=$(echo "SELECT value FROM radreply WHERE username=$(q "$u") AND attribute='Mikrotik-Address-List' LIMIT 1" | db)
+        [ -n "$lst" ] || lst=$(echo "SELECT gr.value FROM radusergroup g JOIN radgroupreply gr ON gr.groupname=g.groupname
+                                     AND gr.attribute='Mikrotik-Address-List' WHERE g.username=$(q "$u") ORDER BY g.priority LIMIT 1" | db)
+        [[ $lst == policy-* ]] && pol=${lst#policy-}
+        echo "User    : $u  (address list: ${lst:-none})"
+        [ "$lst" != web-filter-exempt ] || echo "Note    : web-filter-exempt — the web filter does not apply to this user"
+        local qr; qr=$(echo "SELECT CONCAT(since,' ',reason) FROM ml_quarantine WHERE released_at IS NULL AND username=$(q "$u") LIMIT 1" | db)
+        [ -z "$qr" ] || echo "QUARANTINE: $qr — no internet at all (radius-admin security release $u)"
+    fi
+    python3 -I /usr/local/lib/mikrotiklover/whyblocked.py "$site" ${pol:+--policy "$pol"} --policies "$POLICY_DIR"
+}
+
 # ======================================================================= traffic graphs + departments
 # Every 5 minutes (enforce): accounting totals -> bytes per user per 5 min / per hour (ml_traffic).
 traffic_collect() {
@@ -2748,6 +2771,9 @@ IP binding: every user keeps one address (DHCP static lease on the routers, foll
   ipbind unlock USER | del USER         back to auto / remove
   (PPPoE: user ip USER IP)
 
+Why blocked?
+  why SITE [USER|IP]                    which list / policy rule blocks a site for a user, and is it active now
+
 Departments: one shared speed for a team (1 user online gets all of it, 10 users share it)
   dept list | show NAME                 departments, members, who is online
   dept add NAME 10M 5M ['Sales team']   download / upload for the whole department (0 = no limit)
@@ -2896,6 +2922,7 @@ case ${1:-help} in
     notice)  shift; cmd_notice "$@" ;;
     ipbind)  shift; cmd_ipbind "$@" ;;
     dept)    shift; cmd_dept "$@" ;;
+    why)     shift; cmd_why "$@" ;;
     traffic-collect) traffic_collect; ok "Traffic counted" ;;
     hotspot) shift; cmd_hotspot "$@" ;;
     social)  shift; cmd_social "$@" ;;

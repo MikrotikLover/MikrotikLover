@@ -289,3 +289,4 @@ input[type=color] { width: 60px; height: 34px; padding: 2px; }
 .chip-x { border: 0; background: none; padding: 0 2px; font-size: 15px; line-height: 1; color: var(--muted); }
 .chip-x:hover { color: var(--bad); }
 .dept-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); }
+.why-verdict { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 15px; }

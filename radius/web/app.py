@@ -744,6 +744,83 @@ def blocked():
     return jsonify(rows=list(reversed(rows)), summary=summary[:200])
 
 
+@app.get("/api/why")
+@login_required()
+def why_blocked():
+    """Why is SITE blocked (for USER or IP)? Lists, the policy rule, whether it is active now, recent log lines."""
+    import cdnmap
+    import whyblocked
+    host = whyblocked.clean_host(request.args.get("site", ""))
+    if not host:
+        abort(400, "write a website name, e.g. facebook.com or https://www.facebook.com/page")
+    who = request.args.get("user", "").strip()
+    user, ip = "", ""
+    if re.match(r"^\d+\.\d+\.\d+\.\d+$", who):
+        ip = who
+        r = q1("""SELECT username FROM radacct WHERE framedipaddress=%s ORDER BY acctstoptime IS NULL DESC, acctstarttime DESC LIMIT 1""", (ip,))
+        user = r["username"] if r else ""
+    elif who:
+        if not NAME_RE.match(who):
+            abort(400, "invalid user")
+        if not q1("SELECT 1 FROM radcheck WHERE username=%s LIMIT 1", (who,)):
+            abort(404, f"no user '{who}'")
+        user = who
+        r = q1("SELECT framedipaddress FROM radacct WHERE username=%s AND acctstoptime IS NULL ORDER BY acctstarttime DESC LIMIT 1", (user,))
+        ip = r["framedipaddress"] if r else ""
+    at = datetime.now()
+    if request.args.get("at"):
+        try:
+            at = datetime.strptime(request.args["at"], "%Y-%m-%dT%H:%M")
+        except ValueError:
+            abort(400, "at: YYYY-MM-DDTHH:MM")
+    lst, source = "", ""
+    if user:
+        r = q1("SELECT value FROM radreply WHERE username=%s AND attribute='Mikrotik-Address-List' LIMIT 1", (user,))
+        if r:
+            lst, source = r["value"], "user"
+        else:
+            r = q1("""SELECT gr.value, g.groupname FROM radusergroup g JOIN radgroupreply gr ON gr.groupname=g.groupname
+                      AND gr.attribute='Mikrotik-Address-List' WHERE g.username=%s ORDER BY g.priority LIMIT 1""", (user,))
+            if r:
+                lst, source = r["value"], f"group {r['groupname']}"
+    policy = lst[7:] if lst.startswith("policy-") and POLICY_RE.match(lst[7:]) else ""
+    text = ""
+    if policy:
+        try:
+            text = open(os.path.join(POLICY_DIR, policy + ".txt"), encoding="utf-8").read()
+        except OSError:
+            text = ""
+    vpn_extra = [r["domain"] for r in q("SELECT domain FROM ml_vpn_domain")] if q1("SHOW TABLES LIKE 'ml_vpn_domain'") else []
+    try:
+        cat = cdnmap.catalog()
+    except Exception:                                       # noqa: BLE001
+        cat = None
+    res = whyblocked.explain(host, policy, text, at, WF_DIR, cat, vpn_extra)
+    notes = []
+    if lst == "web-filter-exempt":
+        notes.append("This user is in web-filter-exempt: the web filter does not apply to them.")
+    elif user and not policy:
+        notes.append("No policy for this user" + (f" (address list {lst})" if lst else "") + ". Policies set on the router "
+                     "for an IP range or a DHCP lease are not known here.")
+    quar = q1("""SELECT reason, since FROM ml_quarantine WHERE released_at IS NULL AND
+                 ((%s <> '' AND username=%s) OR (%s <> '' AND ip=%s)) ORDER BY since DESC LIMIT 1""", (user, user, ip, ip))
+    if quar:
+        res["verdict"] = "blocked"
+        notes.insert(0, f"QUARANTINE since {quar['since']}: {quar['reason']} — no internet at all until released (Security).")
+    # recent blocked attempts for this site (and user) from the router log
+    a = type("A", (), {})()
+    a.user, a.ip, a.days, a.n, a.policy = user, "" if user else ip, 7, 2000, ""
+    pols = {r["username"]: r["list"] for r in q(mlreport.POLICY_SQL)}
+    try:
+        rows = mlreport.blocked_detail(a, sessions(), pols)
+    except Exception:                                       # noqa: BLE001
+        rows = []
+    base = host.split(".", 1)[1] if host.count(".") > 1 else host
+    recent = [r for r in rows if r.get("site") and (r["site"] == host or r["site"].endswith("." + base) or r["site"] == base
+                                                   or host.endswith("." + r["site"]))][-20:]
+    return jsonify(**res, user=user, ip=ip, list=lst, list_from=source, notes=notes, recent=list(reversed(recent)))
+
+
 @app.get("/api/live")
 @login_required()
 def live():

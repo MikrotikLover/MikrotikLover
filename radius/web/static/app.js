@@ -1867,9 +1867,10 @@ function policyEditor(meta, pol) {
   return { form, text, name: () => name.value.trim() };
 }
 
-ROUTES.blocking = async (tab = "policies") => {
+ROUTES.blocking = async (tab = "policies", ...rest) => {
   if (tab === "logs") return blockingLogs();
   if (tab === "parental") return parentalPage();
+  if (tab === "why") return whyBlocked(...rest);
   const [meta, ul] = await Promise.all([api("GET", "/api/blocking"), api("GET", "/api/users")]);
   const r = meta.router;
   const openEditor = (pol) => {
@@ -2041,8 +2042,47 @@ async function parentalPage() {
     card("For the parents", null, h("div", { class: "muted" }, "Which sites and apps a child used: Users → the child → Top sites (7 days), or Insights for the whole network. A blocked try shows up in Blocking logs."))));
 }
 
-const blockingTabs = (tab) => h("div", { class: "tabs" }, [["policies", "Policies"], ["parental", "Parental controls"], ["logs", "Blocking logs"]]
+const blockingTabs = (tab) => h("div", { class: "tabs" }, [["policies", "Policies"], ["parental", "Parental controls"], ["logs", "Blocking logs"], ["why", "Why blocked?"]]
   .map(([k, l]) => h("a", { href: `#/blocking/${k}`, class: k === tab ? "active" : "" }, l)));
+async function whyBlocked(site = "", who = "") {
+  const siteIn = h("input", { type: "search", value: site, placeholder: "website, e.g. facebook.com or a full link", class: "grow" });
+  const whoIn = h("input", { type: "search", value: who, placeholder: "user or IP (optional)", list: "why-users" });
+  const holder = h("div", { class: "stack" });
+  const go = () => { location.hash = `#/blocking/why/${encodeURIComponent(siteIn.value.trim())}/${encodeURIComponent(whoIn.value.trim())}`; };
+  const form = h("form", { class: "toolbar wrap", onsubmit: (e) => { e.preventDefault(); go(); } }, siteIn, whoIn, h("button", { class: "primary", type: "submit" }, icon("search"), "Check"));
+  const VERDICT = { blocked: ["BLOCKED now", "bad"], "blocked-other-times": ["blocked at other times", "warn"], allowed: ["not blocked by the policy", "ok"], "no-policy": ["no policy", ""] };
+  if (site) {
+    try {
+      const d = await api("GET", `/api/why?${new URLSearchParams({ site, user: who })}`);
+      const [vt, vk] = VERDICT[d.verdict] || [d.verdict, ""];
+      holder.replaceChildren(
+        card(d.host, d.user ? `user ${d.user}${d.ip ? " · " + d.ip : ""} · ${d.at}` : d.at,
+          h("div", { class: "why-verdict" }, badge(vt, vk), h("b", {}, d.summary)),
+          d.notes.map((n) => h("div", { class: "note" }, n)),
+          d.user ? h("div", { class: "muted small" }, d.policy ? `Policy: ${d.policy} (from ${d.list_from})` : `Address list: ${d.list || "none"}`) : null),
+        card("Rules of the policy that match", d.policy ? `policy ${d.policy}` : null, table([
+          { label: "Rule", render: (r) => h("code", {}, r.rule), wrap: true },
+          { label: "Now", render: (r) => r.active ? badge("active", "bad") : badge(`only ${r.time}`, "warn") },
+          { label: "Why", key: "why", wrap: true },
+          { label: "In the router log", render: (r) => h("code", {}, r.router) },
+          { label: "", render: () => d.policy ? h("a", { class: "btn small", href: `#/blocking/policies` }, "Edit policy") : null }],
+          d.rules, d.policy ? "No rule of this policy blocks this site." : "No policy for this user — enter a user to check their policy.")),
+        card("Lists this site is on", null, table([
+          { label: "Kind", render: (h1) => badge(h1.kind, "info") }, { label: "Name", key: "name" },
+          { label: "Matched by", render: (h1) => h("code", {}, h1.match) }], d.lists, "On no block list.")),
+        card("Recent blocked attempts (router log, 7 days)", null, table([
+          { label: "Time", render: (r) => r.time.slice(5) }, { label: "User", render: (r) => `${r.user} (${r.ip})` },
+          { label: "Policy", render: (r) => badge(r.policy, "info") }, { label: "Blocked by", render: (r) => badge(r.reason, "bad") },
+          { label: "Site", render: (r) => h("code", {}, r.site) }], d.recent, "No logged attempts for this site.")));
+    } catch (e) { holder.replaceChildren(h("div", { class: "note" }, e.message)); }
+  }
+  const users = await api("GET", "/api/users").then((r) => (r.users || []).map((u) => u.username)).catch(() => []);
+  shell("Blocking", h("div", { class: "stack" }, blockingTabs("why"),
+    h("div", { class: "note" }, "A user says a site does not open? Type the site and the user: you see which list it is on, which rule of their policy blocks it, whether that rule is active right now, and the router log lines. Tip: \"Why?\" in Blocking logs fills this in."),
+    card(null, null, form, h("datalist", { id: "why-users" }, users.map((u) => h("option", { value: u })))), holder));
+  if (!site) siteIn.focus();
+}
+
 async function blockingLogs() {
   const days = h("select", {}, [["1", "Today"], ["7", "7 days"], ["30", "30 days"]].map(([v, l]) => h("option", { value: v }, l)));
   const user = h("input", { type: "search", placeholder: "User" }), policy = h("input", { type: "search", placeholder: "Policy" });
@@ -2056,7 +2096,8 @@ async function blockingLogs() {
       card("Every blocked attempt", "newest first", table([{ label: "Time", render: (r) => r.time.slice(5) },
         { label: "User", render: (r) => h("span", {}, r.user !== "-" ? r.user : h("span", { class: "muted" }, "(no login)"), h("div", { class: "muted" }, r.ip)) },
         { label: "Policy", render: (r) => badge(r.policy, "info") }, { label: "Blocked by", render: (r) => badge(r.reason, "bad") },
-        { label: "Site", render: (r) => r.site ? h("code", {}, r.site) : h("span", { class: "muted" }, "—"), wrap: true }, { label: "Destination", key: "destination" }], d.rows, "Nothing blocked in this period.")));
+        { label: "Site", render: (r) => r.site ? h("code", {}, r.site) : h("span", { class: "muted" }, "—"), wrap: true }, { label: "Destination", key: "destination" },
+        { label: "", render: (r) => r.site ? h("a", { class: "btn small", href: `#/blocking/why/${encodeURIComponent(r.site)}/${encodeURIComponent(r.user !== "-" ? r.user : r.ip)}` }, "Why?") : null }], d.rows, "Nothing blocked in this period.")));
   };
   shell("Blocking", h("div", { class: "stack" }, blockingTabs("logs"),
     h("div", { class: "note" }, "Every block the router logged, with the user's policy (own policy, else the group's), what blocked it (category, app, VPN, allow-only …) and the site name the device asked for. Needs webfilter-logging.rsc on the router."),

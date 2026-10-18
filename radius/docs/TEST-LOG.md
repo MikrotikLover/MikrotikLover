@@ -117,3 +117,5 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 19:49 | Department member list for routers: key needed, user beats group, stale and other-router sessions left out, lint ok | ok — tests/test-traffic.sh 46 checks |
 | 19:49 | Fix during test: radius DB user cannot make temporary tables -> subqueries; /api/traffic name taken -> /api/traffic/series | fixed |
 | 19:49 | Traffic graphs + Departments pages: desktop + phone, hover values, limit line; full UI suite + 8 other suites regress | ok — no console errors (shots 98-103) |
+| 20:01 | Why blocked? finder: lists (category/app/keywords/VPN), policy rule + active now (time=, over midnight, seconds), allow-only, block-all, quarantine, exempt, DNS note | ok — tests/test-whyblocked.py 34 checks |
+| 20:01 | Why blocked? tab + 'Why?' button in Blocking logs, CLI radius-admin why; fix: 0s-1s windows need seconds | ok — desktop + phone, no console errors (shots 104-106); all suites regress ok |
