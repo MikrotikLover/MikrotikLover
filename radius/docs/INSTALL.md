@@ -55,7 +55,18 @@ Server ko fixed IP dein (netplan / router DHCP reservation).
 
 ## 3. Install
 
-**Sab se asaan — aik command:**
+**ZIP se (jo file aap ke paas hai):**
+```bash
+# 1) zip server par bhejein (apne PC se):   scp MikrotikLover-RADIUS.zip root@SERVER_IP:/root/
+# 2) server par:
+sudo apt -y install unzip
+cd /root && unzip MikrotikLover-RADIUS.zip
+cd MikrotikLover-RADIUS/radius
+sudo RADIUS_DOMAIN=radius.mycompany.lan bash install.sh
+```
+2–5 minute lagte hain. Aakhir mein **dashboard ka address aur pehla admin password** print hota hai — foran likh lein. Phir: `sudo radius-admin doctor` (sab sabz hona chahiye; router ke bina "routers" peela hona normal hai).
+
+**Ya internet se, aik command:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MikrotikLover/MikrotikLover/main/radius/get.sh | sudo bash
 ```
@@ -158,6 +169,31 @@ Har script ke upar comment mein uski tafseel aur use hatane ka tareeqa likha hai
 | Kis policy ne kis user ko kya block kiya | **Blocking → Blocking logs** | `radius-admin blocked --summary` |
 
 Users ko connect karne ka tareeqa batane ke liye unhein `https://SERVER:8443/connect` ka link bhejein. Is page par har phone ke steps hain.
+
+---
+
+## 6b. Baqi features chalu karna — checklist
+
+Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein (dashboard se ya CLI se):
+
+| Feature | Dashboard | CLI (server par `sudo`) |
+|---|---|---|
+| Server ka IP (routers ki nazar se) — quarantine page aur social WiFi ke liye | Security → Protection & lists | `radius-admin security quarantine-server 192.168.88.10` |
+| Alerts phone par (Telegram / WhatsApp / Email) | Settings → Alerts | `radius-admin alerts telegram BOT_TOKEN` · `alerts whatsapp 923001234567 APIKEY` · `alerts test` |
+| Off-site backup (doosra server / Google Drive) | Settings → Off-site copy | `radius-admin backup offsite ssh user@host:/backups` ya `backup offsite rclone gdrive:ml` |
+| Infected device quarantine (khud) | Security → Protection | `radius-admin security quarantine-auto on` |
+| Attackers khud block | Security → Protection | `radius-admin security autoblock on` |
+| Speed schedule (raat double, rush hour kam) | Speed schedule | `radius-admin speed add night --rate 20M/20M --time 22:00-08:00` |
+| Expiry / data khatam hone se pehle warning | Settings → Warn users | `radius-admin notice set days 2` · SMS: `notice gateway 'https://...{phone}...{text}'` · `notice set sms on` |
+| Hotspot login page (logo, rang, offer) | Hotspot page | `radius-admin hotspot set title "Mera Cafe"` · `hotspot push on` |
+| Social WiFi (phone number + code) | Social WiFi | `radius-admin social on` · `social set minutes 60` · `social set mb 500` |
+| Parental controls (bachon ke liye) | Blocking → Parental controls | `radius-admin user policy bacha1 parental-kids` |
+| Router health (CPU, links, alerts) | Routers | router par naya auto-sync script import (section 5, #6) |
+| Nakli router / ARP spoofing pakarna | Security → Hacker attacks | router par `lan-guard.rsc` |
+| Weekly / monthly reports | Insights, Security → Monthly reports | `radius-admin insights` · `security report --send` |
+| Sab theek hai? | Health check | `radius-admin doctor` |
+
+**Sab se pehle (tarteeb):** server IP → alerts → backup / off-site → baqi apni zaroorat ke mutabiq.
 
 ---
 
