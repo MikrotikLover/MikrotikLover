@@ -266,7 +266,10 @@ try {
   await ed.locator("label.check", { hasText: /^Block VPN/ }).click();
   await ed.locator("input[type=search]").fill("pubg");
   await ed.locator("label.chip", { hasText: "PUBG Mobile" }).click();
-  await ed.locator("label.field", { hasText: /^When/ }).locator("select").first().selectOption("time");
+  // every rule has its own time (policy editor): office hours for all three here
+  for (const r of [ed.locator(".rule-row", { has: page.locator('b:text-is("social-video")') }), ed.locator(".rule-row", { has: page.locator('b:text-is("Block VPN")') }),
+    ed.locator(".rule-row.item", { hasText: "PUBG Mobile" })])
+    await r.locator("select.tp-sel").selectOption({ label: "Office hours (9–17, Mon–Sat)" });
   const policyText = await ed.locator("pre.code-box").textContent();
   for (const want of ["block social-video time=9h-17h,mon,tue,wed,thu,fri,sat", "block-app PUBG Mobile time=9h-17h", "block-vpn time=9h-17h"])
     if (!policyText.includes(want)) throw new Error(`policy text misses "${want}":\n${policyText}`);
