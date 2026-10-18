@@ -1640,6 +1640,190 @@ def router_sync():
     return app.response_class(_router_file("sync.rsc"), mimetype="text/plain")
 
 
+# ------------------------------------------------------------------ departments (shared speed) + traffic graphs
+DEPT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,23}$")
+RATE_RE = re.compile(r"^(0|\d{1,6}(\.\d{1,3})?[kKmMgG]?)$")
+RANGES = {"6h": (6 * 3600, 5, 600), "24h": (86400, 5, 1800), "7d": (7 * 86400, 60, 3 * 3600), "30d": (30 * 86400, 60, 12 * 3600)}
+
+
+def dept_of_users():
+    """{username: department}: the user's own entry, else their group's."""
+    out = {}
+    for r in q("""SELECT g.username, m.dept FROM radusergroup g JOIN ml_dept_member m ON m.kind='group' AND m.name=g.groupname
+                  ORDER BY g.priority DESC"""):
+        out[r["username"]] = r["dept"]
+    for r in q("SELECT name, dept FROM ml_dept_member WHERE kind='user'"):
+        out[r["name"]] = r["dept"]
+    return out
+
+
+def dept_users(dept):
+    return sorted(u for u, d in dept_of_users().items() if d == dept)
+
+
+@app.get("/api/public/router/dept.rsc")
+def router_dept():
+    """Every minute from each router (sync.rsc: ml-dept): who is in which department now (address lists)."""
+    key = request.args.get("key", "")
+    if not key or not router_key() or not hmac.compare_digest(key, router_key()):
+        abort(403)
+    of = dept_of_users()
+    rows = q("""SELECT framedipaddress AS ip, username, nasipaddress AS nas FROM radacct
+                WHERE acctstoptime IS NULL AND framedipaddress REGEXP '^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+$'
+                  AND COALESCE(acctupdatetime, acctstarttime) >= NOW() - INTERVAL 20 MINUTE
+                ORDER BY acctstarttime""")
+    mine = [r for r in rows if r["nas"] == client_ip()]
+    want = {}
+    for r in (mine or rows):                      # behind NAT the router's address is not the NAS address
+        d = of.get(r["username"])
+        if d and DEPT_RE.match(d):
+            want[r["ip"]] = d
+    pairs = ";".join(f'"{ip}"="{d}"' for ip, d in sorted(want.items()))
+    text = f""":local w {{{pairs}}}
+:foreach e in=[/ip firewall address-list find comment="mldept"] do={{
+  :local a [:tostr [/ip firewall address-list get $e address]]
+  :local l [/ip firewall address-list get $e list]
+  :local d ($w->$a)
+  :if (([:len $d] = 0) || (($l != "ml-dept-all") && ($l != ("ml-dept-" . $d)))) do={{ /ip firewall address-list remove $e }}
+}}
+:foreach a,d in=$w do={{
+  :if ([:len [/ip firewall address-list find list=("ml-dept-" . $d) address=$a comment="mldept"]] = 0) do={{ /ip firewall address-list add list=("ml-dept-" . $d) address=$a comment="mldept" }}
+  :if ([:len [/ip firewall address-list find list="ml-dept-all" address=$a comment="mldept"]] = 0) do={{ /ip firewall address-list add list="ml-dept-all" address=$a comment="mldept" }}
+}}
+"""
+    return app.response_class(text, mimetype="text/plain", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/departments")
+@login_required()
+def departments():
+    of = dept_of_users()
+    online = {r["username"]: r for r in q("""SELECT username, framedipaddress FROM radacct WHERE acctstoptime IS NULL
+                                              AND COALESCE(acctupdatetime, acctstarttime) >= NOW() - INTERVAL 20 MINUTE""")}
+    now = {r["name"]: r for r in q("""SELECT name, rx, tx FROM ml_traffic WHERE kind='user' AND res=5
+                                       AND bucket = (SELECT MAX(bucket) FROM ml_traffic WHERE kind='user' AND res=5)""")}
+    out = []
+    for d in q("SELECT name, title, down_kbps, up_kbps FROM ml_department ORDER BY name"):
+        users = sorted(u for u, x in of.items() if x == d["name"])
+        on = [u for u in users if u in online]
+        out.append({**d, "members": jsonable(q("SELECT kind, name FROM ml_dept_member WHERE dept=%s ORDER BY kind, name", (d["name"],))),
+                    "users": users, "online": on,
+                    "now_down_bps": sum(int(now[u]["rx"]) for u in users if u in now) * 8 // 300,
+                    "now_up_bps": sum(int(now[u]["tx"]) for u in users if u in now) * 8 // 300})
+    groups = [r["groupname"] for r in q("SELECT DISTINCT groupname FROM radusergroup ORDER BY groupname")]
+    return jsonify(departments=out, groups=groups)
+
+
+@app.post("/api/departments")
+@login_required("admin")
+def department_save():
+    data = body()
+    name = field(data, "name", DEPT_RE, required=True, maxlen=24)
+    down = field(data, "down", RATE_RE, required=True, maxlen=12)
+    up = field(data, "up", RATE_RE, required=True, maxlen=12)
+    title = field(data, "title", re.compile(r'^[^"\\$\x00-\x1f]{0,80}$'), maxlen=80)
+    sub = "add" if data.get("new") else "set"
+    return result(*radius_admin(["dept", sub, name, down, up] + ([title] if title else [])))
+
+
+@app.delete("/api/departments/<name>")
+@login_required("admin")
+def department_delete(name):
+    if not DEPT_RE.match(name):
+        abort(400, "invalid name")
+    return result(*radius_admin(["dept", "del", name]))
+
+
+@app.post("/api/departments/<name>/member")
+@login_required("admin")
+def department_member(name):
+    data = body()
+    kind = data.get("kind")
+    if kind not in ("user", "group") or not DEPT_RE.match(name):
+        abort(400, "kind: user or group")
+    who = field(data, "name", NAME_RE, required=True, maxlen=64)
+    return result(*radius_admin(["dept", "member", name, kind, who]))
+
+
+@app.post("/api/departments/unmember")
+@login_required("admin")
+def department_unmember():
+    data = body()
+    kind = data.get("kind")
+    if kind not in ("user", "group"):
+        abort(400, "kind: user or group")
+    who = field(data, "name", NAME_RE, required=True, maxlen=64)
+    return result(*radius_admin(["dept", "unmember", kind, who]))
+
+
+@app.get("/api/traffic/items")
+@login_required()
+def traffic_items():
+    ifaces = []
+    for r in q("SELECT router_ip, identity, interfaces FROM ml_router_status ORDER BY identity, router_ip"):
+        try:
+            names = [i["name"] for i in json.loads(r["interfaces"] or "[]") if not i.get("disabled")]
+        except (ValueError, TypeError, KeyError):
+            names = []
+        ifaces += [{"key": f"{r['router_ip']}|{r['identity']}|{n}", "router": r["identity"] or r["router_ip"], "name": n} for n in names]
+    users = [r["name"] for r in q("""SELECT name FROM ml_traffic WHERE kind='user' AND res=60 AND bucket >= NOW() - INTERVAL 7 DAY
+                                     GROUP BY name ORDER BY SUM(rx + tx) DESC LIMIT 500""")]
+    groups = [r["groupname"] for r in q("SELECT DISTINCT groupname FROM radusergroup ORDER BY groupname")]
+    depts = [r["name"] for r in q("SELECT name FROM ml_department ORDER BY name")]
+    return jsonify(interfaces=ifaces, users=users, groups=groups, departments=depts)
+
+
+@app.get("/api/traffic/series")
+@login_required()
+def traffic_series():
+    kind, name, rng = request.args.get("kind", ""), request.args.get("name", ""), request.args.get("range", "24h")
+    if rng not in RANGES:
+        abort(400, "range: 6h, 24h, 7d or 30d")
+    span, res, step = RANGES[rng]
+    limit = None
+    if kind == "if":
+        if not re.match(r"^[0-9a-fA-F.:]{3,45}\|[\w .:@/+()-]{0,64}\|[\w .:@/+()-]{1,64}$", name):
+            abort(400, "invalid interface")
+        tkind, names = "if", [name]
+    elif kind == "user":
+        if not NAME_RE.match(name):
+            abort(400, "invalid user")
+        tkind, names = "user", [name]
+    elif kind == "group":
+        if not NAME_RE.match(name):
+            abort(400, "invalid group")
+        tkind, names = "user", [r["username"] for r in q("SELECT username FROM radusergroup WHERE groupname=%s", (name,))]
+    elif kind == "dept":
+        if not DEPT_RE.match(name):
+            abort(400, "invalid department")
+        d = q1("SELECT down_kbps, up_kbps FROM ml_department WHERE name=%s", (name,))
+        if not d:
+            abort(404, "no such department")
+        limit = {"down_bps": int(d["down_kbps"]) * 1000, "up_bps": int(d["up_kbps"]) * 1000}
+        tkind, names = "user", dept_users(name)
+    else:
+        abort(400, "kind: if, user, group or dept")
+    end = int(time.time()) // step * step + step
+    start = end - span
+    by = {}
+    top = []
+    if names:
+        ph = ",".join(["%s"] * len(names))
+        for r in q(f"""SELECT FLOOR(UNIX_TIMESTAMP(bucket) / {step}) * {step} AS t, SUM(rx) AS rx, SUM(tx) AS tx FROM ml_traffic
+                       WHERE kind=%s AND res={res} AND name IN ({ph}) AND bucket >= FROM_UNIXTIME(%s) GROUP BY t""",
+                   [tkind] + names + [start]):
+            by[int(r["t"])] = (int(r["rx"]), int(r["tx"]))
+        if kind in ("group", "dept"):
+            top = jsonable(q(f"""SELECT name, SUM(rx) AS down, SUM(tx) AS up FROM ml_traffic WHERE kind='user' AND res={res}
+                                 AND name IN ({ph}) AND bucket >= FROM_UNIXTIME(%s) GROUP BY name ORDER BY SUM(rx + tx) DESC LIMIT 10""",
+                              names + [start]))
+    pts = [{"t": t, "rx_bps": by.get(t, (0, 0))[0] * 8 // step, "tx_bps": by.get(t, (0, 0))[1] * 8 // step}
+           for t in range(start, end, step)]
+    tot_rx, tot_tx = sum(v[0] for v in by.values()), sum(v[1] for v in by.values())
+    return jsonify(points=pts, step=step, total_rx=tot_rx, total_tx=tot_tx, limit=limit, members=len(names), top=top,
+                   peak_rx=max((p["rx_bps"] for p in pts), default=0), peak_tx=max((p["tx_bps"] for p in pts), default=0))
+
+
 # ------------------------------------------------------------------ IP binding (user keeps one LAN address)
 IPV4_RE = re.compile(r"^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$")
 
@@ -1802,6 +1986,8 @@ def router_report():
          VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())""",
       (ip, d["identity"], d["board"], d["version"], d["uptime"], d["cpu"], d["mem_free"], d["mem_total"], d["hdd_free"], d["hdd_total"],
        d["hotspot"], d["ppp"], d["dhcp"], json.dumps(d["interfaces"]), json.dumps(d["links"])))
+    if prev and 0 < (prev["age"] or 0) < 600:
+        traffic_ifaces(ip, d["identity"], d["interfaces"], old)
     rx, tx = routerstat.busiest(d["interfaces"])
     mem_pct = round(100 - d["mem_free"] * 100 / d["mem_total"]) if d["mem_total"] else 0
     q("""INSERT INTO ml_router_stat (router_ip, identity, at, cpu, mem_pct, rx_bps, tx_bps, users)
@@ -1811,6 +1997,24 @@ def router_report():
     if datetime.now().minute == 0:
         q("DELETE FROM ml_router_stat WHERE at < NOW() - INTERVAL 7 DAY")
     return app.response_class("ok\n", mimetype="text/plain")
+
+
+def traffic_ifaces(ip, identity, cur, old):
+    """Bytes since the last report per interface -> ml_traffic (5-minute and hourly buckets)."""
+    prev = {i["name"]: i for i in old}
+    rows = []
+    for i in cur:
+        o = prev.get(i["name"])
+        if not o or i["rx"] < o.get("rx", 0) or i["tx"] < o.get("tx", 0):
+            continue                                   # new interface or counters reset (reboot)
+        drx, dtx = i["rx"] - o.get("rx", 0), i["tx"] - o.get("tx", 0)
+        if drx or dtx:
+            rows.append((f"{ip}|{identity}|{i['name']}"[:200], drx, dtx))
+    for res, fmt in ((5, "FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(NOW() - INTERVAL 30 SECOND) / 300) * 300)"),
+                     (60, "DATE_FORMAT(NOW() - INTERVAL 30 SECOND, '%%Y-%%m-%%d %%H:00:00')")):
+        for name, drx, dtx in rows:
+            q(f"""INSERT INTO ml_traffic (kind, name, res, bucket, rx, tx) VALUES ('if', %s, {res}, {fmt}, %s, %s)
+                  ON DUPLICATE KEY UPDATE rx = rx + VALUES(rx), tx = tx + VALUES(tx)""", (name, drx, dtx))
 
 
 @app.get("/api/network")

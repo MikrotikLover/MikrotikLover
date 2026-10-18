@@ -274,3 +274,18 @@ input[type=color] { width: 60px; height: 34px; padding: 2px; }
 /* IP binding */
 .w-num { width: 90px; }
 .tips { margin: 0; padding-left: 18px; line-height: 1.6; display: grid; gap: 6px; }
+/* traffic graphs + departments */
+.chart-wrap { position: relative; }
+.chart .area-down { fill: var(--down); opacity: .18; }
+.chart .line-down { fill: none; stroke: var(--down); stroke-width: 2; }
+.chart .line-up { fill: none; stroke: var(--up); stroke-width: 2; }
+.chart .limit-line { stroke: var(--bad); stroke-width: 1.5; stroke-dasharray: 6 4; }
+.chart .hover-line { stroke: var(--muted); stroke-dasharray: 3 3; }
+.chart-tip { font-size: 12.5px; color: var(--muted); margin-top: 4px; min-height: 1.4em; }
+.legend .limit { background: none; border-top: 2px dashed var(--bad); border-radius: 0; height: 0; width: 14px; vertical-align: 3px; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; padding: 6px 12px; }
+.seg button.on { background: var(--accent); color: #fff; }
+.chip-x { border: 0; background: none; padding: 0 2px; font-size: 15px; line-height: 1; color: var(--muted); }
+.chip-x:hover { color: var(--bad); }
+.dept-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); }

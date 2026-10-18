@@ -37,6 +37,8 @@ const ICONS = {
   settings: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6m7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14.5 3h-4l-.4 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7 7 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2l.4 2.6h4l.4-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2",
   menu: "M4 6h16M4 12h16M4 18h16",
   term: "M3 4h18v16H3zM7 9l3 3-3 3M13 15h4",
+  graph: "M3 3v18h18M7 15l4-4 3 3 6-7",
+  team: "M17 20v-2a4 4 0 0 0-3-3.9M7 20v-2a4 4 0 0 1 4-4h2M12 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6M19 8v6M16 11h6",
   pin: "M12 21s-7-6.5-7-12a7 7 0 0 1 14 0c0 5.5-7 12-7 12zM12 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4",
   plan: "M4 4h16v16H4zM8 9h8M8 13h8M8 17h5",
   voucher: "M3 7h18v4a2 2 0 0 0 0 4v4H3v-4a2 2 0 0 0 0-4zM14 7v12",
@@ -209,11 +211,11 @@ const legend = () => h("div", { class: "legend" }, h("span", {}, h("i", { class:
 
 // ------------------------------------------------------------------ shell + router
 const NAV = [
-  ["dashboard", "Dashboard", "home"], ["users", "Users", "users"], ["groups", "Groups & policies", "groups"],
+  ["dashboard", "Dashboard", "home"], ["users", "Users", "users"], ["groups", "Groups & policies", "groups"], ["departments", "Departments", "team"],
   ["macs", "MAC devices", "mac"], ["ipbind", "IP binding", "pin"], ["routers", "Routers", "router"], ["setup", "Router setup", "term"], "-",
   ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], ["speed", "Speed schedule", "clock"], ["hotspot", "Hotspot page", "brush"], ["social", "Social WiFi", "phone"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["insights", "Insights (samajh)", "bulb"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
-  ["data", "Data usage", "data"], ["apps", "Apps on network", "apps"], ["ports", "Ports & protocols", "ports"], "-",
+  ["traffic", "Traffic graphs", "graph"], ["data", "Data usage", "data"], ["apps", "Apps on network", "apps"], ["ports", "Ports & protocols", "ports"], "-",
   ["blocking", "Blocking", "block"], ["vpn", "VPN & proxy watch", "vpn"], ["security", "Security", "shield"], ["domains", "Website names", "globe"], "-", ["health", "Health check", "pulse"], ["settings", "Settings", "settings"],
 ];
 
@@ -1094,6 +1096,148 @@ ROUTES.speed = async () => {
           h("button", { class: "small danger", onclick: async () => { if (await confirmDlg("Delete", `Delete speed schedule ${r.name}?`, "Delete")) if (await act(api("POST", `/api/speed/${r.id}/del`, {}))) route(); } }, "Delete")) : null }],
         d.rules, "No speed schedule yet — everyone has their normal speed all day.")),
     card("Check a user", "which speed, and why", check, out)));
+};
+
+// ------------------------------------------------------------------ traffic graphs (speed over time)
+function lineChart(points, step, labels = ["Download", "Upload"], limit = null) {   // points: [{t, rx_bps, tx_bps}]
+  const W = 720, H = 220, P = { l: 70, r: 10, t: 12, b: 26 };
+  const lim = limit ? [limit.down_bps, limit.up_bps].filter(Boolean) : [];
+  const max = Math.max(...points.map((p) => Math.max(p.rx_bps, p.tx_bps)), ...lim, 1000);
+  const mag = Math.pow(1000, Math.floor(Math.log(max) / Math.log(1000)));
+  const top = Math.ceil(max / mag / 2) * 2 * mag;
+  const n = Math.max(points.length - 1, 1);
+  const x = (i) => P.l + (i / n) * (W - P.l - P.r), y = (v) => H - P.b - (v / top) * (H - P.t - P.b);
+  const kids = [];
+  for (let i = 0; i <= 4; i++) {
+    const v = (top / 4) * i;
+    kids.push(svg("line", { class: "grid-line", x1: P.l, x2: W - P.r, y1: y(v), y2: y(v) }));
+    kids.push(svg("text", { class: "axis", x: P.l - 6, y: y(v) + 4, "text-anchor": "end" }, bps(v)));
+  }
+  const fmt = (t) => { const d = new Date(t * 1000); return step >= 3 * 3600 ? `${d.getDate()}/${d.getMonth() + 1}` : `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
+  const every = Math.ceil(points.length / 8);
+  points.forEach((p, i) => { if (i % every === 0) kids.push(svg("text", { class: "axis", x: x(i), y: H - 8, "text-anchor": "middle" }, fmt(p.t))); });
+  const path = (key) => points.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p[key]).toFixed(1)}`).join("");
+  if (points.length) {
+    kids.push(svg("path", { class: "area-down", d: `${path("rx_bps")}L${x(points.length - 1)},${y(0)}L${x(0)},${y(0)}Z` }));
+    kids.push(svg("path", { class: "line-down", d: path("rx_bps") }));
+    kids.push(svg("path", { class: "line-up", d: path("tx_bps") }));
+  }
+  if (limit && limit.down_bps) kids.push(svg("line", { class: "limit-line", x1: P.l, x2: W - P.r, y1: y(limit.down_bps), y2: y(limit.down_bps) }, svg("title", {}, `Department download limit ${bps(limit.down_bps)}`)));
+  const hover = svg("g", { class: "hover" });
+  const tip = h("div", { class: "chart-tip" });
+  tip.style.display = "none";
+  const box = svg("svg", { class: "chart", viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Speed over time" }, kids, hover);
+  box.addEventListener("mousemove", (e) => {
+    const r = box.getBoundingClientRect(), px = ((e.clientX - r.left) / r.width) * W;
+    const i = Math.max(0, Math.min(points.length - 1, Math.round(((px - P.l) / (W - P.l - P.r)) * n)));
+    const p = points[i]; if (!p) return;
+    hover.replaceChildren(svg("line", { class: "hover-line", x1: x(i), x2: x(i), y1: P.t, y2: H - P.b }));
+    tip.textContent = `${new Date(p.t * 1000).toLocaleString()} — ${labels[0]} ${bps(p.rx_bps)} · ${labels[1]} ${bps(p.tx_bps)}`;
+    tip.style.display = "";
+  });
+  box.addEventListener("mouseleave", () => { hover.replaceChildren(); tip.style.display = "none"; });
+  return h("div", { class: "chart-wrap" }, box, tip);
+}
+
+ROUTES.traffic = async (kind = "if", name = "", range = "24h") => {
+  const items = await api("GET", "/api/traffic/items");
+  const KINDS = [["if", "Interfaces"], ["user", "Users"], ["group", "Groups"], ["dept", "Departments"]];
+  const list = { if: items.interfaces.map((i) => [i.key, `${i.router} — ${i.name}`]), user: items.users.map((u) => [u, u]),
+    group: items.groups.map((g) => [g, g]), dept: items.departments.map((d) => [d, d]) }[kind] || [];
+  if (!name && list.length) name = list[0][0];
+  const go = (k, n, r) => { location.hash = `#/traffic/${k}/${encodeURIComponent(n || "")}/${r}`; };
+  const tabs = h("div", { class: "tabs" }, KINDS.map(([k, l]) => h("a", { href: `#/traffic/${k}//${range}`, class: k === kind ? "active" : "" }, l)));
+  const sel = kind === "user"
+    ? h("input", { list: "tr-users", value: name, placeholder: "user name", onchange: (e) => go(kind, e.target.value.trim(), range) })
+    : h("select", { onchange: (e) => go(kind, e.target.value, range) }, list.map(([v, l]) => h("option", { value: v, selected: v === name }, l)));
+  const ranges = h("div", { class: "seg" }, ["6h", "24h", "7d", "30d"].map((r) => h("button", { type: "button", class: r === range ? "on" : "", onclick: () => go(kind, name, r) }, r)));
+  const head = h("div", { class: "toolbar wrap" }, sel, kind === "user" ? h("datalist", { id: "tr-users" }, items.users.map((u) => h("option", { value: u }))) : null, h("span", { class: "grow" }), ranges);
+  let body;
+  if (!name) {
+    body = h("div", { class: "empty" }, { if: "No router reports yet — the routers send them every minute after auto-sync (Router setup).",
+      user: "No user traffic yet — it is counted every 5 minutes from the logins.", group: "No groups yet.", dept: h("span", {}, "No departments yet — ", h("a", { href: "#/departments" }, "make one")) }[kind]);
+  } else {
+    const d = await api("GET", `/api/traffic/series?kind=${kind}&name=${encodeURIComponent(name)}&range=${range}`);
+    const labels = kind === "if" ? ["In (rx)", "Out (tx)"] : ["Download", "Upload"];
+    const stat = (l, v) => h("div", { class: "rh-stat" }, h("span", {}, l), h("b", {}, v));
+    body = h("div", { class: "stack" },
+      h("div", { class: "rh-grid" },
+        stat(`${labels[0]} total`, bytes(d.total_rx)), stat(`${labels[1]} total`, bytes(d.total_tx)),
+        stat(`${labels[0]} peak`, bps(d.peak_rx)), stat(`${labels[1]} peak`, bps(d.peak_tx)),
+        kind === "group" || kind === "dept" ? stat("Users", String(d.members)) : null,
+        d.limit ? stat("Shared limit", `${d.limit.down_bps ? bps(d.limit.down_bps) : "none"} ↓ / ${d.limit.up_bps ? bps(d.limit.up_bps) : "none"} ↑`) : null),
+      lineChart(d.points, d.step, labels, d.limit),
+      h("div", { class: "legend" }, h("span", {}, h("i", { class: "down" }), labels[0]), h("span", {}, h("i", { class: "up" }), labels[1]),
+        d.limit && d.limit.down_bps ? h("span", {}, h("i", { class: "limit" }), "department limit") : null,
+        h("span", { class: "muted" }, `average per ${d.step >= 3600 ? d.step / 3600 + " h" : d.step / 60 + " min"}`)),
+      d.top.length ? h("div", {}, h("h3", {}, "Most traffic"), table([
+        { label: "User", render: (r) => h("a", { href: `#/traffic/user/${encodeURIComponent(r.name)}/${range}` }, r.name) },
+        { label: "Download", num: true, render: (r) => bytes(Number(r.down)) }, { label: "Upload", num: true, render: (r) => bytes(Number(r.up)) }], d.top)) : null);
+  }
+  shell("Traffic graphs", card(null, kind === "user" ? "from RADIUS accounting, every 5 min" : kind === "if" ? "from the routers' minute reports" : "sum of their users", tabs, head, body));
+};
+
+// ------------------------------------------------------------------ departments: one shared speed for a team
+ROUTES.departments = async () => {
+  const d = await api("GET", "/api/departments");
+  const edit = (x) => {
+    const mb = (k) => (k ? String(k / 1000) : "0");
+    const form = h("form", { class: "form cols", onsubmit: (e) => e.preventDefault() },
+      h("label", { class: "field" }, "Name", h("span", { class: "help" }, "a-z 0-9 -"), h("input", { name: "name", required: true, pattern: "[a-z0-9][a-z0-9-]{0,23}", value: x ? x.name : "", readonly: !!x, placeholder: "sales" })),
+      h("label", { class: "field" }, "Title", h("input", { name: "title", maxlength: 80, value: x ? x.title : "", placeholder: "Sales team" })),
+      h("label", { class: "field" }, "Download for the whole department (Mbit/s)", h("input", { name: "down", type: "number", min: 0, step: "0.1", required: true, value: x ? mb(x.down_kbps) : "10" })),
+      h("label", { class: "field" }, "Upload (Mbit/s)", h("input", { name: "up", type: "number", min: 0, step: "0.1", required: true, value: x ? mb(x.up_kbps) : "5" })),
+      h("div", { class: "full muted small" }, "0 = no limit. One user online gets all of it; 10 users online share it equally (about a tenth each)."));
+    dialog(x ? `Department ${x.name}` : "New department", form, [{ label: "Cancel" }, { label: "Save", class: "primary", action: async () => {
+      if (!form.reportValidity()) return false;
+      const v = formValues(form);
+      const r = await act(api("POST", "/api/departments", { ...v, down: v.down === "0" ? "0" : `${v.down}M`, up: v.up === "0" ? "0" : `${v.up}M`, new: !x }));
+      if (!r) return false; route();
+    } }]);
+  };
+  const addMember = (x) => {
+    const form = h("form", { class: "form", onsubmit: (e) => e.preventDefault() },
+      h("label", { class: "field" }, "Add", h("select", { name: "kind" }, h("option", { value: "user" }, "a user"), h("option", { value: "group" }, "a whole group"))),
+      h("label", { class: "field" }, "Name", h("input", { name: "name", required: true, list: "dept-groups", placeholder: "ali  or  staff" }),
+        h("datalist", { id: "dept-groups" }, d.groups.map((g) => h("option", { value: g })))),
+      h("div", { class: "muted small" }, "A user can be in one department. A user's own entry wins over their group's."));
+    dialog(`Add to ${x.name}`, form, [{ label: "Cancel" }, { label: "Add", class: "primary", action: async () => {
+      if (!form.reportValidity()) return false;
+      if (!(await act(api("POST", `/api/departments/${x.name}/member`, formValues(form))))) return false; route();
+    } }]);
+  };
+  const meter = (now, lim) => {
+    const m = h("div", { class: "meter" }), f = h("i");
+    f.style.width = `${lim ? Math.min(100, (now / (lim * 1000)) * 100) : 0}%`;
+    m.append(f); return m;
+  };
+  const cards = d.departments.map((x) => card(`${x.name}${x.title ? " — " + x.title : ""}`,
+    `${x.down_kbps ? bps(x.down_kbps * 1000) : "no limit"} ↓ · ${x.up_kbps ? bps(x.up_kbps * 1000) : "no limit"} ↑ shared`,
+    h("div", { class: "rh-grid" },
+      h("div", { class: "rh-stat" }, h("span", {}, "Users"), h("b", {}, String(x.users.length)), h("small", { class: "muted" }, `${x.online.length} online now`)),
+      h("div", { class: "rh-stat" }, h("span", {}, "Download now"), h("b", {}, bps(x.now_down_bps)), meter(x.now_down_bps, x.down_kbps)),
+      h("div", { class: "rh-stat" }, h("span", {}, "Each online user gets"), h("b", {}, x.down_kbps ? (x.online.length ? `~${bps((x.down_kbps * 1000) / x.online.length)}` : bps(x.down_kbps * 1000)) : "—"),
+        h("small", { class: "muted" }, "when all are busy"))),
+    h("div", { class: "chips" }, x.members.length ? x.members.map((m) => h("span", { class: "chip" }, m.kind === "group" ? h("b", {}, "group ") : null, m.name,
+      isAdmin() ? h("button", { type: "button", class: "chip-x", title: "remove", onclick: async () => { if (await act(api("POST", "/api/departments/unmember", m))) route(); } }, "×") : null))
+      : h("span", { class: "muted" }, "No members yet.")),
+    h("div", { class: "toolbar wrap" },
+      h("a", { class: "btn small", href: `#/traffic/dept/${x.name}/24h` }, icon("graph"), "Graph"),
+      isAdmin() ? h("button", { class: "small", onclick: () => addMember(x) }, icon("plus"), "Add user / group") : null,
+      isAdmin() ? h("button", { class: "small", onclick: () => edit(x) }, "Speed") : null,
+      isAdmin() ? h("button", { class: "small danger", onclick: async () => {
+        if (await confirmDlg("Remove department", `Remove ${x.name}? Its users get their own speed only.`, "Remove"))
+          if (await act(api("DELETE", `/api/departments/${x.name}`))) route();
+      } }, "Remove") : null)));
+  shell("Departments", h("div", { class: "stack" },
+    h("div", { class: "toolbar" }, h("span", { class: "muted grow" }, "Give a team one internet speed: 10 Mbit/s for Sales means one user alone gets 10, ten users share the 10."),
+      isAdmin() ? h("button", { class: "primary", onclick: () => edit(null) }, icon("plus"), "New department") : null),
+    cards.length ? h("div", { class: "grid dept-grid" }, cards) : card(null, null, h("div", { class: "empty" }, "No departments yet.")),
+    card("How it works on the router", null, h("ul", { class: "tips" },
+      h("li", {}, "Auto-sync puts a queue (PCQ) per department on every router: the speed is shared equally by the users who are online and busy."),
+      h("li", {}, "Every minute the router asks this server which addresses belong to which department (logins and logouts)."),
+      h("li", {}, "A user's own speed (plan / group) still applies on top: e.g. 2 Mbit/s each inside a 10 Mbit/s department."),
+      h("li", {}, "FastTrack would skip the queue — department traffic is kept out of it by itself. Each router has its own 10 Mbit/s.")))));
 };
 
 // ------------------------------------------------------------------ IP binding: every user keeps one address

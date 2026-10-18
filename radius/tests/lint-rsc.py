@@ -12,7 +12,7 @@ FW = {"chain", "in-interface-list", "src-address-list", "dst-address-list", "src
       "dst-address", "protocol", "dst-port", "action", "to-addresses", "to-ports",
       "reject-with", "comment", "tls-host", "place-before", "disabled", "jump-target", "time",
       "log", "log-prefix", "connection-state", "limit", "tcp-flags", "psd", "connection-limit",
-      "address-list", "address-list-timeout"}
+      "address-list", "address-list-timeout", "new-packet-mark", "passthrough"}
 PROPS = {
     "/radius": {"address", "secret", "service", "timeout", "comment", "src-address"},
     "/radius incoming": {"accept"},
@@ -25,6 +25,7 @@ PROPS = {
     "/ip firewall nat": FW,
     "/ip firewall filter": FW,
     "/ip firewall raw": FW,
+    "/ip firewall mangle": FW,
     "/ipv6 firewall filter": FW,
     "/interface wifi security": {"name", "authentication-types", "eap-accounting", "passphrase"},
     "/interface wifi configuration": {"name", "ssid", "security", "country", "mode"},
@@ -48,6 +49,8 @@ PROPS = {
                             "name", "hotspot-address", "dns-name", "html-directory"},
     "/ip hotspot": {"name", "interface", "address-pool", "profile", "disabled"},
     "/ip hotspot walled-garden ip": {"action", "dst-address", "protocol", "dst-port", "comment", "dst-host"},
+    "/queue tree": {"name", "parent", "packet-mark", "max-limit", "limit-at", "queue", "priority", "comment"},
+    "/queue type": {"name", "kind", "pcq-classifier", "pcq-rate", "pcq-limit", "pcq-total-limit"},
     "/ip dhcp-server lease": {"mac-address", "address", "comment", "server", "disabled"},
     "/ip address": {"address", "interface", "comment", "disabled"},
     "/interface bridge port": {"bridge", "interface", "comment"},
@@ -101,6 +104,8 @@ def lint(path):
             s = s[len(menu):].strip()
             bare = strip_quoted(s)
         verb = s.split()[0]
+        if verb == "}":                       # end of a block
+            continue
         if verb not in VERBS:
             errs.append(f"{n}: unexpected command '{verb}'")
             continue

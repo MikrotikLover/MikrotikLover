@@ -1074,6 +1074,25 @@ Dashboard → **IP binding** → "Every user keeps the first address DHCP gives 
 - PPPoE users par nahi (un ke liye `user ip USER IP` — Framed-IP-Address).
 - Tests: `tests/test-ipbind.sh` (34 checks: auto, random MAC, takraao, admin, din, lint, API).
 
+## 7o. Traffic graphs aur Departments (shared speed)
+
+**Traffic graphs** (dashboard → Traffic graphs): speed waqt ke sath — 6 ghante, 24 ghante, 7 din, 30 din.
+- **Interfaces:** har router ki har interface (router ki minute report, auto-sync wala `ml-stats`) — In/Out.
+- **Users:** RADIUS accounting se har 5 min (`enforce` cron): har session ke counters ka farq → `ml_traffic` (5-min data 3 din, ghante wala 90 din).
+- **Groups / Departments:** un ke sab users ka jor, "Most traffic" list ke sath; department graph par us ki limit ki laal line.
+
+**Departments** (dashboard → Departments, ya `radius-admin dept`): ek team ko ek hi speed.
+```
+radius-admin dept add sales 10M 5M "Sales team"     # poore department ke liye 10M download / 5M upload
+radius-admin dept member sales user ali             # ya: dept member sales group staff
+```
+- Router par auto-sync se har department ki **queue tree + PCQ** banti hai: 1 user online ho to poori 10M, 10 hon to har ek ~1M (jo kaam kar rahe hon un mein barabar).
+- Kaun kis department mein hai: router **har minute** server se poochta hai (`ml-dept` script → `/api/public/router/dept.rsc`) aur address lists `ml-dept-NAME` update karta hai — login/logout ka asar 1 minute mein.
+- User ki apni speed (plan / group) bhi lagti hai: department 10M ke andar har user 2M, dono ek sath.
+- FastTrack queue ko chhor deta hai — department walon ka traffic khud FastTrack se bahar rakha jata hai. Har router ki apni 10M hoti hai.
+- User ka apna entry group wale se upar: ali group staff (Accounts) mein ho magar khud Sales mein dala ho to Sales.
+- Tests: `tests/test-traffic.sh` (45 checks).
+
 ## 7e. Health check — sab theek hai?
 
 `sudo radius-admin doctor` ya dashboard → **Health check**: server ka har hissa **sabz** (theek), **peela** (dekh lein) ya **laal** (abhi theek karein), aur kharabi ke saath us ka hal likha hota hai.

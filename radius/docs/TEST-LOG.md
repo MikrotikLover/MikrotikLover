@@ -112,3 +112,8 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 19:30 | IP binding: auto bind (enforce every 5 min), random MAC follows user, conflicts, admin set/lock, free after N days, PPPoE excluded | ok — tests/test-ipbind.sh 34 checks |
 | 19:30 | IP binding: sync.rsc DHCP static leases in one :do block, lint ok; table collation fixed (unicode_ci, also ml_router_setup) | ok |
 | 19:30 | IP binding page: desktop + phone, Change dialog, random MAC badges; full UI suite + social/speed/notice/router-setup regress | ok — no console errors (shots 95-97) |
+| 19:49 | Traffic graphs: users from accounting every 5 min (difference only, old sessions = start point, stopped sessions counted, counter reset = 0), interfaces from router minute reports | ok |
+| 19:49 | Departments: dept add/set/del/member, speeds 10M/2.5M/512k/0, queue tree + PCQ + fasttrack bypass + 1-min member script in sync.rsc (lint ok) | ok |
+| 19:49 | Department member list for routers: key needed, user beats group, stale and other-router sessions left out, lint ok | ok — tests/test-traffic.sh 46 checks |
+| 19:49 | Fix during test: radius DB user cannot make temporary tables -> subqueries; /api/traffic name taken -> /api/traffic/series | fixed |
+| 19:49 | Traffic graphs + Departments pages: desktop + phone, hover values, limit line; full UI suite + 8 other suites regress | ok — no console errors (shots 98-103) |

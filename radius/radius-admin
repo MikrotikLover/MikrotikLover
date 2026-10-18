@@ -139,7 +139,7 @@ cmd_user() {
     del|delete|rm)
         local u=${1:-}; valid_name "$u" username
         user_exists "$u" || die "No such user '$u'"
-        echo "DELETE FROM radcheck WHERE username=$(q "$u"); DELETE FROM radreply WHERE username=$(q "$u"); DELETE FROM radusergroup WHERE username=$(q "$u"); DELETE FROM ml_account WHERE username=$(q "$u"); DELETE FROM ml_contact WHERE username=$(q "$u"); DELETE FROM ml_ip_bind WHERE username=$(q "$u");" | db
+        echo "DELETE FROM radcheck WHERE username=$(q "$u"); DELETE FROM radreply WHERE username=$(q "$u"); DELETE FROM radusergroup WHERE username=$(q "$u"); DELETE FROM ml_account WHERE username=$(q "$u"); DELETE FROM ml_contact WHERE username=$(q "$u"); DELETE FROM ml_ip_bind WHERE username=$(q "$u"); DELETE FROM ml_dept_member WHERE kind='user' AND name=$(q "$u");" | db
         ok "User '$u' deleted"
         ;;
     disable)
@@ -312,7 +312,8 @@ cmd_group() {
         local g=${1:-}; valid_name "$g" group
         local members; members=$(echo "SELECT COUNT(*) FROM radusergroup WHERE groupname=$(q "$g")" | db)
         echo "DELETE FROM radgroupreply WHERE groupname=$(q "$g"); DELETE FROM radgroupcheck WHERE groupname=$(q "$g");
-              DELETE FROM radusergroup WHERE groupname=$(q "$g"); DELETE FROM radgroup_meta WHERE groupname=$(q "$g");" | db
+              DELETE FROM radusergroup WHERE groupname=$(q "$g"); DELETE FROM radgroup_meta WHERE groupname=$(q "$g");
+              DELETE FROM ml_dept_member WHERE kind='group' AND name=$(q "$g");" | db
         ok "Group '$g' deleted ($members user(s) are now without a group)"
         ;;
     show)
@@ -703,6 +704,141 @@ cmd_online() {
 cmd_log() {
     local n=${1:-30}; valid_int "$n" "count"
     echo "SELECT authdate AS time, username AS user, reply AS result FROM radpostauth ORDER BY id DESC LIMIT $n;" | dbt
+}
+
+# ======================================================================= traffic graphs + departments
+# Every 5 minutes (enforce): accounting totals -> bytes per user per 5 min / per hour (ml_traffic).
+traffic_collect() {
+    local d="(SELECT r.acctuniqueid AS id, r.username AS u, COALESCE(r.acctinputoctets,0) AS ci, COALESCE(r.acctoutputoctets,0) AS co,
+                   GREATEST(CAST(COALESCE(r.acctinputoctets,0) AS SIGNED) - CAST(COALESCE(s.inb, IF(r.acctstarttime >= NOW() - INTERVAL 10 MINUTE, 0, r.acctinputoctets), 0) AS SIGNED), 0) AS up,
+                   GREATEST(CAST(COALESCE(r.acctoutputoctets,0) AS SIGNED) - CAST(COALESCE(s.outb, IF(r.acctstarttime >= NOW() - INTERVAL 10 MINUTE, 0, r.acctoutputoctets), 0) AS SIGNED), 0) AS down
+            FROM radacct r LEFT JOIN ml_acct_snap s ON s.acctuniqueid = r.acctuniqueid
+            WHERE r.username <> '' AND (r.acctstoptime IS NULL OR r.acctstoptime >= NOW() - INTERVAL 30 MINUTE)) x"
+    echo "SET @b5 = FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(NOW() - INTERVAL 1 MINUTE) / 300) * 300);
+          SET @b60 = DATE_FORMAT(NOW() - INTERVAL 1 MINUTE, '%Y-%m-%d %H:00:00');
+          INSERT INTO ml_traffic (kind, name, res, bucket, rx, tx)
+            SELECT 'user', u, 5, @b5, SUM(down), SUM(up) FROM $d GROUP BY u HAVING SUM(down) + SUM(up) > 0
+            ON DUPLICATE KEY UPDATE rx = rx + VALUES(rx), tx = tx + VALUES(tx);
+          INSERT INTO ml_traffic (kind, name, res, bucket, rx, tx)
+            SELECT 'user', u, 60, @b60, SUM(down), SUM(up) FROM $d GROUP BY u HAVING SUM(down) + SUM(up) > 0
+            ON DUPLICATE KEY UPDATE rx = rx + VALUES(rx), tx = tx + VALUES(tx);
+          REPLACE INTO ml_acct_snap (acctuniqueid, username, inb, outb, seen) SELECT id, u, ci, co, NOW() FROM $d;
+          DELETE FROM ml_acct_snap WHERE seen < NOW() - INTERVAL 1 DAY;
+          DELETE FROM ml_traffic WHERE res = 5 AND bucket < NOW() - INTERVAL 3 DAY;
+          DELETE FROM ml_traffic WHERE res = 60 AND bucket < NOW() - INTERVAL 90 DAY;" | db
+}
+
+rate_kbps() {   # 10M | 512k | 2.5M | 10 (= Mbit) -> kbit/s
+    local v=${1,,}
+    [[ $v =~ ^([0-9]+)(\.([0-9]{1,3}))?(m|k|g)?$ ]] || die "Speed like 10M, 512k or 2.5M (got '$1')"
+    local whole=${BASH_REMATCH[1]} frac=${BASH_REMATCH[3]} unit=${BASH_REMATCH[4]:-m} mult
+    case $unit in k) mult=1 ;; m) mult=1000 ;; g) mult=1000000 ;; esac
+    frac=${frac}000; frac=${frac:0:3}
+    local k=$(( whole * mult + 10#$frac * mult / 1000 ))
+    (( k >= 64 && k <= 100000000 )) || die "Speed must be 64k .. 100G"
+    echo "$k"
+}
+kbps_txt() { local k=$1; if (( k % 1000 == 0 )); then echo "$((k / 1000))M"; else echo "${k}k"; fi; }
+dept_exists() { [ -n "$(echo "SELECT 1 FROM ml_department WHERE name=$(q "$1")" | db)" ]; }
+valid_dept() { [[ $1 =~ ^[a-z0-9][a-z0-9-]{0,23}$ ]] || die "Department name: a-z 0-9 - (24 at most), e.g. sales"; }
+
+# router part of sync.rsc: queue tree (PCQ: one user gets the whole speed, 10 users share it) + marks
+dept_rsc() {
+    local rows name down up base key
+    rows=$(echo "SELECT name, down_kbps, up_kbps FROM ml_department ORDER BY name" | db 2>/dev/null || true)
+    echo "# Departments (radius-admin dept): one shared speed per department"
+    echo '/queue tree remove [find comment="mldept"]'
+    echo '/ip firewall mangle remove [find comment="mldept"]'
+    echo '/ip firewall filter remove [find comment="mldept"]'
+    if [ -z "$rows" ]; then
+        echo '/system scheduler remove [find name="ml-dept"]'
+        echo '/system script remove [find name="ml-dept"]'
+        echo '/ip firewall address-list remove [find comment="mldept"]'
+        return
+    fi
+    echo ':if ([:len [/queue type find name="ml-pcq-down"]] = 0) do={ /queue type add name=ml-pcq-down kind=pcq pcq-classifier=dst-address pcq-rate=0 }'
+    echo ':if ([:len [/queue type find name="ml-pcq-up"]] = 0) do={ /queue type add name=ml-pcq-up kind=pcq pcq-classifier=src-address pcq-rate=0 }'
+    while IFS=$'\t' read -r name down up; do
+        [[ $name =~ ^[a-z0-9-]+$ && $down =~ ^[0-9]+$ && $up =~ ^[0-9]+$ ]] || continue
+        echo "/ip firewall mangle add chain=forward src-address-list=ml-dept-$name action=mark-packet new-packet-mark=mld-$name-up passthrough=yes comment=\"mldept\""
+        echo "/ip firewall mangle add chain=forward dst-address-list=ml-dept-$name action=mark-packet new-packet-mark=mld-$name-down passthrough=yes comment=\"mldept\""
+        [ "$down" = 0 ] || echo "/queue tree add name=\"dept $name down\" parent=global packet-mark=mld-$name-down max-limit=${down}k queue=ml-pcq-down comment=\"mldept\""
+        [ "$up" = 0 ] || echo "/queue tree add name=\"dept $name up\" parent=global packet-mark=mld-$name-up max-limit=${up}k queue=ml-pcq-up comment=\"mldept\""
+    done <<<"$rows"
+    # FastTrack skips queue trees: department traffic is accepted just before the fasttrack rule
+    echo ':if ([:len [/ip firewall filter find action=fasttrack-connection disabled=no]] > 0) do={'
+    echo '  /ip firewall filter add chain=forward action=accept connection-state=established,related src-address-list=ml-dept-all comment="mldept" place-before=[:pick [/ip firewall filter find action=fasttrack-connection] 0]'
+    echo '  /ip firewall filter add chain=forward action=accept connection-state=established,related dst-address-list=ml-dept-all comment="mldept" place-before=[:pick [/ip firewall filter find action=fasttrack-connection] 0]'
+    echo '}'
+    # who is in which department: the router asks every minute (logins change the addresses)
+    base=$(setting_get radius_domain); base="https://${base:-${RADIUS_DOMAIN:-radius.local}}:${WEB_PORT:-8443}/api/public/router"
+    key=$(cat "$ROUTER_DIR/key")
+    echo '/system script remove [find name="ml-dept"]'
+    echo "/system script add name=ml-dept policy=read,write,test comment=\"mikrotiklover: department members\" source={"
+    echo ':do {'
+    echo "  :local r [/tool fetch url=\"$base/dept.rsc?key=$key\" check-certificate=yes-without-crl output=user as-value]"
+    echo '  :if (($r->"status") = "finished") do={ :local f [:parse ($r->"data")]; $f }'
+    echo '} on-error={ :log warning "ml-dept: department members not downloaded" }'
+    echo '}'
+    echo '/system scheduler remove [find name="ml-dept"]'
+    echo '/system scheduler add name=ml-dept interval=1m start-time=startup on-event="/system script run ml-dept" comment="mikrotiklover: department members"'
+}
+
+cmd_dept() {
+    local sub=${1:-list}; shift || true
+    case $sub in
+    list)
+        echo "SELECT d.name, d.title, IF(d.down_kbps, CONCAT(ROUND(d.down_kbps/1000,1),'M'), 'no limit') AS download,
+                     IF(d.up_kbps, CONCAT(ROUND(d.up_kbps/1000,1),'M'), 'no limit') AS upload,
+                     (SELECT COUNT(*) FROM ml_dept_member m WHERE m.dept=d.name AND m.kind='user') AS users,
+                     (SELECT GROUP_CONCAT(m.name) FROM ml_dept_member m WHERE m.dept=d.name AND m.kind='group') AS \`groups\`
+              FROM ml_department d ORDER BY d.name" | dbt ;;
+    add|set)
+        local n=${1:-} down=${2:-} up=${3:-}; valid_dept "$n"
+        [ -n "$down" ] && [ -n "$up" ] || die "usage: radius-admin dept $sub NAME DOWNLOAD UPLOAD [TITLE]   (e.g. dept add sales 10M 5M 'Sales team'; 0 = no limit)"
+        local dk uk; [ "$down" = 0 ] && dk=0 || dk=$(rate_kbps "$down"); [ "$up" = 0 ] && uk=0 || uk=$(rate_kbps "$up")
+        shift 3 || true; local title="$*"
+        [ ${#title} -le 80 ] && [[ ! $title =~ [\"\\\$] ]] || die "Title: 80 characters at most, no \" \\ \$"
+        if [ "$sub" = add ]; then
+            dept_exists "$n" && die "Department '$n' already exists (dept set)"
+            echo "INSERT INTO ml_department (name, title, down_kbps, up_kbps) VALUES ($(q "$n"), $(q "$title"), $dk, $uk)" | db
+        else
+            dept_exists "$n" || die "No department '$n'"
+            echo "UPDATE ml_department SET down_kbps=$dk, up_kbps=$uk $([ -n "$title" ] && echo ", title=$(q "$title")") WHERE name=$(q "$n")" | db
+        fi
+        cmd_policy build >/dev/null 2>&1 || true
+        ok "Department '$n': $([ "$dk" = 0 ] && echo 'no download limit' || echo "$(kbps_txt "$dk") download") / $([ "$uk" = 0 ] && echo 'no upload limit' || echo "$(kbps_txt "$uk") upload") shared by all its users (routers: auto-sync)" ;;
+    del)
+        local n=${1:-}; valid_dept "$n"; dept_exists "$n" || die "No department '$n'"
+        echo "DELETE FROM ml_dept_member WHERE dept=$(q "$n"); DELETE FROM ml_department WHERE name=$(q "$n")" | db
+        cmd_policy build >/dev/null 2>&1 || true
+        ok "Department '$n' removed" ;;
+    member)   # dept member NAME user|group X
+        local n=${1:-} k=${2:-} x=${3:-}; valid_dept "$n"; dept_exists "$n" || die "No department '$n'"
+        case $k in
+            user)  valid_name "$x" username; user_exists "$x" || die "No such user '$x'" ;;
+            group) valid_name "$x" group; group_exists "$x" || [ -n "$(echo "SELECT 1 FROM radusergroup WHERE groupname=$(q "$x") LIMIT 1" | db)" ] || die "No such group '$x'" ;;
+            *) die "usage: radius-admin dept member NAME user USER | group GROUP" ;;
+        esac
+        local was; was=$(echo "SELECT dept FROM ml_dept_member WHERE kind=$(q "$k") AND name=$(q "$x")" | db)
+        echo "REPLACE INTO ml_dept_member (dept, kind, name) VALUES ($(q "$n"), $(q "$k"), $(q "$x"))" | db
+        ok "$k '$x' is in department '$n'$([ -n "$was" ] && [ "$was" != "$n" ] && echo " (was in '$was')"). Routers know it within a minute" ;;
+    unmember) # dept unmember user|group X
+        local k=${1:-} x=${2:-}; [[ $k == user || $k == group ]] || die "usage: radius-admin dept unmember user USER | group GROUP"
+        valid_name "$x" "$k"
+        [ -n "$(echo "SELECT 1 FROM ml_dept_member WHERE kind=$(q "$k") AND name=$(q "$x")" | db)" ] || die "$k '$x' is in no department"
+        echo "DELETE FROM ml_dept_member WHERE kind=$(q "$k") AND name=$(q "$x")" | db; ok "$k '$x' left its department" ;;
+    show)
+        local n=${1:-}; valid_dept "$n"; dept_exists "$n" || die "No department '$n'"
+        echo "SELECT kind, name FROM ml_dept_member WHERE dept=$(q "$n") ORDER BY kind, name" | dbt
+        echo "Online now:"
+        echo "SELECT r.username, r.framedipaddress AS ip, r.nasipaddress AS router FROM radacct r
+              WHERE r.acctstoptime IS NULL AND r.username IN (
+                SELECT name FROM ml_dept_member WHERE dept=$(q "$n") AND kind='user'
+                UNION SELECT g.username FROM radusergroup g JOIN ml_dept_member m ON m.kind='group' AND m.name=g.groupname AND m.dept=$(q "$n")
+                  WHERE g.username NOT IN (SELECT name FROM ml_dept_member WHERE kind='user'))" | dbt ;;
+    *) die "usage: radius-admin dept list | add NAME DOWN UP [TITLE] | set NAME DOWN UP [TITLE] | del NAME | member NAME user|group X | unmember user|group X | show NAME" ;;
+    esac
 }
 
 # ======================================================================= IP binding
@@ -1104,6 +1240,7 @@ cmd_enforce() {
     done <<<"$rows"
     echo "DELETE FROM ml_fup WHERE applied_at < NOW() - INTERVAL 40 DAY;" | db
     local n_speed; n_speed=$(speed_enforce "$verbose")
+    traffic_collect 2>/dev/null || true
     local n_bind; n_bind=$(ipbind_auto "$verbose" 2>/dev/null) || n_bind=0
     [ -z "$verbose" ] || [ "$n_bind" = "${n_bind##*$'\n'}" ] || echo "${n_bind%$'\n'*}"
     [ "${n_bind##*$'\n'}" = 0 ] || cmd_policy build >/dev/null 2>&1 || true
@@ -1496,6 +1633,8 @@ RSC
             cat "$lists/hotspot.rsc"
             echo
             ipbind_rsc
+            echo
+            dept_rsc
         } > "$lists/sync.rsc"
         install -m 644 "$lists/webfilter-policies.rsc" "$lists/vpn-servers.rsc" "$lists/sync.rsc" "$ROUTER_DIR/"
         sha256sum "$ROUTER_DIR/sync.rsc" | cut -c1-16 > "$ROUTER_DIR/version.tmp"
@@ -1720,6 +1859,7 @@ GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_setting TO 'radius_web'@'localho
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_status TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_stat TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_setup TO 'radius_web'@'localhost';
+GRANT INSERT, UPDATE ON \`$DB_NAME\`.ml_traffic TO 'radius_web'@'localhost';
 GRANT EXECUTE ON \`$DB_NAME\`.* TO 'radius_web'@'localhost';
 FLUSH PRIVILEGES;
 EOF
@@ -2608,6 +2748,13 @@ IP binding: every user keeps one address (DHCP static lease on the routers, foll
   ipbind unlock USER | del USER         back to auto / remove
   (PPPoE: user ip USER IP)
 
+Departments: one shared speed for a team (1 user online gets all of it, 10 users share it)
+  dept list | show NAME                 departments, members, who is online
+  dept add NAME 10M 5M ['Sales team']   download / upload for the whole department (0 = no limit)
+  dept set NAME 20M 10M [TITLE] | del NAME
+  dept member NAME user ali | group staff    put a user or a whole group in it (a user's own entry wins)
+  dept unmember user ali | group staff
+
 Social WiFi (cafe): free WiFi with the phone number (code by SMS / WhatsApp)
   social                                on/off, free time + data per day, customers
   social on | off                       needs: notice gateway (SMS), security quarantine-server IP
@@ -2748,6 +2895,8 @@ case ${1:-help} in
     speed)   shift; cmd_speed "$@" ;;
     notice)  shift; cmd_notice "$@" ;;
     ipbind)  shift; cmd_ipbind "$@" ;;
+    dept)    shift; cmd_dept "$@" ;;
+    traffic-collect) traffic_collect; ok "Traffic counted" ;;
     hotspot) shift; cmd_hotspot "$@" ;;
     social)  shift; cmd_social "$@" ;;
     insights) shift; python3 -I /usr/local/lib/mikrotiklover/insights.py "${1:-report}" --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "${@:2}" ;;

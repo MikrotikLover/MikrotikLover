@@ -397,3 +397,43 @@ CREATE TABLE IF NOT EXISTS ml_ip_bind (
   UNIQUE KEY (ip),
   KEY (mac)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Traffic graphs: bytes per 5 minutes (kept 3 days) and per hour (kept 90 days)
+--   kind 'if'   name 'ROUTER_IP|IDENTITY|INTERFACE'   rx = bytes the router received on it, tx = sent
+--   kind 'user' name USERNAME                         rx = download, tx = upload (RADIUS accounting)
+CREATE TABLE IF NOT EXISTS ml_traffic (
+  kind VARCHAR(8) NOT NULL,
+  name VARCHAR(200) NOT NULL,
+  res SMALLINT UNSIGNED NOT NULL,           -- minutes per bucket: 5 or 60
+  bucket DATETIME NOT NULL,
+  rx BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  tx BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (kind, res, name, bucket),
+  KEY (kind, res, bucket)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- last counters seen per accounting session (to turn totals into per-5-minute amounts)
+CREATE TABLE IF NOT EXISTS ml_acct_snap (
+  acctuniqueid VARCHAR(32) NOT NULL PRIMARY KEY,
+  username VARCHAR(64) NOT NULL DEFAULT '',
+  inb BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  outb BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Departments: one shared speed for all their users (router queue tree + PCQ)
+CREATE TABLE IF NOT EXISTS ml_department (
+  name VARCHAR(32) NOT NULL PRIMARY KEY,
+  title VARCHAR(80) NOT NULL DEFAULT '',
+  down_kbps INT UNSIGNED NOT NULL DEFAULT 0,
+  up_kbps INT UNSIGNED NOT NULL DEFAULT 0,
+  created DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS ml_dept_member (
+  dept VARCHAR(32) NOT NULL,
+  kind VARCHAR(8) NOT NULL,                 -- user | group
+  name VARCHAR(64) NOT NULL,
+  PRIMARY KEY (kind, name),                 -- a user / group is in one department
+  KEY (dept)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
