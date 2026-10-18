@@ -1114,6 +1114,15 @@ Dashboard → **Blocking → Why blocked? → Block page for users** on (ya `rad
 - LAN / private addresses kabhi redirect nahi hote; server band ho to router ka netwatch yeh rasta khud band kar deta hai (internet nahi rukta).
 - Tests: `tests/test-blockpage.sh` (27 checks).
 
+## 7s. Policy editor: har rule ka apna waqt
+
+Blocking → policy → **Edit**: har tick (category, VPN, har app, har site, "Internet off completely") ke saath apna **When**:
+**Always**, **Office hours (9–17, Mon–Sat)** ya **Custom…** (se → tak + din; raat 22 → 6 jaisa waqt router par khud do hisson mein bant jata hai).
+Misal: social sirf daftar ke waqt, games hamesha, TikTok 16–19 Mon–Fri, internet raat 00–06 band.
+- Purani policy kholne par har rule apne waqt ke sath aata hai; jo rule editor nahi dikhata (maslan ek category do alag waqton ke sath) woh "Other rules" mein **jaise ka taisa** rehta hai — save karne par kuch gum nahi hota.
+- Site likhte waqt `https://www.` aur raasta khud hat jata hai (`www.example.com/x` → `example.com`, subdomains bhi).
+- Test: `tests/ui-policy-editor.mjs` (sab policies ka round-trip, har rule ka alag waqt, router rules, phone).
+
 ## 7r. Ek site band / khuli (policy ke andar) aur unblock ki darkhwast
 
 **Policy mein single sites** (dashboard → Blocking → policy → Edit, ya policy file):

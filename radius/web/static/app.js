@@ -1781,28 +1781,73 @@ function ruleLabel(r) {
   }
 }
 
+const OFFICE_TIME = "9h-17h,mon,tue,wed,thu,fri,sat";
+function timePicker(spec, onChange) {      // one "when" per rule: always / office hours / custom / as in the file
+  const p = parseTime(spec);
+  const raw = spec && spec !== OFFICE_TIME && !p;
+  const sel = h("select", { class: "tp-sel" },
+    h("option", { value: "", selected: !spec }, "Always"),
+    h("option", { value: OFFICE_TIME, selected: spec === OFFICE_TIME }, "Office hours (9–17, Mon–Sat)"),
+    raw ? h("option", { value: "raw", selected: true }, `As set: ${spec}`) : null,
+    h("option", { value: "custom", selected: !!p && spec !== OFFICE_TIME }, "Custom…"));
+  const t = p || { from: 9, to: 17, days: DAY_NAMES.slice(0, 5) };
+  let touched = false;                       // untouched: give back the file's own text (same order of days …)
+  const hours = (v) => Array.from({ length: 25 }, (_, i) => h("option", { value: i, selected: i === v }, `${String(i).padStart(2, "0")}:00`));
+  const from = h("select", {}, hours(t.from)), to = h("select", {}, hours(t.to));
+  const days = DAY_NAMES.map((d) => { const cb = h("input", { type: "checkbox", checked: t.days.includes(d) }); cb.addEventListener("change", () => { touched = true; onChange(); }); return h("label", { class: "chip small" }, cb, d); });
+  const custom = h("div", { class: "tp-custom" }, from, "→", to, h("div", { class: "chips" }, days));
+  const el = h("div", { class: "tp" }, sel, custom);
+  const sync = () => { custom.hidden = sel.value !== "custom"; };
+  [sel, from, to].forEach((x) => x.addEventListener("change", () => { touched = true; sync(); onChange(); }));
+  sync();
+  el.value = () => {
+    if (sel.value === "raw" || (!touched && spec && sel.value === "custom")) return spec;
+    if (sel.value !== "custom") return sel.value;
+    const ds = days.filter((d) => d.querySelector("input").checked).map((d) => d.textContent);
+    return timeSpec({ from: from.value, to: to.value, days: ds.length ? ds : DAY_NAMES });
+  };
+  return el;
+}
+
 function policyEditor(meta, pol) {
   const rules = pol ? pol.rules : [];
-  const has = (kind, value) => rules.some((r) => r.kind === kind && (value === undefined || r.value === value));
-  const firstTime = rules.find((r) => r.time)?.time || "";
-  const t0 = parseTime(firstTime) || { from: 9, to: 17, days: DAY_NAMES.slice(0, 6) };
+  const tm = (spec) => (spec ? ` time=${spec}` : "");
+  // what the editor shows; every other line of the file is kept as it is ("other rules")
+  const used = new Set(), first = (pred) => { const i = rules.findIndex((r, n) => !used.has(n) && pred(r)); if (i >= 0) used.add(i); return i >= 0 ? rules[i] : null; };
   const name = h("input", { name: "name", required: true, pattern: "[a-z0-9\\-]{1,40}", placeholder: "e.g. kids", value: pol?.name || "", disabled: !!pol });
   const desc = h("input", { placeholder: "e.g. Kids: no TikTok, no YouTube videos", value: pol?.description || "" });
-  const mode = has("allow-only") ? "only" : has("block-all") && !firstTime ? "none" : "block";
+  const onlyRule = first((r) => r.kind === "allow-only");
+  const noneRule = onlyRule ? null : first((r) => r.kind === "block-all" && !r.time);
+  const mode = onlyRule ? "only" : noneRule ? "none" : "block";
   const modeSel = h("select", {}, [["block", "Block what I choose (the rest works)"], ["only", "WhatsApp ONLY (everything else blocked)"], ["none", "No internet at all"]]
     .map(([v, l]) => h("option", { value: v, selected: v === mode }, l)));
-  const check = (title, help, on) => {
-    const cb = h("input", { type: "checkbox", checked: on });
-    const el = h("label", { class: "check" + (on ? " on" : "") }, cb, h("div", {}, h("b", {}, title), h("span", {}, help)));
-    cb.addEventListener("change", () => { el.classList.toggle("on", cb.checked); preview(); });
-    el.cb = cb; return el;
+  const row = (title, help, rule) => {        // a tick + its own time
+    const cb = h("input", { type: "checkbox", checked: !!rule });
+    const label = h("label", { class: "check" + (rule ? " on" : "") }, cb, h("div", {}, h("b", {}, title), help ? h("span", {}, help) : null));
+    const tp = timePicker(rule?.time || "", () => preview());
+    const el = h("div", { class: "rule-row" }, label, tp);
+    const sync = () => { label.classList.toggle("on", cb.checked); tp.hidden = !cb.checked; };
+    cb.addEventListener("change", () => { sync(); preview(); });
+    sync();
+    el.cb = cb; el.tp = tp; return el;
   };
-  const cats = meta.categories.map((c) => Object.assign(check(c.name === "keywords" ? "Adult words" : c.name, c.description, has("block", c.name)), { value: c.name }));
-  const vpn = check("Block VPN", "VPN apps and websites, the VPN servers seen on your network (list grows by itself), OpenVPN / WireGuard / IPsec / PPTP / Tor. Every try is logged → VPN watch.", has("block-vpn"));
-  const appChosen = new Set(rules.filter((r) => r.kind === "block-app").map((r) => r.value));
+  const cats = meta.categories.map((c) => Object.assign(row(c.name === "keywords" ? "Adult words" : c.name, c.description, first((r) => r.kind === "block" && r.value === c.name)), { value: c.name }));
+  const vpn = row("Block VPN", "VPN apps and websites, the VPN servers seen on your network (list grows by itself), OpenVPN / WireGuard / IPsec / PPTP / Tor. Every try is logged → VPN watch.", first((r) => r.kind === "block-vpn"));
+  const offRule = mode === "block" ? first((r) => r.kind === "block-all") : null;
+  const off = row("Internet off completely", "At the time you choose (e.g. night 22:00 → 06:00). \"Always\" = no internet at all.", offRule);
+  // single apps: each with its own time
+  const appRows = new Map();
   const appSearch = h("input", { type: "search", placeholder: "Search apps: pubg, tiktok, snapchat, netflix …" });
   const appBox = h("div", { class: "applist-scroll" });
-  const chosenBox = h("div", { class: "chips" });
+  const chosenBox = h("div", { class: "stack tight" });
+  const addApp = (app, spec) => {
+    if (appRows.has(app)) return;
+    const tp = timePicker(spec || "", () => preview());
+    const el = h("div", { class: "rule-row item" }, badge(app, "bad"), tp,
+      h("button", { type: "button", class: "chip-x", title: "remove", onclick: () => { appRows.delete(app); drawApps(); drawChosen(); preview(); } }, "×"));
+    appRows.set(app, { el, tp });
+  };
+  rules.forEach((r, n) => { if (!used.has(n) && r.kind === "block-app" && !appRows.has(r.value)) { used.add(n); addApp(r.value, r.time); } });
   const drawApps = () => {
     const qy = appSearch.value.trim().toLowerCase();
     const groups = new Map();
@@ -1811,60 +1856,78 @@ function policyEditor(meta, pol) {
       groups.get(a.category).push(a);
     });
     appBox.replaceChildren(...[...groups].map(([cat, list]) => [h("h4", {}, cat), h("div", { class: "chips" }, list.map((a) => {
-      const cb = h("input", { type: "checkbox", checked: appChosen.has(a.app) });
-      const chip = h("label", { class: "chip" + (appChosen.has(a.app) ? " on" : "") }, cb, a.app, a.discovered ? h("small", {}, "new") : null);
-      cb.addEventListener("change", () => { cb.checked ? appChosen.add(a.app) : appChosen.delete(a.app); chip.classList.toggle("on", cb.checked); drawChosen(); preview(); });
+      const on = appRows.has(a.app);
+      const cb = h("input", { type: "checkbox", checked: on });
+      const chip = h("label", { class: "chip" + (on ? " on" : "") }, cb, a.app, a.discovered ? h("small", {}, "new") : null);
+      cb.addEventListener("change", () => { cb.checked ? addApp(a.app, "") : appRows.delete(a.app); chip.classList.toggle("on", cb.checked); drawChosen(); preview(); });
       return chip;
     }))]).flat());
     if (!appBox.children.length) appBox.append(h("div", { class: "muted" }, "No app with that name."));
   };
-  const drawChosen = () => chosenBox.replaceChildren(...(appChosen.size ? [...appChosen].map((a) => badge(a, "bad")) : [h("span", { class: "muted" }, "No single apps chosen.")]));
+  const drawChosen = () => chosenBox.replaceChildren(...(appRows.size ? [...appRows.values()].map((x) => x.el) : [h("span", { class: "muted" }, "No single apps chosen.")]));
   appSearch.addEventListener("input", drawApps);
-  const whenSel = h("select", {}, h("option", { value: "always", selected: !firstTime }, "Always"), h("option", { value: "time", selected: !!firstTime }, "Only at these times"));
-  const hours = (v) => Array.from({ length: 25 }, (_, i) => h("option", { value: i, selected: i === v }, `${String(i).padStart(2, "0")}:00`));
-  const from = h("select", {}, hours(t0.from)), to = h("select", {}, hours(t0.to));
-  const days = DAY_NAMES.map((d) => { const cb = h("input", { type: "checkbox", checked: t0.days.includes(d) }); cb.addEventListener("change", preview); return h("label", { class: "chip" }, cb, d); });
-  const timeRow = h("div", { class: "toolbar" }, from, "→", to, h("div", { class: "chips" }, days));
+  // single websites: each with its own time
+  const siteRows = [];
+  const siteBox = h("div", { class: "stack tight" });
+  const addSite = (site, spec) => {
+    const inp = h("input", { value: site || "", placeholder: "example-bet.com", spellcheck: "false", class: "grow" });
+    const tp = timePicker(spec || "", () => preview());
+    const r = { inp, tp };
+    r.el = h("div", { class: "rule-row item" }, inp, tp, h("button", { type: "button", class: "chip-x", title: "remove", onclick: () => { siteRows.splice(siteRows.indexOf(r), 1); r.el.remove(); preview(); } }, "×"));
+    inp.addEventListener("input", preview);
+    siteRows.push(r); siteBox.append(r.el);
+    return inp;
+  };
+  rules.forEach((r, n) => { if (!used.has(n) && r.kind === "block-site") { used.add(n); addSite(r.value, r.time); } });
+  const addSiteBtn = h("button", { type: "button", class: "small", onclick: () => { addSite("", "").focus(); } }, icon("plus"), "Add a site");
+  const cleanSite = (x) => x.trim().toLowerCase().replace(/^[a-z]+:\/\//, "").replace(/[/?#:].*$/, "").replace(/^\*\./, "").replace(/^www\./, "");
+  const okSite = (x) => /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(x);
+  const dnsRule = first((r) => r.kind === "dns");
   const dnsSel = h("select", {}, [["router", "Router DNS (normal)"], ["family", "Cloudflare Family (no adult)"], ["adguard-family", "AdGuard Family"], ["cleanbrowsing-family", "CleanBrowsing Family"], ["cleanbrowsing-adult", "CleanBrowsing Adult filter"]]
-    .map(([v, l]) => h("option", { value: v, selected: (rules.find((r) => r.kind === "dns")?.value || "router") === v }, l)));
-  const ech = check("Block hidden site names (ECH)", "Stops browsers from hiding the site name; a few Cloudflare sites may not open.", has("strict-ech"));
-  const siteList = (kind) => rules.filter((r) => r.kind === kind).map((r) => r.value).join("\n");
-  const sitesHelp = "one per line, like example.com — its subdomains too";
-  const blockSites = h("textarea", { rows: 3, placeholder: "example-bet.com\nsomegame.io", spellcheck: "false" }, siteList("block-site"));
-  const allowSites = h("textarea", { rows: 3, placeholder: "linkedin.com\nschool.edu.pk", spellcheck: "false" }, siteList("allow-site"));
-  const sites = (ta) => [...new Set(ta.value.split(/[\s,]+/).map((x) => x.trim().toLowerCase().replace(/^[a-z]+:\/\//, "").replace(/\/.*$/, "").replace(/^\*\./, ""))
-    .filter((x) => /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(x)))];
-  [blockSites, allowSites].forEach((ta) => ta.addEventListener("input", () => preview()));
+    .map(([v, l]) => h("option", { value: v, selected: (dnsRule?.value || "router") === v }, l)));
+  const echRule = first((r) => r.kind === "strict-ech");
+  const echCb = h("input", { type: "checkbox", checked: !!echRule });
+  const ech = h("label", { class: "check" + (echRule ? " on" : "") }, echCb, h("div", {}, h("b", {}, "Block hidden site names (ECH)"), h("span", {}, "Stops browsers from hiding the site name; a few Cloudflare sites may not open.")));
+  echCb.addEventListener("change", () => { ech.classList.toggle("on", echCb.checked); preview(); });
+  const allowList = [];
+  rules.forEach((r, n) => { if (!used.has(n) && r.kind === "allow-site") { used.add(n); allowList.push(r.value); } });
+  const allowSites = h("textarea", { rows: 3, placeholder: "linkedin.com\nschool.edu.pk", spellcheck: "false" }, allowList.join("\n"));
+  allowSites.addEventListener("input", () => preview());
+  // anything the editor does not show (a second line for the same category, hand-written rules …) is kept as it is
+  const extras = rules.map((r, n) => (used.has(n) ? null : `${r.kind}${r.value ? " " + r.value : ""}${tm(r.time)}`)).filter(Boolean);
+  const extraBox = extras.length ? h("div", { class: "note" }, h("b", {}, "Other rules (kept as they are): "), h("code", {}, extras.join(" · "))) : null;
   const out = h("pre", { class: "code-box" });
   const blockSection = h("div", { class: "stack" },
-    h("label", { class: "field" }, "Categories", h("span", { class: "help" }, "Whole groups of sites and apps. Lists are kept up to date on the server."), h("div", { class: "checks" }, cats)),
+    h("div", { class: "note" }, "Every tick has its own time: e.g. social media only in office hours, games always, internet off at night."),
+    h("label", { class: "field" }, "Categories", h("span", { class: "help" }, "Whole groups of sites and apps. Lists are kept up to date on the server."), h("div", { class: "rule-list" }, cats)),
     vpn,
     h("label", { class: "field" }, "Single apps", h("span", { class: "help" }, "Every known domain of the app is blocked, the ones learned on your network too. \"new\" = discovered automatically."), appSearch, appBox, chosenBox),
-    h("label", { class: "field" }, "Single websites to block", h("span", { class: "help" }, sitesHelp), blockSites),
-    h("label", { class: "field" }, "When", whenSel, timeRow),
-    h("label", { class: "field" }, "DNS for these users", dnsSel), ech);
+    h("div", { class: "field" }, h("span", {}, "Single websites to block"), h("span", { class: "help" }, "like example.com — its subdomains too"), siteBox, h("div", {}, addSiteBtn)),
+    off,
+    h("label", { class: "field" }, "DNS for these users", dnsSel), ech, extraBox);
   function text() {
-    const tm = whenSel.value === "time" ? ` time=${timeSpec({ from: from.value, to: to.value, days: days.filter((d) => d.querySelector("input").checked).map((d) => d.textContent) })}` : "";
     const lines = [`# ${desc.value.trim() || name.value || "policy"}`];
-    if (modeSel.value === "only") lines.push("allow-only whatsapp");
+    if (modeSel.value === "only") lines.push(`allow-only ${onlyRule?.value || "whatsapp"}`);
     else if (modeSel.value === "none") lines.push("block-all");
     else {
-      cats.filter((c) => c.cb.checked).forEach((c) => lines.push(`block ${c.value}${tm}`));
-      [...appChosen].forEach((a) => lines.push(`block-app ${a}${tm}`));
-      if (vpn.cb.checked) lines.push(`block-vpn${tm}`);
-      sites(blockSites).forEach((d) => lines.push(`block-site ${d}${tm}`));
+      cats.filter((c) => c.cb.checked).forEach((c) => lines.push(`block ${c.value}${tm(c.tp.value())}`));
+      [...appRows].forEach(([a, x]) => lines.push(`block-app ${a}${tm(x.tp.value())}`));
+      if (vpn.cb.checked) lines.push(`block-vpn${tm(vpn.tp.value())}`);
+      const seen = new Set();
+      siteRows.forEach((r) => { const d = cleanSite(r.inp.value); if (okSite(d) && !seen.has(d)) { seen.add(d); lines.push(`block-site ${d}${tm(r.tp.value())}`); } });
+      if (off.cb.checked) lines.push(`block-all${tm(off.tp.value())}`);
       if (dnsSel.value !== "router") lines.push(`dns ${dnsSel.value}`);
-      if (ech.cb.checked) lines.push("strict-ech");
+      if (echCb.checked) lines.push("strict-ech");
+      lines.push(...extras);
     }
-    sites(allowSites).forEach((d) => lines.push(`allow-site ${d}`));
+    [...new Set(allowSites.value.split(/[\s,]+/).map(cleanSite).filter(okSite))].forEach((d) => lines.push(`allow-site ${d}`));
     return lines.join("\n") + "\n";
   }
   function preview() {
     blockSection.hidden = modeSel.value !== "block";
-    timeRow.hidden = whenSel.value !== "time";
     out.textContent = text();
   }
-  [modeSel, whenSel, from, to, dnsSel].forEach((el) => el.addEventListener("change", preview));
+  [modeSel, dnsSel].forEach((el) => el.addEventListener("change", preview));
   [desc, name].forEach((el) => el.addEventListener("input", preview));
   drawApps(); drawChosen(); preview();
   const onlyNote = h("div", { class: "note", hidden: modeSel.value !== "only" }, "WhatsApp only: chat, voice/video calls, photos and status work. Facebook, Instagram, YouTube, browsers and every other app are blocked.");
@@ -1874,7 +1937,7 @@ function policyEditor(meta, pol) {
     h("label", { class: "field" }, "What should these users get?", modeSel),
     onlyNote,
     blockSection,
-    h("label", { class: "field" }, "Always open — exceptions", h("span", { class: "help" }, `${sitesHelp}. Never blocked by this policy, also not by "no internet" or "WhatsApp only" (e.g. a school or bank site).`), allowSites),
+    h("label", { class: "field" }, "Always open — exceptions", h("span", { class: "help" }, `one per line, like example.com — its subdomains too. Never blocked by this policy, also not by "no internet" or "WhatsApp only" (e.g. a school or bank site).`), allowSites),
     h("label", { class: "field" }, "Policy file (what the server stores)", out));
   modeSel.addEventListener("change", () => { onlyNote.hidden = modeSel.value !== "only"; });
   return { form, text, name: () => name.value.trim() };

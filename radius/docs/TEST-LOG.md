@@ -124,3 +124,5 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 20:44 | Policies: own chain wfp-NAME, allow-site first (also by address for no-internet / allow-only), block-site with time=, WF-site log; simulator 79 cases | ok |
 | 20:44 | Unblock requests: block page button -> ml_unblock (code+IP+site check, 1 pending per site, 10/day) -> alert 'requests' -> Requests tab 1h/today/always/refuse -> ml-live 1-minute router rules -> expires by itself | ok — tests/test-unblock.sh 33 checks |
 | 20:44 | Regression: all 13 suites + lint + UI suite (event switch count 11 -> 12, leftover ui-user from the aborted run cleaned) | ok (shots 110-114) |
+| 21:22 | Policy editor: own time per category / VPN / app / site / internet-off (Always, Office hours, Custom); untouched times kept verbatim; unknown lines kept as 'other rules' | ok |
+| 21:22 | Round trip of all 14 server policies through the editor: identical rules (found: old editor put one time on every rule; day-order only diff fixed by keeping file text) | ok — tests/ui-policy-editor.mjs 22 checks; UI suite ok |
