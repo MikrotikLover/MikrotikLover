@@ -204,6 +204,61 @@ Har script ke upar comment mein uski tafseel aur use hatane ka tareeqa likha hai
 
 ---
 
+## 5b. Hotspot users ko connect karna — qadam ba qadam
+
+Misal: users ka network `bridge` (192.168.88.0/24), router `192.168.88.1`, RADIUS server `10.10.10.10` (section 1b).
+
+**A. Router par hotspot banana (Winbox → Terminal):**
+```
+/ip hotspot setup
+```
+Sawalon ke jawab:
+| Sawal | Jawab |
+|---|---|
+| hotspot interface | `bridge` (users wala; server ka ether5 nahi) |
+| local address of network | `192.168.88.1/24` |
+| masquerade network | `yes` |
+| address pool of network | `192.168.88.10-192.168.88.254` |
+| select certificate | `none` |
+| ip address of smtp server | `0.0.0.0` |
+| dns servers | `8.8.8.8` |
+| dns name | `login.wifi` (dashboard → Settings → "Hotspot login address" mein bhi yahi) |
+| name of local hotspot user | koi bhi (misal `admin1`) — baad mein users RADIUS se aayenge |
+
+Wi-Fi: guest SSID (misal `Cafe-WiFi`) **bina password** ke banayein aur use `bridge` mein rakhein. (Agar staff ka alag WiFi chahiye to woh WPA-Enterprise script se, section 5 #1.)
+
+**B. Hotspot ko RADIUS se jorna:** `mikrotik/hotspot.rsc` mein `RADIUS_SERVER_IP` = `10.10.10.10`, `RADIUS_SECRET` = jo `radius-admin nas add` ne diya → upload → `/import file-name=hotspot.rsc`. Is se profile `hsprof1` RADIUS, accounting (har 5 min) aur CHAP login par chala jata hai.
+
+**C. Login page:** dashboard → **Hotspot page** (naam, logo, rang, offer) → "Put these pages on the routers automatically" on (auto-sync script laga ho). Ya haath se: Winbox → Files → `hotspot/` mein `mikrotik/hotspot-login/` ki teeno files (login.html, status.html, alogin.html).
+
+**D. Server par plan aur vouchers:**
+```bash
+sudo radius-admin plan add 1day  --price 50  --validity 1d  --quota 2G  --rate 5M/5M --devices 1
+sudo radius-admin plan add 30day --price 500 --validity 30d --quota 30G --period monthly --rate 5M/5M
+sudo radius-admin voucher create 1day 50 --pin          # 50 cards, sirf PIN wale
+```
+Dashboard → **Vouchers** → batch → **Print** (cards). Ya mustaqil users: `sudo radius-admin user add ali -p 'Pass12345'` phir `user plan ali 30day` (hotspot users **`--nt-hash` ke baghair**).
+Bina card free WiFi (cafe): section 6b → Social WiFi.
+
+**E. Admin / printer jinhe login nahi chahiye:**
+```
+/ip hotspot ip-binding add mac-address=AA:BB:CC:DD:EE:FF type=bypassed comment="admin laptop"
+```
+
+**F. Test:** phone se `Cafe-WiFi` join karein → login page khud khulta hai (na khule to browser mein `http://login.wifi`) → voucher / PIN → internet.
+Server par: `sudo radius-admin online` (kaun online), `sudo radius-admin log` (aakhri logins), dashboard → **Live log**.
+
+**Masle:**
+| Masla | Hal |
+|---|---|
+| Login page nahi khulta | Phone par koi `http://` site kholein; DNS name `login.wifi` sahi ho; HTTPS sites pehle page nahi dikhati |
+| "RADIUS server is not responding" | `nas add` wala IP router ka **ether5 IP** (10.10.10.1) ho; secret dono taraf aik; router par `/radius monitor 0`; server firewall 1812/1813 |
+| "invalid username or password" | `radius-admin test USER PASS`; user `--nt-hash` se bana ho to password dobara set karein bina `--nt-hash` |
+| Package expired / data khatam | Theek hai — `radius-admin user status USER` mein wajah; `user renew USER` |
+| Login hua lekin internet nahi | `/ip hotspot setup` mein masquerade `yes`; router ka apna internet chal raha ho |
+
+---
+
 ## 6. Users, plans aur blocking
 
 | Kaam | Dashboard | CLI |
