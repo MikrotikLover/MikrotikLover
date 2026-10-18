@@ -178,6 +178,26 @@ Dashboard → **Routers** se bhi add kar sakte hain. IP wahi likhein jis se rout
 
 ## 5. Router configuration — is tarteeb (order) se
 
+### Aasan tareeqa: dashboard → **Router setup** (koi file edit nahi)
+
+1. Dashboard → **Routers** mein router add karein (secret khud ban jata hai).
+2. Dashboard → **Router setup**: router chunein, server ka IP check karein (jo router ko dikhta hai, maslan `10.10.10.10`), LAN interface (aam tor par `bridge`).
+   Server alag port (maslan `ether5`) par laga hai to "Server port" aur "Router address on that port" (`10.10.10.1/24`) bhar dein.
+3. Jo cheezein chahiyein un par tick lagayein (Hotspot, Staff Wi-Fi, PPPoE, logs, auto-sync, security …). Hotspot pehli dafa ho to "Make the hotspot too" + LAN address (`192.168.88.1/24`).
+4. **Make the script** dabayein. Ek line milti hai, maslan:
+   ```
+   /tool fetch url="https://10.10.10.10:8443/api/public/setup/9ffd…rsc" check-certificate=no dst-path=ml-setup.rsc; :delay 2s; /import file-name=ml-setup.rsc; /file remove ml-setup.rsc
+   ```
+5. Winbox → **New Terminal** → line paste → **Enter**. Page par "router downloaded it ✔" aa jata hai; akhir mein terminal mein `MikrotikLover setup finished` likha aata hai.
+
+Baatein:
+- Link **1 ghante** chalta hai, sirf usi router ke liye; script mein router ka secret hai, is liye line kisi ko na bhejein. Import ke baad file router se khud mit jati hai.
+- Router server tak nahi pohanchta? **Download .rsc** → Winbox → Files mein daalein → `/import file-name=ml-setup.rsc`.
+- Baad mein naya hissa lagana ho to sirf woh tick karein (aur "Blocking base → Already on this router"). Ek hi hissa dobara import karne par RouterOS "already have such entry" par ruk sakta hai — pehle purana hata dein.
+- Sab RADIUS services (hotspot, ppp, wireless) ek hi `/radius` entry mein aati hain.
+
+### Haath se (purana tareeqa)
+
 Scripts `radius/mikrotik/` mein hain. Har file mein `RADIUS_SERVER_IP`, `RADIUS_SECRET` (aur SSID waghera) replace karein. Phir Winbox → **Files** mein upload karein aur **Terminal** mein `/import file-name=NAAM.rsc` chalayein.
 
 | # | Script | Kab | Server par pehle |
@@ -207,6 +227,8 @@ Har script ke upar comment mein uski tafseel aur use hatane ka tareeqa likha hai
 ## 5b. Hotspot users ko connect karna — qadam ba qadam
 
 Misal: users ka network `bridge` (192.168.88.0/24), router `192.168.88.1`, RADIUS server `10.10.10.10` (section 1b).
+
+**Shortcut:** dashboard → **Router setup** → "Hotspot" + "Make the hotspot too" (LAN address `192.168.88.1/24`) → ek line terminal mein: neeche wale A aur B dono ho jate hain (internet ke liye router ki default NAT/masquerade aur DNS honi chahiye — MikroTik ki default config mein hoti hai).
 
 **A. Router par hotspot banana (Winbox → Terminal):**
 ```

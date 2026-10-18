@@ -372,3 +372,14 @@ CREATE TABLE IF NOT EXISTS ml_social_otp (
   KEY idx_phone (phone, created),
   KEY idx_mac (mac, created)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Router setup page: the script made for one router, fetched once by the router with a one-hour token
+CREATE TABLE IF NOT EXISTS ml_router_setup (
+  token CHAR(32) NOT NULL PRIMARY KEY,
+  router_ip VARCHAR(45) NOT NULL DEFAULT '',
+  script MEDIUMTEXT NOT NULL,
+  fetched INT UNSIGNED NOT NULL DEFAULT 0,
+  created DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires DATETIME NOT NULL,
+  KEY (expires)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -44,7 +44,12 @@ PROPS = {
     "/tool netwatch": {"host", "interval", "timeout", "comment", "up-script", "down-script", "type"},
     "/system logging action": {"name", "target", "remote", "remote-port"},
     "/system logging": {"topics", "action", "prefix"},
-    "/ip hotspot profile": {"use-radius", "radius-accounting", "radius-interim-update", "login-by", "mac-auth-mode"},
+    "/ip hotspot profile": {"use-radius", "radius-accounting", "radius-interim-update", "login-by", "mac-auth-mode",
+                            "name", "hotspot-address", "dns-name", "html-directory"},
+    "/ip hotspot": {"name", "interface", "address-pool", "profile", "disabled"},
+    "/ip address": {"address", "interface", "comment", "disabled"},
+    "/interface bridge port": {"bridge", "interface", "comment"},
+    "/interface list member": {"list", "interface", "comment"},
     "/ip dhcp-server alert": {"interface", "valid-server", "alert-timeout", "comment", "on-alert", "disabled"},
     "/system script": {"name", "policy", "source", "comment", "dont-require-permissions"},
     "/system scheduler": {"name", "interval", "start-time", "on-event", "policy", "comment"},
@@ -72,7 +77,7 @@ def lint(path):
             script_depth += bare.count("{") - bare.count("}")
             depth += bare.count("{") - bare.count("}")
             continue
-        if s.startswith(COMMANDS) or s.startswith((":delay", ":if", ":do", ":log", ":local", ":global")):
+        if s.startswith(COMMANDS) or s.startswith((":delay", ":if", ":do", ":log", ":local", ":global", ":put")):
             bare = strip_quoted(s)
             depth += bare.count("{") - bare.count("}")
             continue

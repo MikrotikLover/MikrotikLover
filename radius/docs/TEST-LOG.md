@@ -105,3 +105,7 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 11:19 | test-social (18) + UI (50) + all suites | All pass |
 | 10:22 | ZIP install test: unzip + bash install.sh on the server | OK — rc 0, test login OK, dashboard 200, doctor: only the unreachable test router red |
 | 10:31 | main branch created from the RADIUS branch | One-command install from GitHub main OK (rc 0, update mode); weekly App catalog update now OK (was 404) |
+| 10:58 | Router setup: script builder (tools/routersetup.py), 12 parts, one /radius entry, input checks | ok — 26 builder checks, lint-rsc ok |
+| 10:58 | Router setup: API make / router fetch (no login) / status / expired + unknown token 404 / needs login | ok — 41 checks total (tests/test-routersetup.py) |
+| 10:58 | Router setup page: desktop + phone, one-liner, Copy, Download .rsc, 'router downloaded it ✔' | ok — no overflow, no console errors (shots 92-94) |
+| 10:58 | install.sh: routersetup.py + mikrotik/*.rsc to /usr/local/lib/mikrotiklover, ml_router_setup table + grant | ok — rc 0 |

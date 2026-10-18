@@ -1051,6 +1051,18 @@ sudo radius-admin social offer "Aaj chai + paratha 200 Rs" [--dry-run]
 - **Google login:** abhi nahi — phone ke WiFi-login window mein Google aksar login rokta hai, aur asli domain + certificate chahiye. OTP har phone par chalta hai.
 - **Tested:** browser se poora raasta — number → nakli SMS gateway par code → ghalat code → sahi code → nakli router ne FreeRADIUS se **asli CHAP login** karwaya (Session-Timeout 45 min, 300 MB limit wapas aaye); rate limits, purana code, doosra device, 5 ghalat koshishen, roz ki had, naam saaf (`<script>` hata), CSV. `tests/test-social.sh` (18 checks), UI 50/50.
 
+## 7m. Router setup — script dashboard se, ek line terminal mein
+
+Dashboard → **Router setup**: router chunein, server IP aur LAN interface dekhein, jo chahiye us par tick (Hotspot, Staff Wi-Fi WPA-Enterprise, PPPoE, MAC devices, logs, DNS logger, traffic flow, auto-sync, security, LAN guard) → **Make the script**.
+Page sab `mikrotik/*.rsc` files ko sahi tarteeb mein jor kar server IP, router ka secret, Wi-Fi naam aur interfaces bhar deta hai (ek `/radius` entry sab services ke liye) aur ek line deta hai:
+
+```
+/tool fetch url="https://SERVER:8443/api/public/setup/TOKEN.rsc" check-certificate=no dst-path=ml-setup.rsc; :delay 2s; /import file-name=ml-setup.rsc; /file remove ml-setup.rsc
+```
+
+Winbox → New Terminal → paste → Enter. Link 1 ghante ka hai (random token, table `ml_router_setup`); page dikhata hai ke router ne download kar liya. Ya **Download .rsc** se file le kar haath se import karein.
+Galat input (interface, SSID, secret mein `"` ya `;`) wahin rok diya jata hai. Tests: `tests/test-routersetup.py` (script builder + API + lint).
+
 ## 7e. Health check — sab theek hai?
 
 `sudo radius-admin doctor` ya dashboard → **Health check**: server ka har hissa **sabz** (theek), **peela** (dekh lein) ya **laal** (abhi theek karein), aur kharabi ke saath us ka hal likha hota hai.

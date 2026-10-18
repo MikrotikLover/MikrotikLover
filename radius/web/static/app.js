@@ -36,6 +36,7 @@ const ICONS = {
   data: "M12 3v12m0 0-4-4m4 4 4-4M5 21h14",
   settings: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6m7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14.5 3h-4l-.4 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7 7 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2l.4 2.6h4l.4-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2",
   menu: "M4 6h16M4 12h16M4 18h16",
+  term: "M3 4h18v16H3zM7 9l3 3-3 3M13 15h4",
   plan: "M4 4h16v16H4zM8 9h8M8 13h8M8 17h5",
   voucher: "M3 7h18v4a2 2 0 0 0 0 4v4H3v-4a2 2 0 0 0 0-4zM14 7v12",
   money: "M3 6h18v12H3zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6M6 9v.01M18 15v.01",
@@ -208,7 +209,7 @@ const legend = () => h("div", { class: "legend" }, h("span", {}, h("i", { class:
 // ------------------------------------------------------------------ shell + router
 const NAV = [
   ["dashboard", "Dashboard", "home"], ["users", "Users", "users"], ["groups", "Groups & policies", "groups"],
-  ["macs", "MAC devices", "mac"], ["routers", "Routers", "router"], "-",
+  ["macs", "MAC devices", "mac"], ["routers", "Routers", "router"], ["setup", "Router setup", "term"], "-",
   ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], ["speed", "Speed schedule", "clock"], ["hotspot", "Hotspot page", "brush"], ["social", "Social WiFi", "phone"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["insights", "Insights (samajh)", "bulb"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
   ["data", "Data usage", "data"], ["apps", "Apps on network", "apps"], ["ports", "Ports & protocols", "ports"], "-",
@@ -1092,6 +1093,110 @@ ROUTES.speed = async () => {
           h("button", { class: "small danger", onclick: async () => { if (await confirmDlg("Delete", `Delete speed schedule ${r.name}?`, "Delete")) if (await act(api("POST", `/api/speed/${r.id}/del`, {}))) route(); } }, "Delete")) : null }],
         d.rules, "No speed schedule yet — everyone has their normal speed all day.")),
     card("Check a user", "which speed, and why", check, out)));
+};
+
+// ------------------------------------------------------------------ router setup: one line for the MikroTik terminal
+ROUTES.setup = async () => {
+  if (!isAdmin()) return shell("Router setup", card(null, null, h("div", { class: "empty" }, "Only an admin can make router scripts.")));
+  const d = await api("GET", "/api/router-setup");
+  const DEF = { hotspot: 1, logging: 1, dnslog: 1, traffic: 1, autosync: 1, security: 1, languard: 1 };
+  const HELP = {
+    hotspot: "Login page with vouchers / social WiFi on the LAN",
+    wpa_ros7: "Staff log in with their own username + password (RouterOS 7 routers: hAP ax, cAP ax …)",
+    wpa_legacy: "Same, for older routers with the 'wireless' menu (hAP ac², RB951 …)",
+    pppoe: "Customers dial in with PPPoE (ISP style)",
+    macauth: "Printers, TVs, CCTV join a separate Wi-Fi by MAC address",
+    webfilter: "Needed by blocking, logs and auto-sync — added by itself when needed",
+    logging: "Router logs come to this server (Live log, Security)",
+    dnslog: "Which sites and apps everyone opens",
+    traffic: "Data usage per user, DDoS detection",
+    autosync: "Policies, block lists, hotspot pages and router health — every 15 min by itself",
+    security: "Stops port scans, password guessing, SYN flood",
+    languard: "Warns about a fake DHCP router or ARP spoofing on the LAN",
+  };
+  const extra = {};
+  const fld = (label, name, attrs = {}, help) => h("label", { class: "field" }, label, help ? h("span", { class: "help" }, help) : null, h("input", { name, ...attrs }));
+  extra.hotspot = h("div", { class: "form cols sub-opts" },
+    h("label", { class: "check full" }, h("input", { type: "checkbox", name: "hotspot_create" }),
+      h("div", {}, h("b", {}, "Make the hotspot too"), h("span", {}, "Only if this router has no hotspot yet. Else it uses the one made by IP → Hotspot → Hotspot Setup."))),
+    fld("Router's LAN address", "lan_net", { placeholder: "192.168.88.1/24" }), fld("Login page name", "dns_name", { placeholder: "login.wifi" }));
+  extra.wpa_ros7 = h("div", { class: "form cols sub-opts" }, fld("Staff Wi-Fi name", "staff_ssid", { placeholder: "Office-WiFi", maxlength: 32 }));
+  extra.wpa_legacy = h("div", { class: "form cols sub-opts" }, fld("Staff Wi-Fi name", "staff_ssid_legacy", { placeholder: "Office-WiFi", maxlength: 32 }));
+  extra.pppoe = h("div", { class: "form cols sub-opts" }, fld("Customer side port", "pppoe_if", { placeholder: "ether2" }, "interface, bridge or VLAN"));
+  extra.macauth = h("div", { class: "form cols sub-opts" }, fld("Devices Wi-Fi name", "devices_ssid", { placeholder: "Devices-WiFi", maxlength: 32 }),
+    fld("Devices Wi-Fi password", "devices_key", { placeholder: "8 letters or more", maxlength: 63, autocomplete: "off" }));
+  extra.webfilter = h("div", { class: "form cols sub-opts" }, h("label", { class: "check full" }, h("input", { type: "checkbox", name: "base_done" }),
+    h("div", {}, h("b", {}, "Already on this router"), h("span", {}, "Tick when adding a part later, so the base is not added twice."))));
+  const parts = d.modules.map((m) => {
+    const box = h("input", { type: "checkbox", name: m.key, checked: !!DEF[m.key] });
+    const wrap = h("label", { class: "check" + (DEF[m.key] ? " on" : "") }, box, h("div", {}, h("b", {}, m.title), h("span", {}, HELP[m.key] || "")));
+    const ex = extra[m.key];
+    const sync = () => { wrap.classList.toggle("on", box.checked); if (ex) ex.style.display = (box.checked || m.key === "webfilter") ? "" : "none"; };
+    box.addEventListener("change", () => {
+      if (box.checked && m.key === "wpa_ros7") f.querySelector("[name=wpa_legacy]").checked = false;
+      if (box.checked && m.key === "wpa_legacy") f.querySelector("[name=wpa_ros7]").checked = false;
+      f.querySelectorAll(".parts input[type=checkbox]").forEach((b) => b.dispatchEvent(new Event("sync")));
+    });
+    box.addEventListener("sync", sync);
+    setTimeout(sync);
+    return h("div", { class: "part" }, wrap, ex || null);
+  });
+  const out = h("div", { class: "stack" });
+  const f = h("form", { class: "stack", onsubmit: async (e) => {
+    e.preventDefault();
+    const v = formValues(f);
+    if (v.wpa_legacy) v.staff_ssid = v.staff_ssid_legacy;
+    const r = await act(api("POST", "/api/router-setup", v));
+    if (!r) return;
+    showResult(r, v.router);
+  } },
+    card("1 · Router and server", null, h("div", { class: "form cols" },
+      h("label", { class: "field" }, "Router", h("span", { class: "help" }, "from the Routers page — its RADIUS secret goes in by itself"),
+        d.routers.length ? h("select", { name: "router" }, d.routers.map((r) => h("option", { value: r.nasname }, r.shortname ? `${r.shortname} (${r.nasname})` : r.nasname)))
+          : h("div", { class: "empty" }, h("a", { href: "#/routers" }, "Add the router first"))),
+      fld("This server's IP (as the router sees it)", "server_ip", { value: d.server_ip, placeholder: "10.10.10.10", required: true }),
+      fld("LAN interface", "lan_if", { value: "bridge" }, "where the users are: bridge, ether2, vlan20"),
+      h("div", {}),
+      fld("Server port (optional)", "server_if", { placeholder: "ether5" }, "the port the server's cable is in — taken out of the bridge"),
+      fld("Router address on that port", "server_net", { placeholder: "10.10.10.1/24" }))),
+    card("2 · What to set up", "tick what this router needs", h("div", { class: "parts" }, parts)),
+    h("div", { class: "toolbar" }, h("button", { class: "primary", type: "submit", disabled: !d.routers.length }, icon("term"), "Make the script")),
+    out);
+  let timer;
+  function showResult(r, router) {
+    clearInterval(timer);
+    const state = h("span", {}, badge("waiting for the router…"));
+    const copy = h("button", { type: "button", class: "primary", onclick: async () => {
+      try { await navigator.clipboard.writeText(r.line); toast("Copied"); } catch { toast("Select the line and copy it", true); }
+    } }, "Copy");
+    const dl = h("button", { type: "button", onclick: () => {
+      const a = h("a", { href: URL.createObjectURL(new Blob([r.script], { type: "text/plain" })), download: `ml-setup-${router}.rsc` });
+      document.body.append(a); a.click(); a.remove();
+    } }, icon("data"), "Download .rsc");
+    const pre = h("pre", { class: "rsc-view" }, r.script);
+    pre.style.display = "none";
+    out.replaceChildren(card("3 · Paste on the router", `${r.lines} lines · link works for 1 hour`,
+      h("ol", { class: "steps" },
+        h("li", {}, "Winbox → connect to the router → ", h("b", {}, "New Terminal"), "."),
+        h("li", {}, "Paste this one line and press ", h("b", {}, "Enter"), ":"),
+      ),
+      h("div", { class: "secret-box", id: "setup-line" }, r.line),
+      h("div", { class: "toolbar wrap" }, copy, dl, h("button", { type: "button", onclick: () => { pre.style.display = pre.style.display ? "" : "none"; } }, "Show the script"), h("span", { class: "grow" }), state),
+      h("div", { class: "muted small" }, "No internet path from router to server? Download the .rsc, drag it into Winbox → Files, then in the terminal: /import file-name=ml-setup.rsc"),
+      pre));
+    out.scrollIntoView({ behavior: "smooth" });
+    const poll = async () => {
+      if (!document.body.contains(state)) return clearInterval(timer);
+      try {
+        const s = await api("GET", `/api/router-setup/${r.token}`);
+        if (s.fetched) { state.replaceChildren(badge("router downloaded it ✔", "ok")); clearInterval(timer); }
+      } catch { clearInterval(timer); state.replaceChildren(badge("link expired")); }
+    };
+    timer = setInterval(poll, 4000);
+  }
+  shell("Router setup", h("div", { class: "stack" },
+    h("div", { class: "muted" }, "Makes one script for a MikroTik with this server's address, the router's secret and your names filled in. No file editing — copy one line into the router's terminal."),
+    f));
 };
 
 // ------------------------------------------------------------------ hotspot login page designer

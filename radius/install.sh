@@ -225,9 +225,11 @@ command -v cron >/dev/null || apt-get install -y -qq cron >/dev/null 2>&1 || war
 install -d -m 755 /usr/local/lib/mikrotiklover
 install -m 644 "$SCRIPT_DIR/tools/mlreport.py" /usr/local/lib/mikrotiklover/mlreport.py
 install -m 644 "$SCRIPT_DIR/tools/flowcollector.py" /usr/local/lib/mikrotiklover/flowcollector.py
-install -m 644 "$SCRIPT_DIR/tools/cdnmap.py" "$SCRIPT_DIR/tools/cdnlearn.py" "$SCRIPT_DIR/tools/cdn-apps.json" "$SCRIPT_DIR/tools/ports.py" "$SCRIPT_DIR/tools/appinv.py" "$SCRIPT_DIR/tools/vpn.py" "$SCRIPT_DIR/tools/sentinel.py" "$SCRIPT_DIR/tools/alerts.py" "$SCRIPT_DIR/tools/health.py" "$SCRIPT_DIR/tools/insights.py" "$SCRIPT_DIR/tools/minipdf.py" "$SCRIPT_DIR/tools/secreport.py" "$SCRIPT_DIR/tools/routerstat.py" "$SCRIPT_DIR/tools/hotspotgen.py" /usr/local/lib/mikrotiklover/
+install -m 644 "$SCRIPT_DIR/tools/cdnmap.py" "$SCRIPT_DIR/tools/cdnlearn.py" "$SCRIPT_DIR/tools/cdn-apps.json" "$SCRIPT_DIR/tools/ports.py" "$SCRIPT_DIR/tools/appinv.py" "$SCRIPT_DIR/tools/vpn.py" "$SCRIPT_DIR/tools/sentinel.py" "$SCRIPT_DIR/tools/alerts.py" "$SCRIPT_DIR/tools/health.py" "$SCRIPT_DIR/tools/insights.py" "$SCRIPT_DIR/tools/minipdf.py" "$SCRIPT_DIR/tools/secreport.py" "$SCRIPT_DIR/tools/routerstat.py" "$SCRIPT_DIR/tools/hotspotgen.py" "$SCRIPT_DIR/tools/routersetup.py" /usr/local/lib/mikrotiklover/
 install -d -m 755 /usr/local/lib/mikrotiklover/hotspot-login
 install -m 644 "$SCRIPT_DIR"/mikrotik/hotspot-login/*.html /usr/local/lib/mikrotiklover/hotspot-login/
+install -d -m 755 /usr/local/lib/mikrotiklover/mikrotik      # router scripts for the Router setup page
+install -m 644 "$SCRIPT_DIR"/mikrotik/*.rsc /usr/local/lib/mikrotiklover/mikrotik/
 install -d -m 755 /var/lib/mikrotiklover
 # Web-filter builder (router rules from policies, app lists and the VPN lists) — radius-admin policy build
 install -d -m 755 /usr/local/lib/mikrotiklover/webfilter/categories /usr/local/lib/mikrotiklover/webfilter/allowonly
@@ -323,6 +325,7 @@ GRANT INSERT ON \`$DB_NAME\`.web_audit TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_setting TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_status TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_stat TO 'radius_web'@'localhost';
+GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_setup TO 'radius_web'@'localhost';
 GRANT EXECUTE ON \`$DB_NAME\`.* TO 'radius_web'@'localhost';
 FLUSH PRIVILEGES;
 EOF

@@ -1594,6 +1594,14 @@ def router_key():
         return ""
 
 
+def autosync_text(server_ip, key, info):
+    if not (q1("SELECT v FROM ml_setting WHERE k='server_ip'") or {}).get("v"):
+        radius_admin(["security", "quarantine-server", server_ip], action=f"server IP {server_ip} (router script)")
+    tpl = open(os.path.join(HERE, "autosync.rsc"), encoding="utf-8").read()
+    return (tpl.replace("radius.example.lan", info["host"]).replace("192.168.88.10", server_ip)
+               .replace(":8443", f":{info['port']}").replace("PUT-THE-KEY-HERE", key))
+
+
 @app.get("/api/router/autosync.rsc")
 @login_required("admin")
 def router_autosync():
@@ -1603,15 +1611,10 @@ def router_autosync():
         abort(409, "build the router rules first")
     info = router_info()
     host = request.host.rsplit(":", 1)[0].strip("[]")
-    port = info["port"]
     server_ip = request.args.get("ip", "") or (host if re.match(r"^\d+\.\d+\.\d+\.\d+$", host) else "")
     if not re.match(r"^\d+\.\d+\.\d+\.\d+$", server_ip):
         abort(400, "give the server's IP address as the router sees it (?ip=...)")
-    if not (q1("SELECT v FROM ml_setting WHERE k='server_ip'") or {}).get("v"):
-        radius_admin(["security", "quarantine-server", server_ip], action=f"server IP {server_ip} (router script)")
-    tpl = open(os.path.join(HERE, "autosync.rsc"), encoding="utf-8").read()
-    text = (tpl.replace("radius.example.lan", info["host"]).replace("192.168.88.10", server_ip)
-               .replace(":8443", f":{port}").replace("PUT-THE-KEY-HERE", key))
+    text = autosync_text(server_ip, key, info)
     audit("router autosync script downloaded", "ok")
     return app.response_class(text, mimetype="text/plain",
                               headers={"Content-Disposition": 'attachment; filename="mikrotiklover-autosync.rsc"'})
@@ -1635,6 +1638,90 @@ def router_version():
 @app.get("/api/public/router/sync.rsc")
 def router_sync():
     return app.response_class(_router_file("sync.rsc"), mimetype="text/plain")
+
+
+# ------------------------------------------------------------------ router setup page
+MIKROTIK_DIR = os.environ.get("MLWEB_MIKROTIK", "/usr/local/lib/mikrotiklover/mikrotik")
+SETUP_TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+@app.get("/api/router-setup")
+@login_required("admin")
+def router_setup_info():
+    import routersetup
+    host = request.host.rsplit(":", 1)[0].strip("[]")
+    sip = (q1("SELECT v FROM ml_setting WHERE k='server_ip'") or {}).get("v") or (host if re.match(r"^\d+\.\d+\.\d+\.\d+$", host) else "")
+    routers = jsonable(q("SELECT nasname, shortname FROM nas ORDER BY nasname"))
+    return jsonify(server_ip=sip, routers=routers, has_key=bool(router_key()), port=web_port(),
+                   modules=[{"key": k, "file": f or "", "title": t} for k, f, t in routersetup.MODULES])
+
+
+@app.post("/api/router-setup")
+@login_required("admin")
+def router_setup_make():
+    """Builds the script for one router and keeps it for an hour behind a random token."""
+    import routersetup
+    data = body()
+    o = {k: data.get(k) for k in ("server_ip", "lan_if", "lan_net", "dns_name", "server_if", "server_net", "staff_ssid",
+                                  "devices_ssid", "devices_key", "pppoe_if")}
+    o = {k: (str(v).strip()[:128] if v is not None else "") for k, v in o.items()}
+    for k, _, _ in routersetup.MODULES:
+        o[k] = bool(data.get(k))
+    o["hotspot_create"], o["base_done"] = bool(data.get("hotspot_create")), bool(data.get("base_done"))
+    try:
+        routersetup._ip(o["server_ip"], "server IP")
+    except ValueError as e:
+        abort(400, str(e))
+    rip = str(data.get("router", ""))[:45]
+    row = q1("SELECT nasname, shortname, secret FROM nas WHERE nasname=%s", (rip,)) if valid_nas(rip) else None
+    if not row:
+        abort(400, "choose a router (add it on the Routers page first)")
+    o.update(router_ip=row["nasname"], router_name=row["shortname"] or row["nasname"], secret=row["secret"])
+    auto = ""
+    if o["autosync"]:
+        key = router_key()
+        if not key:
+            abort(400, "auto-sync: build the router rules first (Blocking → Build router rules)")
+        auto = autosync_text(o["server_ip"], key, router_info())
+    try:
+        text = routersetup.build(o, MIKROTIK_DIR, auto)
+    except ValueError as e:
+        abort(400, str(e))
+    except OSError:
+        abort(500, "router script files are missing (run install.sh again)")
+    token = secrets.token_hex(16)
+    q("DELETE FROM ml_router_setup WHERE expires < NOW()")
+    q("INSERT INTO ml_router_setup (token, router_ip, script, expires) VALUES (%s,%s,%s, NOW() + INTERVAL 1 HOUR)",
+      (token, row["nasname"], text))
+    audit(f"router setup script for {row['nasname']}", "ok")
+    url = f"https://{o['server_ip']}:{web_port()}/api/public/setup/{token}.rsc"
+    line = (f'/tool fetch url="{url}" check-certificate=no dst-path=ml-setup.rsc; :delay 2s; '
+            f'/import file-name=ml-setup.rsc; /file remove ml-setup.rsc')
+    return jsonify(ok=True, token=token, url=url, line=line, lines=text.count("\n"), script=text)
+
+
+@app.get("/api/public/setup/<token>.rsc")
+def router_setup_fetch(token):
+    """The router downloads its setup script here (the token is valid for one hour)."""
+    if not SETUP_TOKEN_RE.match(token):
+        abort(404)
+    row = q1("SELECT script FROM ml_router_setup WHERE token=%s AND expires > NOW()", (token,))
+    if not row:
+        abort(404)
+    q("UPDATE ml_router_setup SET fetched=fetched+1 WHERE token=%s", (token,))
+    return app.response_class(row["script"], mimetype="text/plain",
+                              headers={"Content-Disposition": 'attachment; filename="ml-setup.rsc"', "Cache-Control": "no-store"})
+
+
+@app.get("/api/router-setup/<token>")
+@login_required("admin")
+def router_setup_status(token):
+    if not SETUP_TOKEN_RE.match(token):
+        abort(404)
+    row = q1("SELECT fetched, TIMESTAMPDIFF(SECOND, NOW(), expires) AS left_s FROM ml_router_setup WHERE token=%s", (token,))
+    if not row:
+        abort(404)
+    return jsonify(fetched=int(row["fetched"]), seconds_left=max(0, int(row["left_s"])))
 
 
 # ------------------------------------------------------------------ network control: router health reports
