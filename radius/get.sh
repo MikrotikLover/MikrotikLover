@@ -123,7 +123,7 @@ env ${DOMAIN:+RADIUS_DOMAIN="$DOMAIN"} ${ORG:+CERT_ORG="$ORG"} ${ALLOW:+WEB_ALLO
 # ---------------------------------------------------------------- firewall
 if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; then
     if [ "$FIREWALL" = 1 ]; then
-        for p in 1812/udp 1813/udp 514/udp 2055/udp 53/udp 53/tcp "${PORT:-8443}/tcp" 8081/tcp; do ufw allow "$p" >/dev/null; done
+        for p in 1812/udp 1813/udp 514/udp 2055/udp 53/udp 53/tcp "${PORT:-8443}/tcp" 8081/tcp 8082/tcp; do ufw allow "$p" >/dev/null; done
         say "Firewall (ufw): RADIUS, router logs, traffic, DNS, dashboard and quarantine page opened"
     else
         warn "ufw is on: open the ports (docs/INSTALL.md 'Server firewall'), or run again with --firewall"

@@ -744,6 +744,200 @@ def blocked():
     return jsonify(rows=list(reversed(rows)), summary=summary[:200])
 
 
+# ------------------------------------------------------------------ block page (plain HTTP, through nginx :8082)
+_BP = {"users": {}, "dns": {}}
+REF_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def _bp_key_ok():
+    key = CONF.get("BLOCK_KEY", "")
+    return bool(key) and hmac.compare_digest(request.headers.get("X-ML-Block", ""), key)
+
+
+def _public_ip(host):
+    """The address to fetch an allowed page from: a public IPv4 of the host (never this server / LAN), else None."""
+    import socket
+    now = time.time()
+    hit = _BP["dns"].get(host)
+    if hit and now - hit[1] < 300:
+        return hit[0]
+    try:
+        ips = [ipaddress.ip_address(host)] if re.match(r"^[\d.]+$", host) else \
+            [ipaddress.ip_address(a[4][0]) for a in socket.getaddrinfo(host, 80, socket.AF_INET, socket.SOCK_STREAM)]
+    except (OSError, ValueError, UnicodeError):
+        ips = []
+    good = next((str(i) for i in ips if i.is_global and not i.is_multicast), None)
+    if any(not i.is_global for i in ips):
+        good = None                                  # a name that also points inside: refuse (no tricks with Host:)
+    if len(_BP["dns"]) > 5000:
+        _BP["dns"].clear()
+    _BP["dns"][host] = (good, now)
+    return good
+
+
+def block_decision(host, ip):
+    """-> (blocked: bool, info dict) for a plain-HTTP request of the device at `ip` to `host`."""
+    import cdnmap
+    import whyblocked
+    now = time.time()
+    hit = _BP["users"].get(ip)
+    if not hit or now - hit[2] > 30:
+        r = q1("SELECT username FROM radacct WHERE framedipaddress=%s AND acctstoptime IS NULL ORDER BY acctstarttime DESC LIMIT 1", (ip,))
+        user = r["username"] if r else ""
+        lst = ""
+        if user:
+            r = q1("SELECT value FROM radreply WHERE username=%s AND attribute='Mikrotik-Address-List' LIMIT 1", (user,)) or \
+                q1("""SELECT gr.value FROM radusergroup g JOIN radgroupreply gr ON gr.groupname=g.groupname
+                      AND gr.attribute='Mikrotik-Address-List' WHERE g.username=%s ORDER BY g.priority LIMIT 1""", (user,))
+            lst = r["value"] if r else ""
+        hit = (user, lst, now)
+        if len(_BP["users"]) > 5000:
+            _BP["users"].clear()
+        _BP["users"][ip] = hit
+    user, lst, _ = hit
+    policy = lst[7:] if lst.startswith("policy-") and POLICY_RE.match(lst[7:]) else ""
+    if not policy:
+        return False, {"user": user, "policy": ""}
+    try:
+        text = open(os.path.join(POLICY_DIR, policy + ".txt"), encoding="utf-8").read()
+    except OSError:
+        return False, {"user": user, "policy": policy}
+    try:
+        cat = cdnmap.catalog()
+    except Exception:                                       # noqa: BLE001
+        cat = None
+    r = whyblocked.explain(host, policy, text, datetime.now(), WF_DIR, cat)
+    act = next((x for x in r["rules"] if x["active"]), None)
+    return r["verdict"] == "blocked", {"user": user, "policy": policy, "rule": act["rule"] if act else "",
+                                       "why": act["why"] if act else "", "lists": r["lists"]}
+
+
+@app.get("/internal/blockcheck")
+def blockcheck():
+    """nginx auth_request for every proxied http:// request: 200 + X-ML-Upstream = go on, 403 = block page."""
+    if not _bp_key_ok():
+        abort(404)
+    import whyblocked
+    host = whyblocked.clean_host(request.headers.get("X-ML-Host", "")) or request.headers.get("X-ML-Host", "")
+    ip = request.headers.get("X-Real-IP", "")
+    try:
+        blocked, _ = block_decision(host, ip) if whyblocked.clean_host(host) else (False, {})
+    except Exception as e:                                  # noqa: BLE001 — a broken check must not stop the internet
+        print(f"blockcheck {host}: {e}", file=sys.stderr)
+        blocked = False
+    if blocked:
+        return app.response_class("blocked", status=403)
+    up = _public_ip(host)
+    if not up:
+        return app.response_class("not a public address", status=403)
+    return app.response_class("", status=200, headers={"X-ML-Upstream": up})
+
+
+def block_page_html(host, reason, rule, code, user, ip, when, st, logo=""):
+    from html import escape as e
+    c1 = st.get("hs_color1") if re.match(r"^#[0-9a-fA-F]{6}$", st.get("hs_color1") or "") else "#1d4ed8"
+    c2 = st.get("hs_color2") if re.match(r"^#[0-9a-fA-F]{6}$", st.get("hs_color2") or "") else "#0ea5e9"
+    brand, contact = st.get("hs_title") or st.get("brand") or "WiFi", st.get("contact") or ""
+    img = f'<img class="logo" src="{logo}" alt="">' if re.match(r"^data:image/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$", logo or "") else ""
+    rows = "".join(f"<b>{k}</b><span>{e(v)}</span>" for k, v in (("Site", host), ("Wajah (reason)", reason), ("Rule", rule),
+                                                                  ("User", user or "-"), ("Device", ip), ("Waqt", when)) if v)
+    return f"""<!doctype html><html lang="ur-Latn"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Site band hai — {e(brand)}</title>
+<style>
+*{{box-sizing:border-box}}body{{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:linear-gradient(135deg,{c1},{c2});
+min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;color:#0f172a}}
+.card{{background:#fff;border-radius:18px;max-width:460px;width:100%;padding:26px 22px;box-shadow:0 20px 50px rgba(0,0,0,.25);text-align:center}}
+.logo{{max-width:160px;max-height:80px;margin:0 auto 10px;display:block}}.brand{{font-weight:700;color:#475569;margin-bottom:14px}}
+.icon{{width:58px;height:58px;border-radius:50%;background:#fee2e2;color:#b91c1c;font-size:30px;font-weight:800;line-height:58px;margin:0 auto 10px}}
+h1{{font-size:21px;margin:0 0 6px}}p{{margin:6px 0;color:#334155;line-height:1.5}}.muted{{color:#64748b;font-size:13px}}
+.kv{{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;text-align:left;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:12px;margin:14px 0;font-size:14px;word-break:break-word}}
+.kv b{{color:#475569;font-weight:600}}.ref{{display:inline-block;font:700 22px ui-monospace,Menlo,monospace;letter-spacing:3px;background:#0f172a;color:#fff;border-radius:10px;padding:8px 14px;margin:6px 0}}
+</style></head><body><main class="card">{img}<div class="brand">{e(brand)}</div><div class="icon" aria-hidden="true">!</div>
+<h1>Yeh website band hai</h1><p>This website is blocked on this network.</p>
+<div class="kv">{rows}</div>
+<p>Ghalti se band lag rahi hai? Admin ko yeh code batayein:</p><div class="ref">{e(code)}</div>
+<p class="muted">{e(contact) if contact else "Network admin"}</p></main></body></html>"""
+
+
+@app.get("/internal/blockpage")
+def blockpage():
+    """The branded block page (nginx error_page for a 403 of blockcheck). Every page shown gets a reference code."""
+    if not _bp_key_ok():
+        abort(404)
+    import whyblocked
+    host = whyblocked.clean_host(request.headers.get("X-ML-Host", "")) or request.headers.get("X-ML-Host", "")[:253]
+    ip = request.headers.get("X-Real-IP", "")[:45]
+    uri = request.headers.get("X-ML-Uri", "/")[:255]
+    accept = request.headers.get("Accept", "")
+    try:
+        blocked, info = block_decision(host, ip) if whyblocked.clean_host(host) else (False, {})
+    except Exception:                                       # noqa: BLE001
+        blocked, info = False, {}
+    if not blocked:
+        return app.response_class("This address cannot be opened through this network.\n", status=403, mimetype="text/plain")
+    if "text/html" not in accept and not uri.endswith("/"):
+        return app.response_class("blocked\n", status=403, mimetype="text/plain")    # images / scripts of a blocked site
+    row = q1("SELECT code FROM ml_block_event WHERE ip=%s AND host=%s AND at > NOW() - INTERVAL 10 MINUTE ORDER BY at DESC LIMIT 1", (ip, host))
+    if row:
+        code = row["code"]
+    else:
+        code = "".join(secrets.choice(REF_ALPHABET) for _ in range(6))
+        q("INSERT INTO ml_block_event (code, ip, username, host, path, policy, rule, why) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+          (code, ip, info.get("user", "")[:64], host, uri, info.get("policy", ""), info.get("rule", "")[:160], info.get("why", "")[:255]))
+        if secrets.randbelow(50) == 0:
+            q("DELETE FROM ml_block_event WHERE at < NOW() - INTERVAL 30 DAY")
+    st = settings_get()
+    st.update({r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k IN ('hs_title','hs_color1','hs_color2')")})
+    try:
+        logo = open(os.path.join(STATE_DIR, "hotspot-logo.txt"), encoding="ascii").read().strip()
+    except OSError:
+        logo = ""
+    page = block_page_html(host, info.get("why", ""), info.get("rule", ""), code, info.get("user", ""), ip,
+                           datetime.now().strftime("%Y-%m-%d %H:%M"), st, logo)
+    return app.response_class(page, status=403, mimetype="text/html",
+                              headers={"X-ML-CSP": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'"})
+
+
+@app.get("/api/blockpage")
+@login_required()
+def blockpage_status():
+    st = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k IN ('blockpage_on','server_ip')")}
+    n = q1("SELECT COUNT(*) AS n FROM ml_block_event WHERE at > NOW() - INTERVAL 1 DAY")
+    return jsonify(on=st.get("blockpage_on") == "1", server_ip=st.get("server_ip", ""), today=int(n["n"]) if n else 0)
+
+
+@app.post("/api/blockpage")
+@login_required("admin")
+def blockpage_set():
+    return result(*radius_admin(["blockpage", "on" if body().get("on") else "off"]))
+
+
+@app.get("/api/blockpage/preview")
+@login_required()
+def blockpage_preview():
+    st = settings_get()
+    st.update({r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k IN ('hs_title','hs_color1','hs_color2')")})
+    try:
+        logo = open(os.path.join(STATE_DIR, "hotspot-logo.txt"), encoding="ascii").read().strip()
+    except OSError:
+        logo = ""
+    page = block_page_html("www.example-game.com", "'example-game.com' is in the gaming list", "block gaming time=9h-17h,mon,tue,wed,thu,fri",
+                           "AB3K7Q", "ali", "192.168.88.23", datetime.now().strftime("%Y-%m-%d %H:%M"), st, logo)
+    return app.response_class(page, mimetype="text/html", headers={"X-ML-Preview": "1"})
+
+
+@app.get("/api/why/ref/<code>")
+@login_required()
+def why_ref(code):
+    code = code.strip().upper()
+    if not re.match(r"^[A-Z0-9]{6}$", code):
+        abort(400, "a reference code has 6 letters / digits")
+    row = q1("SELECT code, at, ip, username, host, path, policy, rule, why FROM ml_block_event WHERE code=%s", (code,))
+    if not row:
+        abort(404, f"no block page with code {code} (kept 30 days)")
+    return jsonify(event=jsonable([row])[0])
+
+
 @app.get("/api/why")
 @login_required()
 def why_blocked():

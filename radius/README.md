@@ -1102,7 +1102,17 @@ User kahe "yeh site nahi khul rahi": dashboard → **Blocking → Why blocked?**
 - Pichle 7 din ke router log ke blocked attempts us site ke.
 - **Blocking logs** mein har line ke saath **Why?** button — seedha yahan bhar deta hai.
 - CLI: `radius-admin why facebook.com ali` (ya IP). Engine: `tools/whyblocked.py` — router wale qaayde (subdomain, `*`, ^keyword, time=). Tests: `tests/test-whyblocked.py` (34 checks).
-- Users ke liye logo wala block page abhi nahi (HTTPS ki wajah se sirf certificate wale devices par dikh sakta hai) — baad mein.
+- Block page ka **6 harf ka code** bhi yahin likhein (maslan `XVR6JW`): kis ko, kab, kaun sa address, kaun sa rule — sab khul jata hai.
+
+## 7q. Block page (safe) — user ko logo, wajah aur code
+
+Dashboard → **Blocking → Why blocked? → Block page for users** on (ya `radius-admin blockpage on`; pehle `security quarantine-server IP`).
+- Jin users par policy hai, un ka **http:// (port 80)** traffic router auto-sync se server ke nginx **:8082** par bhejta hai.
+- Server har request par poochta hai (`/internal/blockcheck`, nginx ka secret key zaroori): band ho to **block page** — Hotspot designer wala logo, rang, naam; site, wajah, rule, user, waqt aur **reference code**. Warna request asal site par chali jati hai (sirf public address; localhost / LAN / server ke apne ports kabhi nahi).
+- Code `ml_block_event` mein 30 din; 10 minute mein usi site ka dobara page = wahi code. Admin: Why blocked? mein code likhein, ya `radius-admin blockpage ref CODE`.
+- **HTTPS sites** par browser ka apna error hi aata hai (koi certificate install nahi hota — is liye "safe"). Kuch browsers HTTPS fail hone par http:// try karte hain — tab page dikh jata hai.
+- LAN / private addresses kabhi redirect nahi hote; server band ho to router ka netwatch yeh rasta khud band kar deta hai (internet nahi rukta).
+- Tests: `tests/test-blockpage.sh` (27 checks).
 
 ## 7e. Health check — sab theek hai?
 

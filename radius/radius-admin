@@ -706,6 +706,52 @@ cmd_log() {
     echo "SELECT authdate AS time, username AS user, reply AS result FROM radpostauth ORDER BY id DESC LIMIT $n;" | dbt
 }
 
+# ======================================================================= block page (plain HTTP)
+# Users with a web-filter policy: their http:// requests go through this server (nginx :8082). Blocked ->
+# branded page with a reference code; else the request goes on. HTTPS is not touched (no certificates).
+blockpage_rsc() {
+    local sip p n=0
+    sip=$(setting_get server_ip)
+    echo "# Block page (radius-admin blockpage): http:// of users with a policy -> this server's block page (:8082)"
+    echo '/ip firewall nat remove [find comment="mlblockpage"]'
+    echo '/tool netwatch remove [find comment="mlblockpage"]'
+    echo '/ip firewall address-list remove [find comment="mlblockpage"]'
+    [ "$(setting_get blockpage_on)" = 1 ] && [[ $sip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 0
+    for p in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 224.0.0.0/4; do
+        echo "/ip firewall address-list add list=ml-private address=$p comment=\"mlblockpage\""
+    done
+    for p in "$POLICY_DIR"/*.txt; do
+        p=$(basename "$p" .txt); [[ $p =~ ^[a-z0-9-]{1,40}$ ]] || continue
+        echo "/ip firewall nat add chain=dstnat src-address-list=policy-$p dst-address-list=!ml-private protocol=tcp dst-port=80 action=dst-nat to-addresses=$sip to-ports=8082 comment=\"mlblockpage\""
+        n=$((n+1))
+    done
+    [ "$n" -gt 0 ] || return 0
+    echo "/tool netwatch add host=$sip interval=30s timeout=2s comment=\"mlblockpage\" up-script=\"/ip firewall nat enable [find comment=\\\"mlblockpage\\\"]\" down-script=\"/ip firewall nat disable [find comment=\\\"mlblockpage\\\"]\""
+}
+
+cmd_blockpage() {
+    case ${1:-status} in
+    status)
+        echo "Block page : $([ "$(setting_get blockpage_on)" = 1 ] && echo on || echo off)   (radius-admin blockpage on|off)"
+        echo "Server IP  : $(setting_get server_ip)   (radius-admin security quarantine-server IP)"
+        echo "Shown today: $(echo "SELECT COUNT(*) FROM ml_block_event WHERE at > NOW() - INTERVAL 1 DAY" | db)"
+        echo "SELECT code, at, username AS user, ip, host, rule FROM ml_block_event ORDER BY at DESC LIMIT 10" | dbt ;;
+    on)
+        [[ $(setting_get server_ip) =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "First: radius-admin security quarantine-server IP (this server's IP as the routers see it)"
+        setting_set blockpage_on 1; cmd_policy build >/dev/null 2>&1 || true
+        ok "Block page on: users with a policy see it for blocked http:// sites (routers: auto-sync). HTTPS sites still show the browser's own error" ;;
+    off)
+        setting_set blockpage_on 0; cmd_policy build >/dev/null 2>&1 || true
+        ok "Block page off (routers drop the redirect at the next auto-sync)" ;;
+    ref)
+        local c=${2:-}; c=${c^^}; [[ $c =~ ^[A-Z0-9]{6}$ ]] || die "usage: radius-admin blockpage ref CODE   (6 letters/digits from the page)"
+        local r; r=$(echo "SELECT code, at, username AS user, ip, host, path, policy, rule, why FROM ml_block_event WHERE code=$(q "$c")" | dbt)
+        [ -n "$r" ] || die "No block page with code $c (kept 30 days)"
+        echo "$r" ;;
+    *) die "usage: radius-admin blockpage status | on | off | ref CODE" ;;
+    esac
+}
+
 # ======================================================================= why blocked?
 cmd_why() {
     local site=${1:-} who=${2:-} u="" lst="" pol=""
@@ -1658,6 +1704,8 @@ RSC
             ipbind_rsc
             echo
             dept_rsc
+            echo
+            blockpage_rsc
         } > "$lists/sync.rsc"
         install -m 644 "$lists/webfilter-policies.rsc" "$lists/vpn-servers.rsc" "$lists/sync.rsc" "$ROUTER_DIR/"
         sha256sum "$ROUTER_DIR/sync.rsc" | cut -c1-16 > "$ROUTER_DIR/version.tmp"
@@ -1883,6 +1931,7 @@ GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_status TO 'radius_web'@'l
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_stat TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_setup TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE ON \`$DB_NAME\`.ml_traffic TO 'radius_web'@'localhost';
+GRANT INSERT, DELETE ON \`$DB_NAME\`.ml_block_event TO 'radius_web'@'localhost';
 GRANT EXECUTE ON \`$DB_NAME\`.* TO 'radius_web'@'localhost';
 FLUSH PRIVILEGES;
 EOF
@@ -2773,6 +2822,8 @@ IP binding: every user keeps one address (DHCP static lease on the routers, foll
 
 Why blocked?
   why SITE [USER|IP]                    which list / policy rule blocks a site for a user, and is it active now
+  blockpage on|off                      users with a policy see a page (logo, reason, code) for blocked http:// sites
+  blockpage ref CODE | status           look up the code a user read from the page
 
 Departments: one shared speed for a team (1 user online gets all of it, 10 users share it)
   dept list | show NAME                 departments, members, who is online
@@ -2923,6 +2974,7 @@ case ${1:-help} in
     ipbind)  shift; cmd_ipbind "$@" ;;
     dept)    shift; cmd_dept "$@" ;;
     why)     shift; cmd_why "$@" ;;
+    blockpage) shift; cmd_blockpage "$@" ;;
     traffic-collect) traffic_collect; ok "Traffic counted" ;;
     hotspot) shift; cmd_hotspot "$@" ;;
     social)  shift; cmd_social "$@" ;;

@@ -309,13 +309,15 @@ if [ "$WEB" = 1 ]; then
 
     WEB_DIR=/etc/mikrotiklover-radius-web
     install -d -m 750 -o root -g mlweb "$WEB_DIR"
-    WEB_DB_PASS="" SECRET_KEY=""
+    WEB_DB_PASS="" SECRET_KEY="" BLOCK_KEY=""
     if [ -f "$WEB_DIR/web.conf" ]; then
         WEB_DB_PASS=$(sed -n 's/^WEB_DB_PASS=//p' "$WEB_DIR/web.conf")
         SECRET_KEY=$(sed -n 's/^SECRET_KEY=//p' "$WEB_DIR/web.conf")
+        BLOCK_KEY=$(sed -n 's/^BLOCK_KEY=//p' "$WEB_DIR/web.conf")
     fi
     WEB_DB_PASS=${WEB_DB_PASS:-$(openssl rand -hex 16)}
     SECRET_KEY=${SECRET_KEY:-$(openssl rand -hex 32)}
+    BLOCK_KEY=${BLOCK_KEY:-$(openssl rand -hex 24)}     # nginx (block page proxy) -> app
     mysql <<EOF
 CREATE USER IF NOT EXISTS 'radius_web'@'localhost' IDENTIFIED BY '$WEB_DB_PASS';
 ALTER USER 'radius_web'@'localhost' IDENTIFIED BY '$WEB_DB_PASS';
@@ -327,6 +329,7 @@ GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_status TO 'radius_web'@'l
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_stat TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_setup TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE ON \`$DB_NAME\`.ml_traffic TO 'radius_web'@'localhost';
+GRANT INSERT, DELETE ON \`$DB_NAME\`.ml_block_event TO 'radius_web'@'localhost';
 GRANT EXECUTE ON \`$DB_NAME\`.* TO 'radius_web'@'localhost';
 FLUSH PRIVILEGES;
 EOF
@@ -338,6 +341,7 @@ DB_NAME=$DB_NAME
 WEB_DB_USER=radius_web
 WEB_DB_PASS=$WEB_DB_PASS
 SECRET_KEY=$SECRET_KEY
+BLOCK_KEY=$BLOCK_KEY
 BIND=127.0.0.1:8099
 EOF
     cat > "$WEB_DIR/my.cnf" <<EOF
@@ -420,6 +424,50 @@ EOF
         echo "        proxy_pass http://127.0.0.1:8099;"
         echo '        proxy_set_header Host $host;'
         echo '        proxy_set_header X-Forwarded-For $remote_addr;'
+        echo "    }"
+        echo "}"
+        echo
+        echo "# Block page (plain HTTP): the routers send the http:// requests of users with a web-filter policy here"
+        echo "# (radius-admin blockpage on). The app says per request: blocked -> branded block page, else the request"
+        echo "# goes on to the address the app checked (public addresses only, never this server or the LAN)."
+        echo "server {"
+        echo "    listen 8082;"
+        echo "    server_name _;"
+        echo "    server_tokens off;"
+        echo "    allow 10.0.0.0/8; allow 172.16.0.0/12; allow 192.168.0.0/16; allow 100.64.0.0/10; allow 127.0.0.1;"
+        echo "    deny all;"
+        echo "    client_max_body_size 0;"
+        echo "    location = /__mlcheck {"
+        echo "        internal;"
+        echo "        proxy_pass http://127.0.0.1:8099/internal/blockcheck;"
+        echo "        proxy_pass_request_body off;"
+        echo '        proxy_set_header Content-Length "";'
+        echo "        proxy_set_header X-ML-Block $BLOCK_KEY;"
+        echo '        proxy_set_header X-ML-Host $host;'
+        echo '        proxy_set_header X-Real-IP $remote_addr;'
+        echo "    }"
+        echo "    location @mlblocked {"
+        echo "        rewrite ^ /internal/blockpage break;"
+        echo "        proxy_pass http://127.0.0.1:8099;"
+        echo '        proxy_method GET;'
+        echo '        proxy_pass_request_body off;'
+        echo '        proxy_set_header Content-Length "";'
+        echo "        proxy_set_header X-ML-Block $BLOCK_KEY;"
+        echo '        proxy_set_header X-ML-Host $host;'
+        echo '        proxy_set_header X-ML-Uri $request_uri;'
+        echo '        proxy_set_header X-Real-IP $remote_addr;'
+        echo "    }"
+        echo "    location / {"
+        echo "        auth_request /__mlcheck;"
+        echo '        auth_request_set $ml_up $upstream_http_x_ml_upstream;'
+        echo "        error_page 403 = @mlblocked;"
+        echo '        proxy_pass http://$ml_up$request_uri;'
+        echo '        proxy_set_header Host $http_host;'
+        echo "        proxy_http_version 1.1;"
+        echo '        proxy_set_header Connection "";'
+        echo "        proxy_buffering off;"
+        echo "        proxy_request_buffering off;"
+        echo "        proxy_read_timeout 300s;"
         echo "    }"
         echo "}"
     } > /etc/nginx/sites-available/mikrotiklover

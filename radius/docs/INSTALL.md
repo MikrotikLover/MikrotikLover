@@ -161,6 +161,8 @@ sudo ufw allow from 192.168.0.0/16 to any port 53
 sudo ufw allow 8443/tcp                                          # dashboard + router auto-sync
 sudo ufw allow from 10.0.0.0/8 to any port 8081 proto tcp       # quarantine warning page (apne LAN subnets)
 sudo ufw allow from 192.168.0.0/16 to any port 8081 proto tcp
+sudo ufw allow from 10.0.0.0/8 to any port 8082 proto tcp       # block page (radius-admin blockpage on)
+sudo ufw allow from 192.168.0.0/16 to any port 8082 proto tcp
 sudo ufw enable
 ```
 
@@ -313,6 +315,7 @@ Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein
 | Department ki shared speed (maslan Sales 10M: 1 user ho to poori, 10 hon to baant lein) | Departments | `radius-admin dept add sales 10M 5M` · `dept member sales user ali` / `group staff` |
 | Traffic graphs (interface / user / group / department) | Traffic graphs | khud chalta hai: interfaces router report se (auto-sync), users accounting se (har 5 min) |
 | Site kyun band hai? (kaun si list / policy rule, abhi active?) | Blocking → Why blocked? | `radius-admin why facebook.com ali` |
+| Block page users ke liye (logo, wajah, code — http:// sites) | Blocking → Why blocked? → Block page | `radius-admin blockpage on` · `blockpage ref CODE` (ufw: 8082/tcp LAN se) |
 | Alerts phone par (Telegram / WhatsApp / Email) | Settings → Alerts | `radius-admin alerts telegram BOT_TOKEN` · `alerts whatsapp 923001234567 APIKEY` · `alerts test` |
 | Off-site backup (doosra server / Google Drive) | Settings → Off-site copy | `radius-admin backup offsite ssh user@host:/backups` ya `backup offsite rclone gdrive:ml` |
 | Infected device quarantine (khud) | Security → Protection | `radius-admin security quarantine-auto on` |
@@ -456,6 +459,7 @@ Log files: `/var/log/mikrotik/` (`dns.log`, `webfilter.log`, `router.log`, `traf
 | UDP 514 | Router → server | Router logs |
 | TCP 8443 | Browser / router → server | Dashboard, connect guide, router auto-sync |
 | TCP 8081 | Quarantined device → server | Warning page for infected devices (plain HTTP) |
+| TCP 8082 | Users with a policy → server | Block page proxy for http:// (radius-admin blockpage on) |
 | TCP 22 (ya jo port diya) | Server → backup server | Off-site backup (SSH), sirf jab set ho |
 | TCP 443 / 587 | Server → internet | Alerts: Telegram, CallMeBot (WhatsApp), SMTP email |
 

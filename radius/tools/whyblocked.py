@@ -29,7 +29,18 @@ def clean_host(s):
     return s if HOST_RE.match(s) and "*" not in s and "." in s else ""
 
 
+_LISTS = {}
+
+
 def read_list(path):
+    """Entries of a list file (comments dropped); cached until the file changes."""
+    try:
+        mt = os.path.getmtime(path)
+    except OSError:
+        return []
+    hit = _LISTS.get(path)
+    if hit and hit[0] == mt:
+        return hit[1]
     out = []
     try:
         for line in open(path, encoding="utf-8", errors="replace"):
@@ -38,6 +49,7 @@ def read_list(path):
                 out.append(d)
     except OSError:
         pass
+    _LISTS[path] = (mt, out)
     return out
 
 

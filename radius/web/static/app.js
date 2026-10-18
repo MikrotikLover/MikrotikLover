@@ -2044,18 +2044,30 @@ async function parentalPage() {
 
 const blockingTabs = (tab) => h("div", { class: "tabs" }, [["policies", "Policies"], ["parental", "Parental controls"], ["logs", "Blocking logs"], ["why", "Why blocked?"]]
   .map(([k, l]) => h("a", { href: `#/blocking/${k}`, class: k === tab ? "active" : "" }, l)));
-async function whyBlocked(site = "", who = "") {
-  const siteIn = h("input", { type: "search", value: site, placeholder: "website, e.g. facebook.com or a full link", class: "grow" });
+async function whyBlocked(site = "", who = "", ref = "") {
+  const siteIn = h("input", { type: "search", value: site, placeholder: "website, link, or the 6-letter code from the block page", class: "grow" });
   const whoIn = h("input", { type: "search", value: who, placeholder: "user or IP (optional)", list: "why-users" });
   const holder = h("div", { class: "stack" });
   const go = () => { location.hash = `#/blocking/why/${encodeURIComponent(siteIn.value.trim())}/${encodeURIComponent(whoIn.value.trim())}`; };
   const form = h("form", { class: "toolbar wrap", onsubmit: (e) => { e.preventDefault(); go(); } }, siteIn, whoIn, h("button", { class: "primary", type: "submit" }, icon("search"), "Check"));
   const VERDICT = { blocked: ["BLOCKED now", "bad"], "blocked-other-times": ["blocked at other times", "warn"], allowed: ["not blocked by the policy", "ok"], "no-policy": ["no policy", ""] };
-  if (site) {
+  if (/^[A-Za-z0-9]{6}$/.test(site) && !site.includes(".")) {          // reference code from the block page
     try {
+      const { event: ev } = await api("GET", `/api/why/ref/${site}`);
+      location.replace(`#/blocking/why/${encodeURIComponent(ev.host)}/${encodeURIComponent(ev.username || ev.ip)}/${ev.code}`);
+    } catch (e) { holder.replaceChildren(h("div", { class: "note" }, e.message)); }
+  } else if (site) {
+    try {
+      let ev = null;
+      if (ref) ev = (await api("GET", `/api/why/ref/${ref}`).catch(() => ({}))).event || null;
       const d = await api("GET", `/api/why?${new URLSearchParams({ site, user: who })}`);
       const [vt, vk] = VERDICT[d.verdict] || [d.verdict, ""];
       holder.replaceChildren(
+        ev ? card(`Block page ${ev.code}`, ev.at, h("div", { class: "kv-grid" },
+          h("b", {}, "Shown to"), h("span", {}, `${ev.username || "(no login)"} · ${ev.ip}`),
+          h("b", {}, "Address"), h("code", {}, `http://${ev.host}${ev.path}`),
+          h("b", {}, "Rule then"), h("code", {}, ev.rule || "—"), h("b", {}, "Policy"), h("span", {}, ev.policy || "—"),
+          h("b", {}, "Why"), h("span", {}, ev.why || "—"))) : null,
         card(d.host, d.user ? `user ${d.user}${d.ip ? " · " + d.ip : ""} · ${d.at}` : d.at,
           h("div", { class: "why-verdict" }, badge(vt, vk), h("b", {}, d.summary)),
           d.notes.map((n) => h("div", { class: "note" }, n)),
@@ -2077,9 +2089,19 @@ async function whyBlocked(site = "", who = "") {
     } catch (e) { holder.replaceChildren(h("div", { class: "note" }, e.message)); }
   }
   const users = await api("GET", "/api/users").then((r) => (r.users || []).map((u) => u.username)).catch(() => []);
+  const bp = await api("GET", "/api/blockpage").catch(() => ({ on: false, server_ip: "", today: 0 }));
+  const frame = h("iframe", { class: "bp-preview", title: "block page preview", sandbox: "" });
+  const bpCard = card("Block page for users", bp.on ? `on · shown ${bp.today} time(s) today` : "off",
+    h("label", { class: "check" + (bp.on ? " on" : "") }, h("input", { type: "checkbox", checked: bp.on, disabled: !isAdmin(),
+      onchange: async (e) => { if (!(await act(api("POST", "/api/blockpage", { on: e.target.checked })))) e.target.checked = !e.target.checked; route(); } }),
+      h("div", {}, h("b", {}, "Show a page with the logo, the reason and a code"),
+        h("span", {}, "For users with a policy, on blocked http:// sites (routers send port 80 to this server, :8082). HTTPS sites still show the browser's own error — no certificates are installed. The user tells you the code; type it above."))),
+    !bp.server_ip ? h("div", { class: "note" }, "First set this server's IP: Security → Protection & lists (or radius-admin security quarantine-server IP).") : null,
+    h("details", {}, h("summary", {}, "Preview (logo and colours from the Hotspot page designer)"), h("div", { class: "bp-wrap" }, frame)));
+  frame.src = "/api/blockpage/preview";
   shell("Blocking", h("div", { class: "stack" }, blockingTabs("why"),
     h("div", { class: "note" }, "A user says a site does not open? Type the site and the user: you see which list it is on, which rule of their policy blocks it, whether that rule is active right now, and the router log lines. Tip: \"Why?\" in Blocking logs fills this in."),
-    card(null, null, form, h("datalist", { id: "why-users" }, users.map((u) => h("option", { value: u })))), holder));
+    card(null, null, form, h("datalist", { id: "why-users" }, users.map((u) => h("option", { value: u })))), holder, bpCard));
   if (!site) siteIn.focus();
 }
 

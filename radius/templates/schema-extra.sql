@@ -437,3 +437,18 @@ CREATE TABLE IF NOT EXISTS ml_dept_member (
   PRIMARY KEY (kind, name),                 -- a user / group is in one department
   KEY (dept)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Block page: every page shown to a user gets a reference code the admin can look up (Blocking -> Why blocked?)
+CREATE TABLE IF NOT EXISTS ml_block_event (
+  code CHAR(6) NOT NULL PRIMARY KEY,
+  at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ip VARCHAR(45) NOT NULL DEFAULT '',
+  username VARCHAR(64) NOT NULL DEFAULT '',
+  host VARCHAR(253) NOT NULL DEFAULT '',
+  path VARCHAR(255) NOT NULL DEFAULT '',
+  policy VARCHAR(40) NOT NULL DEFAULT '',
+  rule VARCHAR(160) NOT NULL DEFAULT '',
+  why VARCHAR(255) NOT NULL DEFAULT '',
+  KEY (at),
+  KEY (ip, host)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

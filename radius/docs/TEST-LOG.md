@@ -119,3 +119,5 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 19:49 | Traffic graphs + Departments pages: desktop + phone, hover values, limit line; full UI suite + 8 other suites regress | ok — no console errors (shots 98-103) |
 | 20:01 | Why blocked? finder: lists (category/app/keywords/VPN), policy rule + active now (time=, over midnight, seconds), allow-only, block-all, quarantine, exempt, DNS note | ok — tests/test-whyblocked.py 34 checks |
 | 20:01 | Why blocked? tab + 'Why?' button in Blocking logs, CLI radius-admin why; fix: 0s-1s windows need seconds | ok — desktop + phone, no console errors (shots 104-106); all suites regress ok |
+| 20:16 | Block page (safe): router sends http:// of policy users to nginx :8082; blocked -> branded page (hotspot logo/colours) + 6-letter code; else on to the checked public address | ok |
+| 20:16 | Block page safety: nginx key needed, localhost / LAN / server ports refused, images get a short answer, same code within 10 min, netwatch off when server down, lint ok | ok — tests/test-blockpage.sh 27 checks; all suites + UI regress ok (shots 107-109) |
