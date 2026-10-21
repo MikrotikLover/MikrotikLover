@@ -6,6 +6,11 @@ let me = null;            // {user, role, csrf}
 let timers = [];          // page refresh timers, cleared on navigation
 
 // ------------------------------------------------------------------ DOM helper
+// like h(): replaceChildren(a, cond ? b : null, [c, d]) skips the empty ones instead of writing "null"
+const _replaceChildren = Element.prototype.replaceChildren;
+Element.prototype.replaceChildren = function (...kids) {
+  return _replaceChildren.apply(this, kids.flat(Infinity).filter((k) => k !== null && k !== undefined && k !== false));
+};
 function h(tag, attrs = {}, ...kids) {
   const el = document.createElementNS(tag === "svg" || attrs._svg ? "http://www.w3.org/2000/svg" : "http://www.w3.org/1999/xhtml", tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -238,7 +243,17 @@ function shell(title, content, actions) {
 }
 
 const ROUTES = {};
-async function route() {
+// One page is drawn at a time. A click while a page is still loading waits for it and then draws the
+// newest page — before, a slow page that finished late was drawn over the page the user went to.
+let routeBusy = null, routeAgain = false;
+function route() {
+  if (routeBusy) { routeAgain = true; return routeBusy; }
+  routeBusy = (async () => {
+    do { routeAgain = false; await routeOnce(); } while (routeAgain);
+  })().finally(() => { routeBusy = null; });
+  return routeBusy;
+}
+async function routeOnce() {
   timers.forEach(clearInterval); timers = [];
   if (!me) return renderLogin();
   const [, page = "dashboard", ...rest] = location.hash.split("/");
@@ -246,7 +261,8 @@ async function route() {
   try { await fn(...rest.map(decodeURIComponent)); }
   catch (e) { if (e.message !== "login required") shell("Error", card(null, null, h("div", { class: "note" }, e.message))); }
 }
-window.addEventListener("hashchange", route);
+// another page (link, Back button): a dialog of the old page must not stay open on top of it
+window.addEventListener("hashchange", () => { document.querySelectorAll("dialog[open]").forEach((d) => d.close()); route(); });
 const every = (ms, fn) => timers.push(setInterval(fn, ms));
 
 // ------------------------------------------------------------------ login
@@ -1984,7 +2000,7 @@ ROUTES.blocking = async (tab = "overview", ...rest) => {
   if (tab === "requests") return unblockRequests();
   if (tab === "apps") return appProfiles();
   if (tab === "web") return allowedWebsites();
-  if (tab === "policies") return blockingPolicies(rest[0]);
+  if (tab === "policies") return blockingPolicies(rest[0], rest[1]);
   return blockingOverview();
 };
 
@@ -2071,7 +2087,7 @@ async function blockingOverview() {
         h("li", {}, h("b", {}, "Users see a block page"), " with a code and can ask to open the site (Requests).")))));
 }
 
-async function blockingPolicies(action) {
+async function blockingPolicies(action, which) {
   const [meta, ul] = await Promise.all([api("GET", "/api/blocking"), api("GET", "/api/users")]);
   const search = h("input", { type: "search", placeholder: "Search policies, users, rules …" });
   const show = h("select", {}, [["all", "All policies"], ["used", "In use"], ["unused", "Not used"]].map(([v, l]) => h("option", { value: v }, l)));
@@ -2114,6 +2130,8 @@ async function blockingPolicies(action) {
     hint("A policy is a set of rules. Give it to users or groups; one user has one policy (own, else the group's).")));
   if (action === "new" && isAdmin()) { history.replaceState(null, "", "#/blocking/policies"); openPolicyEditor(meta, null); }
   if (action === "give" && isAdmin()) { history.replaceState(null, "", "#/blocking/policies"); givePolicyDialog(meta, ul.users); }
+  const target = meta.policies.find((p) => p.name === which);
+  if (action === "edit" && target && isAdmin()) { history.replaceState(null, "", "#/blocking/policies"); openPolicyEditor(meta, target); }
 }
 
 // ------------------------------------------------------------------ VPN watch: who tries a VPN + the automatic VPN lists
@@ -2287,9 +2305,8 @@ async function allowedWebsites() {
       x.scanning ? h("div", { class: "stack tight" }, meter(Math.round(100 * x.scanning.pages / d.deep_pages), 101, 101),
         h("span", { class: "muted small" }, `Pages, their CSS and JavaScript files are read 4 at a time (at most ${d.deep_minutes} minutes). The routers get the result by themselves.`)) : null,
       site && x.error && !x.scanning ? h("div", { class: "note" }, `Could not read the site: ${x.error}. It is still open; what it needs comes from learning below.`) : null,
-      !site ? h("div", { class: "muted small" }, x.kind === "app"
-        ? "Every server the app catalog knows is open. When a device of the policy uses the app, well-known helpers it asks right after are opened by themselves; other names are shown here."
-        : "The profile's lines are open. When a device of the policy uses it, other names under its host lines' domains (e.g. any *.whatsapp.net) are opened by themselves, unless a deny-sni line says no; other names it asks right after are shown here.") : null,
+      !site ? h("div", { class: "muted small" }, x.kind === "app" ? "Every server the app catalog knows is open; helpers it asks right after are learned."
+        : "The profile's lines are open; other names of the same company are learned (Apps & websites → How it works).") : null,
       sugg.length ? h("div", { class: "stack tight" }, h("b", {}, `Does ${site ? "the site" : "it"} need these? (asked right after it, but blocked)`),
         sugg.map(([n, v]) => h("div", { class: "rule-row item" }, h("code", { class: "grow" }, n), h("span", { class: "muted small" }, `${v.count ? v.count + "× · " : ""}${v.why}`),
           isAdmin() ? [h("button", { class: "small primary", onclick: answer(x.site, n, true) }, "Allow"), h("button", { class: "small", onclick: answer(x.site, n, false) }, "Ignore")] : null))) : null,
@@ -2297,7 +2314,7 @@ async function allowedWebsites() {
         allowed.length ? allowed.sort().map(([n, v]) => h("div", { class: "rule-row item" }, h("code", { class: "grow" }, n),
           badge(...(FROM[v.from] || [v.from, ""])), h("span", { class: "muted small" }, v.why),
           isAdmin() ? h("button", { class: "chip-x", title: "do not open this", onclick: answer(x.site, n, false) }, "×") : null))
-          : h("span", { class: "muted" }, site ? "Nothing from other places yet." : "Nothing learned yet.")),
+          : h("span", { class: "muted small" }, site ? "Nothing from other places yet." : "Nothing learned yet — it learns while the app is used.")),
       skipped.length ? h("div", { class: "muted small" }, `Left out (ads / trackers): ${skipped.map(([n]) => n).join(", ")}`) : null,
       ...portParts(x, answer),
       site && x.pages && x.pages.length ? h("details", {}, h("summary", { class: "muted small" }, `Pages read (${x.pages_read})`),
@@ -2468,7 +2485,7 @@ async function whyBlocked(site = "", who = "", ref = "") {
           { label: "Now", render: (r) => r.active ? badge("active", "bad") : badge(`only ${r.time}`, "warn") },
           { label: "Why", key: "why", wrap: true },
           { label: "In the router log", render: (r) => h("code", {}, r.router) },
-          { label: "", render: () => d.policy ? h("a", { class: "btn small", href: `#/blocking/policies` }, "Edit policy") : null }],
+          { label: "", render: () => d.policy && isAdmin() ? h("a", { class: "btn small", href: `#/blocking/policies/edit/${encodeURIComponent(d.policy)}` }, "Edit policy") : null }],
           d.rules, d.policy ? "No rule of this policy blocks this site." : "No policy for this user — enter a user to check their policy.")),
         card("Lists this site is on", null, table([
           { label: "Kind", render: (h1) => badge(h1.kind, "info") }, { label: "Name", key: "name" },

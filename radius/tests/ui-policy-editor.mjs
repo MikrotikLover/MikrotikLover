@@ -109,6 +109,31 @@ await rowOf("gaming").locator("select.tp-sel").selectOption({ label: "Office hou
 ok("changing one rule leaves the others", norm(await editorText()) === norm("block social time=9h-12h,mon\nblock social time=14h-17h,mon\nblock gaming time=9h-17h,mon,tue,wed,thu,fri,sat"));
 await p.keyboard.press("Escape");
 
+// links straight to a policy's editor ("Edit policy" in Why blocked?), and dialogs close on another page
+await p.goto(URL + "/#/dashboard"); await p.waitForTimeout(200);
+await p.goto(URL + "/#/blocking/why/facebook.com/kid1"); await p.waitForTimeout(1500);
+ok("why blocked: no stray 'null' on the page", !(await p.locator("main, .main, body").first().innerText()).split("\n").some((l) => l.trim() === "null"));
+const editLink = p.locator("a.btn", { hasText: "Edit policy" }).first();
+if (await editLink.count()) {
+  const want = decodeURIComponent((await editLink.getAttribute("href")).split("/").pop());
+  await editLink.click();
+  await p.locator("dialog[open] pre.code-box").waitFor({ state: "attached" });
+  ok("'Edit policy' opens that policy's editor", (await p.locator("dialog[open] input[name=name]").inputValue()) === want, want);
+  await p.goto(URL + "/#/blocking/overview"); await p.waitForTimeout(800);
+  ok("another page: the dialog is closed", (await p.locator("dialog[open]").count()) === 0);
+}
+await p.goto(URL + "/#/blocking/policies/give"); await p.locator("dialog[open] #bl-pol").waitFor();
+ok("give dialog: no wider than the dialog", await p.evaluate(() => { const b = document.querySelector("dialog[open] .dlg-body"); return b.scrollWidth <= b.clientWidth + 1; }));
+await p.keyboard.press("Escape");
+
+// quick clicks: a page still loading must not be drawn over the page the user went to
+for (const [slow, fast, title] of [["#/insights", "#/groups", "Groups"], ["#/blocking/overview", "#/blocking/policies", "Blocking"], ["#/users", "#/macs", "MAC devices"]]) {
+  await p.evaluate(([a, b]) => { location.hash = a; setTimeout(() => { location.hash = b; }, 30); }, [slow, fast]);
+  await p.waitForTimeout(2500);
+  const head = await p.locator("header h1").innerText();
+  ok(`quick clicks ${slow} -> ${fast}: the last page is shown`, head.startsWith(title) && (fast !== "#/blocking/policies" || await p.locator(".policy-row").count() > 0), head);
+}
+
 // phone width: no sideways scrolling in the editor
 await p.setViewportSize({ width: 390, height: 800 });
 await openEditor({ name: "ui-times", description: "UI test: own time per rule" });

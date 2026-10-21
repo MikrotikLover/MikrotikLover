@@ -338,6 +338,8 @@ try {
   await go(page, "#/settings", "Settings");
   await page.locator("h2", { hasText: /^Backups/ }).waitFor({ timeout: 15000 });
   await clickToast(page, page.getByRole("button", { name: "Backup now", exact: true }));
+  // the page is drawn again after the backup: wait for that, or the next step types into a form that is replaced
+  await page.waitForLoadState("networkidle"); await page.waitForTimeout(500);
   await page.locator("h2", { hasText: "Automatic updates" }).waitFor({ timeout: 30000 });
   ok("settings: backup made from the dashboard, automatic updates listed");
   {
