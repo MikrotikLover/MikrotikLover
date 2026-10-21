@@ -808,7 +808,7 @@ def block_decision(host, ip):
         cat = cdnmap.catalog()
     except Exception:                                       # noqa: BLE001
         cat = None
-    r = whyblocked.explain(host, policy, text, datetime.now(), WF_DIR, cat, ao_dir=AO_DIR)
+    r = whyblocked.explain(host, policy, text, datetime.now(), WF_DIR, cat, ao_dir=AO_DIR, webscan_dir=WEBSCAN_DIR)
     act = next((x for x in r["rules"] if x["active"]), None)
     return r["verdict"] == "blocked", {"user": user, "policy": policy, "rule": act["rule"] if act else "",
                                        "why": act["why"] if act else "", "lists": r["lists"]}
@@ -1069,7 +1069,7 @@ def why_blocked():
         cat = cdnmap.catalog()
     except Exception:                                       # noqa: BLE001
         cat = None
-    res = whyblocked.explain(host, policy, text, at, WF_DIR, cat, vpn_extra, ao_dir=AO_DIR)
+    res = whyblocked.explain(host, policy, text, at, WF_DIR, cat, vpn_extra, ao_dir=AO_DIR, webscan_dir=WEBSCAN_DIR)
     notes = []
     if lst == "web-filter-exempt":
         notes.append("This user is in web-filter-exempt: the web filter does not apply to them.")
@@ -2255,6 +2255,43 @@ def traffic_series():
     tot_rx, tot_tx = sum(v[0] for v in by.values()), sum(v[1] for v in by.values())
     return jsonify(points=pts, step=step, total_rx=tot_rx, total_tx=tot_tx, limit=limit, members=len(names), top=top,
                    peak_rx=max((p["rx_bps"] for p in pts), default=0), peak_tx=max((p["tx_bps"] for p in pts), default=0))
+
+
+# ------------------------------------------------------------------ allowed websites, automatic (allow-web)
+WEBSCAN_DIR = os.environ.get("MLWEB_WEBSCAN", "/var/lib/mikrotiklover/webscan")
+
+
+@app.get("/api/webscan")
+@login_required()
+def webscan_list():
+    import webscan
+    out = []
+    for site, pols in sorted(webscan.web_sites(POLICY_DIR).items()):
+        st = webscan.load(WEBSCAN_DIR, site)
+        out.append({"site": site, "policies": pols, "allowed": st.get("allowed", {}), "suggest": st.get("suggest", {}),
+                    "skipped": st.get("skipped", {}), "ignored": st.get("ignored", []), "scanned": st.get("scanned", 0),
+                    "error": st.get("error", ""), "pages": st.get("pages", [])})
+    return jsonify(sites=out)
+
+
+@app.post("/api/webscan/<site>/scan")
+@login_required("admin")
+def webscan_scan(site):
+    import webscan
+    if not webscan.clean_site(site):
+        abort(400, "invalid site")
+    return result(*radius_admin(["webscan", "scan", webscan.clean_site(site)], timeout=180))
+
+
+@app.post("/api/webscan/<site>/answer")
+@login_required("admin")
+def webscan_answer(site):
+    import webscan
+    data = body()
+    name = str(data.get("name", "")).lower()
+    if not webscan.clean_site(site) or not webscan.SITE_RE.match(name):
+        abort(400, "invalid name")
+    return result(*radius_admin(["webscan", "allow" if data.get("allow") else "ignore", webscan.clean_site(site), name]))
 
 
 # ------------------------------------------------------------------ allow-only app profiles ("only these apps")

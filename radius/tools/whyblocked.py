@@ -165,7 +165,33 @@ def allow_only_ok(host, profile, wf_dir, ao_dir=None):
     return False
 
 
-def explain(host, policy=None, policy_text="", at=None, wf_dir=WF_DIR, catalog=None, vpn_extra=(), ao_dir=None):
+WEBSCAN_DIR = "/var/lib/mikrotiklover/webscan"
+
+
+def allow_rule(host, rules, catalog=None, webscan_dir=None):
+    """The allow-site / allow-web / allow-app line that lets this host through, or None."""
+    for r in rules:
+        k, v = r["kind"], r["value"].lower()
+        if k == "allow-site" and domain_hit(host, v):
+            return r
+        if k == "allow-web":
+            site = v[4:] if v.startswith("www.") else v
+            if domain_hit(host, site):
+                return r
+            for n in read_list(os.path.join(webscan_dir or WEBSCAN_DIR, site + ".txt")):
+                if domain_hit(host, n):
+                    return dict(r, line=f"{r['line']} (needs {n})")
+        if k == "allow-app" and catalog is not None:
+            try:
+                e = catalog.name(host)
+            except Exception:                    # noqa: BLE001
+                e = None
+            if e and not e.get("generic") and e["app"].lower() == r["value"].lower():
+                return r
+    return None
+
+
+def explain(host, policy=None, policy_text="", at=None, wf_dir=WF_DIR, catalog=None, vpn_extra=(), ao_dir=None, webscan_dir=None):
     """-> {host, lists, policy, rules: [{rule, blocks, active, why, router}], verdict, summary}"""
     at = at or datetime.now()
     lists = lists_for(host, wf_dir, catalog, vpn_extra)
@@ -201,7 +227,7 @@ def explain(host, policy=None, policy_text="", at=None, wf_dir=WF_DIR, catalog=N
             except ValueError:
                 active = True
             out.append({"rule": r["line"], "why": why, "active": active, "time": r["time"], "router": router})
-    allow = next((r for r in parse_policy(policy_text) if r["kind"] == "allow-site" and domain_hit(host, r["value"].lower())), None) if policy else None
+    allow = allow_rule(host, parse_policy(policy_text), catalog, webscan_dir) if policy else None
     if allow:
         for x in out:
             x["active"] = False

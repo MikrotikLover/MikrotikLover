@@ -89,6 +89,19 @@ t("two apps only: WhatsApp allowed", r["verdict"] == "allowed", r)
 r = w.explain("www.google.com", "wh", "allow-only whatsapp\nallow-only hikconnect\n", MON_10, WF, Cat(), ao_dir=AO)
 t("two apps only: the rest blocked, one reason naming both", r["verdict"] == "blocked" and len(r["rules"]) == 1 and "whatsapp + hikconnect are allowed" in r["summary"], r)
 
+import tempfile
+WS = tempfile.mkdtemp()
+open(os.path.join(WS, "minas.com.txt"), "w").write("fonts.gstatic.com\ncdninstagram.com\n")
+POL3 = "block-all\nallow-web www.minas.com\nallow-app TikTok\n"
+r = w.explain("shop.minas.com", "m", POL3, MON_10, WF, Cat(), webscan_dir=WS)
+t("allow-web: the site itself", r["verdict"] == "allowed" and "allow-web www.minas.com" in r["summary"], r)
+r = w.explain("scontent-sin6-1.cdninstagram.com", "m", POL3, MON_10, WF, Cat(), webscan_dir=WS)
+t("allow-web: what the site needs (found by the scan)", r["verdict"] == "allowed" and "needs cdninstagram.com" in r["summary"], r)
+r = w.explain("v16.tiktok.com", "m", POL3, MON_10, WF, Cat(), webscan_dir=WS)
+t("allow-app: a domain of the app", r["verdict"] == "allowed" and "allow-app TikTok" in r["summary"], r)
+r = w.explain("www.google.com", "m", POL3, MON_10, WF, Cat(), webscan_dir=WS)
+t("allow-web / allow-app: the rest stays blocked", r["verdict"] == "blocked", r)
+
 URL = os.environ.get("URL")
 if URL:
     ctx = ssl._create_unverified_context()

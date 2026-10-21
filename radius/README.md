@@ -1114,6 +1114,16 @@ Dashboard → **Blocking → Why blocked? → Block page for users** on (ya `rad
 - LAN / private addresses kabhi redirect nahi hote; server band ho to router ka netwatch yeh rasta khud band kar deta hai (internet nahi rukta).
 - Tests: `tests/test-blockpage.sh` (27 checks).
 
+## 7u. Website ya app ka sirf naam — baqi khud (automatic)
+
+Policy → Edit → **Websites always open** mein sirf `minascollection.com` likhein (file mein `allow-web minascollection.com`), ya **Apps always open** mein app ka naam (`allow-app Instagram`).
+- **Server site ko khud parhta hai** (`tools/webscan.py`): home page + 4 andar ke pages + un ki CSS. Jahan jahan se cheezein aati hain — Google Fonts, `fonts.gstatic.com`, CDN (jsDelivr, Shopify), Instagram tasveerein (`cdninstagram.com`) — sab khul jati hain. **Ads / trackers** (Google Analytics, Tag Manager, Facebook pixel …) nahi kholte. Embed (YouTube, maps) sirf pooche jate hain.
+- **Har roz dobara** parhta hai (hourly job, 24 ghante se purana ho to).
+- **Istemal se seekhta hai**: policy wala device site ka naam poochne ke 20 second ke andar jo aur naam poochta hai aur band hain — jane pehchane helpers (fonts, CDNs) khud khul jate hain, baqi **Blocking → Allowed websites** mein **Allow / Ignore**.
+- Apps: app catalog ke saare domains (seekhe hue bhi) — catalog mein na ho to **App profiles → Learn an app**.
+- CLI: `radius-admin webscan list | scan SITE | show SITE | allow SITE NAME | ignore SITE NAME | auto`.
+- Server sirf **public** addresses parhta hai (LAN / localhost nahi). Tests: `tests/test-webscan.sh` (25).
+
 ## 7t. Sirf kuch apps (maslan WhatsApp + Hik-Connect)
 
 Blocking → policy → **"ONLY the apps I choose"** → apps par tick (whatsapp, hikconnect, apne banaye hue) → baqi sab band.

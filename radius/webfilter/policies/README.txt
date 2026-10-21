@@ -12,6 +12,10 @@ First line: "# description". Directives (one per line):
                               learned on your network included (radius-admin cdn apps), e.g. block-app PUBG Mobile
   block-site example.com [time=...]   one website (and its subdomains) for this policy only
   allow-site example.com      an exception: this policy never blocks it (e.g. block social, allow-site linkedin.com)
+  allow-web example.com       like allow-site, and the server finds what the site loads from elsewhere (fonts,
+                              CDNs, image hosts) by reading it, daily, and learns more from the DNS log
+                              (radius-admin webscan; dashboard → Blocking → Allowed websites)
+  allow-app Instagram         every domain the app catalog knows for the app (learned ones too)
   block-vpn [time=...]        VPN apps/websites (by name, and any name with "vpn"), the VPN servers seen on
                               your network (address list vpn-servers, kept up to date by the server) and the
                               VPN protocols (OpenVPN, WireGuard, WARP, IPsec, L2TP, PPTP, SoftEther, Tor).

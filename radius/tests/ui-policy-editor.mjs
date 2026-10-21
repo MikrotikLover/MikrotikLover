@@ -87,7 +87,7 @@ const offSel = rowOf("Internet off completely").locator(".tp-custom select");
 await offSel.nth(0).selectOption("0"); await offSel.nth(1).selectOption("6");
 await d.locator("textarea").last().fill("linkedin.com");
 const expect = ["block social time=9h-17h,mon,tue,wed,thu,fri,sat", "block gaming", "block-app TikTok time=16h-19h,mon,tue,wed,thu,fri",
-  "block-site example-bet.com time=22h-6h,mon,tue,wed,thu,fri,sat,sun", "block-all time=0s-6h,mon,tue,wed,thu,fri", "allow-site linkedin.com"];
+  "block-site example-bet.com time=22h-6h,mon,tue,wed,thu,fri,sat,sun", "block-all time=0s-6h,mon,tue,wed,thu,fri", "allow-web linkedin.com"];
 const shown = await editorText();
 ok("editor: each rule with its own time", norm(shown) === norm(expect.join("\n")), `\n  got:  ${norm(shown).replace(/\n/g, " | ")}\n  want: ${norm(expect.join("\n")).replace(/\n/g, " | ")}`);
 await d.getByRole("button", { name: "Save policy" }).click();
@@ -117,6 +117,7 @@ ok("phone: editor fits the screen", !(await p.evaluate(() => document.documentEl
 if (process.env.SHOTS) await p.screenshot({ path: `${process.env.SHOTS}/116-policy-times-phone.png`, fullPage: false });
 await p.keyboard.press("Escape");
 admin("policy", "del", "ui-times");
+try { execFileSync("rm", ["-f", "/var/lib/mikrotiklover/webscan/linkedin.com.json", "/var/lib/mikrotiklover/webscan/linkedin.com.txt"]); } catch { /* not there */ }
 ok("no console / CSP errors", errs.length === 0, errs.join(" | "));
 await b.close();
 console.log(fails ? `${fails} FAILED` : "all policy editor tests passed");

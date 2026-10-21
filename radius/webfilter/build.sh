@@ -14,6 +14,7 @@ cd "$(dirname "$0")"
 OUT=${WF_OUT:-../mikrotik}
 POLICY_DIR=${POLICY_DIR:-policies}
 AO_DIR=${AO_DIR:-allowonly}          # allow-only app profiles (the dashboard edits /var/lib/mikrotiklover/allowonly)
+WEBSCAN_DIR=${WEBSCAN_DIR:-webscan}  # what allowed websites need (tools/webscan.py: SITE.txt)
 CDNMAP=${CDNMAP:-$( [ -f ../tools/cdnmap.py ] && echo ../tools/cdnmap.py || echo ../cdnmap.py )}
 
 if [ "${1:-}" = --update-meta ]; then
@@ -355,6 +356,25 @@ for pf in $(policy_files); do
                             echo "add chain=forward src-address-list=$L protocol=tcp tls-host=\"$pat\" action=reject reject-with=tcp-reset log=yes log-prefix=\"WF-site\"$tt comment=\"$C site $val\""
                         done
                     done ;;
+                allow-web)
+                    # allow-web example.com   the site + what it loads from elsewhere (fonts, CDNs …), found by the server
+                    site=${val#www.}
+                    [[ $site =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] || { echo "build.sh: bad site '$val' in $pf" >&2; exit 1; }
+                    allows+=("$site")
+                    if [ -f "$WEBSCAN_DIR/$site.txt" ]; then
+                        while IFS= read -r d || [ -n "$d" ]; do
+                            [[ $d =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] && allows+=("$d")
+                        done < "$WEBSCAN_DIR/$site.txt"
+                    fi ;;
+                allow-app)
+                    # allow-app Instagram   every domain the app catalog knows for it (learned ones too)
+                    name=$(sed -E 's/^[[:space:]]*allow-app[[:space:]]+//; s/[[:space:]]+$//' <<<"$line")
+                    [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9\ .\&+()\'/-]{0,39}$ ]] || { echo "build.sh: bad app name '$name' in $pf" >&2; exit 1; }
+                    mapfile -t appd < <(python3 -I "$CDNMAP" domains "$name" 2>/dev/null) || true
+                    [ ${#appd[@]} -gt 0 ] || { echo "build.sh: unknown app '$name' in $pf" >&2; exit 1; }
+                    for d in "${appd[@]}"; do
+                        [[ $d =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] && allows+=("$d")
+                    done ;;
                 allow-site)
                     # allow-site example.com   an exception: never blocked by this policy (subdomains too)
                     [[ $val =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] || { echo "build.sh: bad site '$val' in $pf" >&2; exit 1; }
@@ -402,6 +422,7 @@ for pf in $(policy_files); do
             echo "/ip firewall filter"
         fi
     } > "$pbody"
+    mapfile -t allows < <(printf '%s\n' "${allows[@]}" | grep -v '^$' | sort -u)
     # Everything of this policy runs in its own chain wfp-NAME: the exceptions first (return = not blocked by
     # this policy), then the blocks. The server adds approved temporary exceptions at the top (ml-live).
     {

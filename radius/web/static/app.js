@@ -1773,6 +1773,8 @@ function ruleLabel(r) {
     case "block-vpn": return badge(`VPN blocked${t}`, "bad");
     case "block-site": return badge(`site: ${r.value}${t}`, "bad");
     case "allow-site": return badge(`always open: ${r.value}`, "ok");
+    case "allow-web": return badge(`always open: ${r.value} (+ what it needs)`, "ok");
+    case "allow-app": return badge(`app always open: ${r.value}`, "ok");
     case "allow-only": return badge(`ONLY ${r.value}`, "warn");
     case "block-all": return badge(`no internet${t}`, "bad");
     case "dns": return badge(`DNS: ${r.value}`, "info");
@@ -1900,7 +1902,18 @@ function policyEditor(meta, pol) {
   const ech = h("label", { class: "check" + (echRule ? " on" : "") }, echCb, h("div", {}, h("b", {}, "Block hidden site names (ECH)"), h("span", {}, "Stops browsers from hiding the site name; a few Cloudflare sites may not open.")));
   echCb.addEventListener("change", () => { ech.classList.toggle("on", echCb.checked); preview(); });
   const allowList = [];
-  rules.forEach((r, n) => { if (!used.has(n) && r.kind === "allow-site") { used.add(n); allowList.push(r.value); } });
+  const plainSites = new Set();       // old "allow-site" lines stay as they are; new sites are "allow-web" (automatic)
+  rules.forEach((r, n) => { if (!used.has(n) && (r.kind === "allow-site" || r.kind === "allow-web")) { used.add(n); const v = r.kind === "allow-site" ? r.value : r.value.replace(/^www\./, ""); if (r.kind === "allow-site") plainSites.add(v); allowList.push(v); } });
+  const allowApps = new Set();
+  rules.forEach((r, n) => { if (!used.has(n) && r.kind === "allow-app") { used.add(n); allowApps.add(r.value); } });
+  const allowAppIn = h("input", { type: "search", placeholder: "Add an app: instagram, zoom, teams …", list: "pe-apps" });
+  const allowAppBox = h("div", { class: "chips" });
+  const drawAllowApps = () => allowAppBox.replaceChildren(...[...allowApps].map((a) => h("span", { class: "chip on" }, a,
+    h("button", { type: "button", class: "chip-x", title: "remove", onclick: () => { allowApps.delete(a); drawAllowApps(); preview(); } }, "×"))));
+  allowAppIn.addEventListener("change", () => {
+    const v = allowAppIn.value.trim(), hit = meta.apps.find((a) => a.app.toLowerCase() === v.toLowerCase());
+    if (hit) { allowApps.add(hit.app); allowAppIn.value = ""; drawAllowApps(); preview(); } else if (v) toast("Not in the app catalog — use App profiles → Learn an app", true);
+  });
   const allowSites = h("textarea", { rows: 3, placeholder: "linkedin.com\nschool.edu.pk", spellcheck: "false" }, allowList.join("\n"));
   allowSites.addEventListener("input", () => preview());
   // anything the editor does not show (a second line for the same category, hand-written rules …) is kept as it is
@@ -1930,7 +1943,8 @@ function policyEditor(meta, pol) {
       if (echCb.checked) lines.push("strict-ech");
       lines.push(...extras);
     }
-    [...new Set(allowSites.value.split(/[\s,]+/).map(cleanSite).filter(okSite))].forEach((d) => lines.push(`allow-site ${d}`));
+    [...new Set(allowSites.value.split(/[\s,]+/).map(cleanSite).filter(okSite))].forEach((d) => lines.push(`${plainSites.has(d) ? "allow-site" : "allow-web"} ${d}`));
+    [...allowApps].forEach((a) => lines.push(`allow-app ${a}`));
     return lines.join("\n") + "\n";
   }
   function preview() {
@@ -1939,7 +1953,7 @@ function policyEditor(meta, pol) {
   }
   [modeSel, dnsSel].forEach((el) => el.addEventListener("change", preview));
   [desc, name].forEach((el) => el.addEventListener("input", preview));
-  drawApps(); drawChosen(); preview();
+  drawApps(); drawChosen(); drawAllowApps(); preview();
   const onlyNote = h("div", { class: "stack", hidden: modeSel.value !== "only" },
     h("div", { class: "field" }, h("b", {}, "Apps that work"), h("div", { class: "help" }, "Tick one or more. Everything else is blocked. Make or change an app: Blocking → App profiles."), onlyBoxes),
     h("div", { class: "note" }, "whatsapp: chat, calls, photos and status (Facebook / Instagram stay blocked). hikconnect: Hik-Connect cloud + an NVR / DVR in this network (add one at another place in App profiles)."));
@@ -1949,7 +1963,9 @@ function policyEditor(meta, pol) {
     h("label", { class: "field" }, "What should these users get?", modeSel),
     onlyNote,
     blockSection,
-    h("label", { class: "field" }, "Always open — exceptions", h("span", { class: "help" }, `one per line, like example.com — its subdomains too. Never blocked by this policy, also not by "no internet" or "WhatsApp only" (e.g. a school or bank site).`), allowSites),
+    h("label", { class: "field" }, "Websites always open", h("span", { class: "help" }, `one per line, like example.com. The server reads the site and opens what it needs too (fonts, CDNs, image hosts — no ads / trackers), checks again every day and learns more while it is used (Blocking → Allowed websites). Also with "no internet" or "only apps".`), allowSites),
+    h("div", { class: "field" }, h("b", {}, "Apps always open"), h("div", { class: "help" }, "Every server of the app from the app catalog (kept up to date)."), allowAppIn, allowAppBox,
+      h("datalist", { id: "pe-apps" }, meta.apps.map((a) => h("option", { value: a.app })))),
     h("label", { class: "field" }, "Policy file (what the server stores)", out));
   modeSel.addEventListener("change", () => { onlyNote.hidden = modeSel.value !== "only"; });
   return { form, text, name: () => name.value.trim() };
@@ -1961,6 +1977,7 @@ ROUTES.blocking = async (tab = "policies", ...rest) => {
   if (tab === "why") return whyBlocked(...rest);
   if (tab === "requests") return unblockRequests();
   if (tab === "apps") return appProfiles();
+  if (tab === "web") return allowedWebsites();
   const [meta, ul] = await Promise.all([api("GET", "/api/blocking"), api("GET", "/api/users")]);
   const r = meta.router;
   const openEditor = (pol) => {
@@ -2132,8 +2149,32 @@ async function parentalPage() {
     card("For the parents", null, h("div", { class: "muted" }, "Which sites and apps a child used: Users → the child → Top sites (7 days), or Insights for the whole network. A blocked try shows up in Blocking logs."))));
 }
 
-const blockingTabs = (tab) => h("div", { class: "tabs" }, [["policies", "Policies"], ["parental", "Parental controls"], ["logs", "Blocking logs"], ["why", "Why blocked?"], ["requests", "Requests"], ["apps", "App profiles"]]
+const blockingTabs = (tab) => h("div", { class: "tabs" }, [["policies", "Policies"], ["parental", "Parental controls"], ["logs", "Blocking logs"], ["why", "Why blocked?"], ["requests", "Requests"], ["apps", "App profiles"], ["web", "Allowed websites"]]
   .map(([k, l]) => h("a", { href: `#/blocking/${k}`, class: k === tab ? "active" : "" }, l)));
+async function allowedWebsites() {
+  const d = await api("GET", "/api/webscan");
+  const FROM = { scan: ["found on the site", "info"], learned: ["learned", "ok"], admin: ["by you", ""] };
+  const answer = (site, name, allow) => async (e) => { e.target.disabled = true; if (await act(api("POST", `/api/webscan/${site}/answer`, { name, allow }))) route(); else e.target.disabled = false; };
+  const cards = d.sites.map((x) => {
+    const allowed = Object.entries(x.allowed), sugg = Object.entries(x.suggest).sort((a, b) => b[1].count - a[1].count), skipped = Object.entries(x.skipped);
+    return card(x.site, `${x.policies.join(", ")} · ${x.scanned ? "read " + ago(new Date(x.scanned * 1000).toISOString()) : "not read yet"}`,
+      x.error ? h("div", { class: "note" }, `Could not read the site: ${x.error}. It is still open; what it needs comes from learning below.`) : null,
+      sugg.length ? h("div", { class: "stack tight" }, h("b", {}, "Does the site need these? (asked right after it, but blocked)"),
+        sugg.map(([n, v]) => h("div", { class: "rule-row item" }, h("code", { class: "grow" }, n), h("span", { class: "muted small" }, `${v.count ? v.count + "× · " : ""}${v.why}`),
+          isAdmin() ? [h("button", { class: "small primary", onclick: answer(x.site, n, true) }, "Allow"), h("button", { class: "small", onclick: answer(x.site, n, false) }, "Ignore")] : null))) : null,
+      h("div", { class: "stack tight" }, h("b", {}, `Opened with it (${allowed.length})`),
+        allowed.length ? allowed.sort().map(([n, v]) => h("div", { class: "rule-row item" }, h("code", { class: "grow" }, n),
+          badge(...(FROM[v.from] || [v.from, ""])), h("span", { class: "muted small" }, v.why),
+          isAdmin() ? h("button", { class: "chip-x", title: "do not open this", onclick: answer(x.site, n, false) }, "×") : null))
+          : h("span", { class: "muted" }, "Nothing from other places yet.")),
+      skipped.length ? h("div", { class: "muted small" }, `Left out (ads / trackers): ${skipped.map(([n]) => n).join(", ")}`) : null,
+      isAdmin() ? h("div", { class: "toolbar" }, h("button", { class: "small", onclick: async (e) => { e.target.disabled = true; e.target.textContent = "Reading …"; await act(api("POST", `/api/webscan/${x.site}/scan`, {})); route(); } }, icon("search"), "Read the site again")) : null);
+  });
+  shell("Blocking", h("div", { class: "stack" }, blockingTabs("web"),
+    h("div", { class: "note" }, "Type only a website in a policy (Websites always open). The server reads it and opens what it loads from elsewhere — fonts, CSS / JS libraries, image CDNs — but no ads or trackers. Every day it reads the site again, and while people use it the server learns more: well-known helpers are opened by themselves, the rest is asked here."),
+    cards.length ? h("div", { class: "stack" }, cards) : card(null, null, h("div", { class: "empty" }, "No website yet — add one in a policy: Blocking → Edit → Websites always open."))));
+}
+
 async function appProfiles() {
   const d = await api("GET", "/api/allowonly");
   const edit = (pr) => {
