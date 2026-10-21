@@ -2266,12 +2266,26 @@ WEBSCAN_DIR = os.environ.get("MLWEB_WEBSCAN", "/var/lib/mikrotiklover/webscan")
 def webscan_list():
     import webscan
     out = []
-    for site, pols in sorted(webscan.web_sites(POLICY_DIR).items()):
-        st = webscan.load(WEBSCAN_DIR, site)
-        out.append({"site": site, "policies": pols, "allowed": st.get("allowed", {}), "suggest": st.get("suggest", {}),
+    order = {"site": 0, "app": 1, "ao": 2}
+    tg = webscan.targets(POLICY_DIR, AO_DIR)
+    for key, t in sorted(tg.items(), key=lambda kv: (order[kv[1]["kind"]], kv[0])):
+        st = webscan.load(WEBSCAN_DIR, key)
+        sc = st.get("scanning")
+        if sc and time.time() - sc.get("since", 0) > 900:   # a read that died: not "reading" for ever
+            sc = None
+        out.append({"site": key, "kind": t["kind"], "name": t["name"], "policies": t["policies"],
+                    "allowed": st.get("allowed", {}), "suggest": st.get("suggest", {}),
                     "skipped": st.get("skipped", {}), "ignored": st.get("ignored", []), "scanned": st.get("scanned", 0),
-                    "error": st.get("error", ""), "pages": st.get("pages", [])})
-    return jsonify(sites=out)
+                    "error": st.get("error", ""), "pages": st.get("pages", [])[:40],
+                    "pages_read": st.get("pages_read", len(st.get("pages", []))), "deep": st.get("deep", False),
+                    "seconds": st.get("seconds", 0), "scanning": sc})
+    return jsonify(sites=out, deep_pages=webscan.DEEP_PAGES, deep_minutes=webscan.DEEP_SECONDS // 60)
+
+
+def webscan_key(key):
+    import webscan
+    key = str(key).lower()
+    return webscan.clean_site(key) or (key if webscan.KEY_RE.match(key) else "")
 
 
 @app.post("/api/webscan/<site>/scan")
@@ -2280,6 +2294,8 @@ def webscan_scan(site):
     import webscan
     if not webscan.clean_site(site):
         abort(400, "invalid site")
+    if body().get("deep"):                                # the whole site, in the background
+        return result(*radius_admin(["webscan", "deep", webscan.clean_site(site)]))
     return result(*radius_admin(["webscan", "scan", webscan.clean_site(site)], timeout=180))
 
 
@@ -2289,9 +2305,10 @@ def webscan_answer(site):
     import webscan
     data = body()
     name = str(data.get("name", "")).lower()
-    if not webscan.clean_site(site) or not webscan.SITE_RE.match(name):
+    key = webscan_key(site)
+    if not key or not webscan.SITE_RE.match(name):
         abort(400, "invalid name")
-    return result(*radius_admin(["webscan", "allow" if data.get("allow") else "ignore", webscan.clean_site(site), name]))
+    return result(*radius_admin(["webscan", "allow" if data.get("allow") else "ignore", key, name]))
 
 
 # ------------------------------------------------------------------ allow-only app profiles ("only these apps")

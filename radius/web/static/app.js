@@ -1963,8 +1963,8 @@ function policyEditor(meta, pol) {
     h("label", { class: "field" }, "What should these users get?", modeSel),
     onlyNote,
     blockSection,
-    h("label", { class: "field" }, "Websites always open", h("span", { class: "help" }, `one per line, like example.com. The server reads the site and opens what it needs too (fonts, CDNs, image hosts — no ads / trackers), checks again every day and learns more while it is used (Blocking → Allowed websites). Also with "no internet" or "only apps".`), allowSites),
-    h("div", { class: "field" }, h("b", {}, "Apps always open"), h("div", { class: "help" }, "Every server of the app from the app catalog (kept up to date)."), allowAppIn, allowAppBox,
+    h("label", { class: "field" }, "Websites always open", h("span", { class: "help" }, `one per line, like example.com. The server reads the whole site (sitemap, up to 150 pages, JavaScript files) and opens what it needs too (fonts, CDNs, image hosts — no ads / trackers), reads it again every day and learns more while it is used (Blocking → Allowed websites & apps). Also with "no internet" or "only apps".`), allowSites),
+    h("div", { class: "field" }, h("b", {}, "Apps always open"), h("div", { class: "help" }, "Every server of the app from the app catalog (kept up to date), plus helpers learned while it is used."), allowAppIn, allowAppBox,
       h("datalist", { id: "pe-apps" }, meta.apps.map((a) => h("option", { value: a.app })))),
     h("label", { class: "field" }, "Policy file (what the server stores)", out));
   modeSel.addEventListener("change", () => { onlyNote.hidden = modeSel.value !== "only"; });
@@ -2149,30 +2149,49 @@ async function parentalPage() {
     card("For the parents", null, h("div", { class: "muted" }, "Which sites and apps a child used: Users → the child → Top sites (7 days), or Insights for the whole network. A blocked try shows up in Blocking logs."))));
 }
 
-const blockingTabs = (tab) => h("div", { class: "tabs" }, [["policies", "Policies"], ["parental", "Parental controls"], ["logs", "Blocking logs"], ["why", "Why blocked?"], ["requests", "Requests"], ["apps", "App profiles"], ["web", "Allowed websites"]]
+const blockingTabs = (tab) => h("div", { class: "tabs" }, [["policies", "Policies"], ["parental", "Parental controls"], ["logs", "Blocking logs"], ["why", "Why blocked?"], ["requests", "Requests"], ["apps", "App profiles"], ["web", "Allowed websites & apps"]]
   .map(([k, l]) => h("a", { href: `#/blocking/${k}`, class: k === tab ? "active" : "" }, l)));
 async function allowedWebsites() {
   const d = await api("GET", "/api/webscan");
   const FROM = { scan: ["found on the site", "info"], learned: ["learned", "ok"], admin: ["by you", ""] };
-  const answer = (site, name, allow) => async (e) => { e.target.disabled = true; if (await act(api("POST", `/api/webscan/${site}/answer`, { name, allow }))) route(); else e.target.disabled = false; };
+  const KIND = { site: "Website", app: "App", ao: "App profile" };
+  const answer = (key, name, allow) => async (e) => { e.target.disabled = true; if (await act(api("POST", `/api/webscan/${key}/answer`, { name, allow }))) route(); else e.target.disabled = false; };
+  const sig = (sites) => sites.map((x) => `${x.site}:${x.scanning ? x.scanning.pages : "-"}:${x.scanned}`).join(",");
   const cards = d.sites.map((x) => {
     const allowed = Object.entries(x.allowed), sugg = Object.entries(x.suggest).sort((a, b) => b[1].count - a[1].count), skipped = Object.entries(x.skipped);
-    return card(x.site, `${x.policies.join(", ")} · ${x.scanned ? "read " + ago(new Date(x.scanned * 1000).toISOString()) : "not read yet"}`,
-      x.error ? h("div", { class: "note" }, `Could not read the site: ${x.error}. It is still open; what it needs comes from learning below.`) : null,
-      sugg.length ? h("div", { class: "stack tight" }, h("b", {}, "Does the site need these? (asked right after it, but blocked)"),
+    const site = x.kind === "site";
+    const state = !site ? "learns while it is used"
+      : x.scanning ? `reading the whole site … ${x.scanning.pages} of up to ${d.deep_pages} pages`
+      : x.scanned ? `read ${ago(new Date(x.scanned * 1000).toISOString())}: ${x.pages_read} page${x.pages_read === 1 ? "" : "s"}${x.deep ? " (whole site)" : ""}` : "not read yet";
+    return card(`${x.name}`, `${KIND[x.kind]} · ${x.policies.join(", ")} · ${state}`,
+      x.scanning ? h("div", { class: "stack tight" }, meter(Math.round(100 * x.scanning.pages / d.deep_pages), 101, 101),
+        h("span", { class: "muted small" }, `Pages, their CSS and JavaScript files are read 4 at a time (at most ${d.deep_minutes} minutes). The routers get the result by themselves.`)) : null,
+      site && x.error && !x.scanning ? h("div", { class: "note" }, `Could not read the site: ${x.error}. It is still open; what it needs comes from learning below.`) : null,
+      !site ? h("div", { class: "muted small" }, x.kind === "app"
+        ? "Every server the app catalog knows is open. When a device of the policy uses the app, well-known helpers it asks right after are opened by themselves; other names are shown here."
+        : "The profile's lines are open. When a device of the policy uses it, other names under its host lines' domains (e.g. any *.whatsapp.net) are opened by themselves, unless a deny-sni line says no; other names it asks right after are shown here.") : null,
+      sugg.length ? h("div", { class: "stack tight" }, h("b", {}, `Does ${site ? "the site" : "it"} need these? (asked right after it, but blocked)`),
         sugg.map(([n, v]) => h("div", { class: "rule-row item" }, h("code", { class: "grow" }, n), h("span", { class: "muted small" }, `${v.count ? v.count + "× · " : ""}${v.why}`),
           isAdmin() ? [h("button", { class: "small primary", onclick: answer(x.site, n, true) }, "Allow"), h("button", { class: "small", onclick: answer(x.site, n, false) }, "Ignore")] : null))) : null,
-      h("div", { class: "stack tight" }, h("b", {}, `Opened with it (${allowed.length})`),
+      h("div", { class: "stack tight" }, h("b", {}, `${site ? "Opened with it" : "Learned"} (${allowed.length})`),
         allowed.length ? allowed.sort().map(([n, v]) => h("div", { class: "rule-row item" }, h("code", { class: "grow" }, n),
           badge(...(FROM[v.from] || [v.from, ""])), h("span", { class: "muted small" }, v.why),
           isAdmin() ? h("button", { class: "chip-x", title: "do not open this", onclick: answer(x.site, n, false) }, "×") : null))
-          : h("span", { class: "muted" }, "Nothing from other places yet.")),
+          : h("span", { class: "muted" }, site ? "Nothing from other places yet." : "Nothing learned yet.")),
       skipped.length ? h("div", { class: "muted small" }, `Left out (ads / trackers): ${skipped.map(([n]) => n).join(", ")}`) : null,
-      isAdmin() ? h("div", { class: "toolbar" }, h("button", { class: "small", onclick: async (e) => { e.target.disabled = true; e.target.textContent = "Reading …"; await act(api("POST", `/api/webscan/${x.site}/scan`, {})); route(); } }, icon("search"), "Read the site again")) : null);
+      site && x.pages && x.pages.length ? h("details", {}, h("summary", { class: "muted small" }, `Pages read (${x.pages_read})`),
+        h("div", { class: "mono small" }, x.pages.map((u) => h("div", {}, u)), x.pages_read > x.pages.length ? h("div", { class: "muted" }, "…") : null)) : null,
+      site && isAdmin() ? h("div", { class: "toolbar" },
+        h("button", { class: "small primary", disabled: !!x.scanning, onclick: async (e) => { e.target.disabled = true; if (await act(api("POST", `/api/webscan/${x.site}/scan`, { deep: true }))) route(); else e.target.disabled = false; } }, icon("search"), "Read the whole site"),
+        h("button", { class: "small", disabled: !!x.scanning, onclick: async (e) => { e.target.disabled = true; e.target.textContent = "Reading …"; await act(api("POST", `/api/webscan/${x.site}/scan`, {})); route(); } }, "Quick read")) : null);
   });
+  if (d.sites.some((x) => x.scanning)) {
+    const was = sig(d.sites);
+    every(3000, async () => { try { const n = await api("GET", "/api/webscan"); if (sig(n.sites) !== was) route(); } catch (e) { /* next time */ } });
+  }
   shell("Blocking", h("div", { class: "stack" }, blockingTabs("web"),
-    h("div", { class: "note" }, "Type only a website in a policy (Websites always open). The server reads it and opens what it loads from elsewhere — fonts, CSS / JS libraries, image CDNs — but no ads or trackers. Every day it reads the site again, and while people use it the server learns more: well-known helpers are opened by themselves, the rest is asked here."),
-    cards.length ? h("div", { class: "stack" }, cards) : card(null, null, h("div", { class: "empty" }, "No website yet — add one in a policy: Blocking → Edit → Websites always open."))));
+    h("div", { class: "note" }, "Type only a website or an app name in a policy. A new website is read at once, then the whole site in the background: its sitemap, up to " + d.deep_pages + " pages and its JavaScript files. What it loads from elsewhere is opened — fonts, CSS / JS libraries, image CDNs — but no ads or trackers. Every day it is read again, and while people use websites, apps and app profiles the server learns more: well-known helpers (and for app profiles, names of the same company) are opened by themselves, the rest is asked here."),
+    cards.length ? h("div", { class: "stack" }, cards) : card(null, null, h("div", { class: "empty" }, "Nothing yet — add a website or an app in a policy: Blocking → Edit → Websites always open / Apps always open, or an app profile under Only these apps."))));
 }
 
 async function appProfiles() {

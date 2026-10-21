@@ -153,8 +153,12 @@ def ao_file(profile, wf_dir, ao_dir=None):
     return ""
 
 
-def allow_only_ok(host, profile, wf_dir, ao_dir=None):
-    """Does an allow-only profile let this name through (host / domain lines; networks need the IP)?"""
+def allow_only_ok(host, profile, wf_dir, ao_dir=None, webscan_dir=None):
+    """Does an allow-only profile let this name through (host / domain lines, names learned while it was
+    used; networks need the IP)?"""
+    for n in read_list(os.path.join(webscan_dir or WEBSCAN_DIR, f"ao-{profile}.txt")):
+        if domain_hit(host, n):
+            return True
     for line in read_list(ao_file(profile, wf_dir, ao_dir)):
         key, _, val = line.partition(" ")
         val = val.strip()
@@ -188,6 +192,11 @@ def allow_rule(host, rules, catalog=None, webscan_dir=None):
                 e = None
             if e and not e.get("generic") and e["app"].lower() == r["value"].lower():
                 return r
+        if k == "allow-app":                     # names learned while the app was used (webscan.py)
+            slug = re.sub(r"[^a-z0-9]+", "-", r["value"].lower()).strip("-")
+            for n in read_list(os.path.join(webscan_dir or WEBSCAN_DIR, f"app-{slug}.txt")):
+                if domain_hit(host, n):
+                    return dict(r, line=f"{r['line']} (learned: {n})")
     return None
 
 
@@ -200,7 +209,7 @@ def explain(host, policy=None, policy_text="", at=None, wf_dir=WF_DIR, catalog=N
     out = []
     # several "allow-only" lines: the site is let through when one of the apps needs it
     aos = [r for r in parse_policy(policy_text) if r["kind"] == "allow-only"] if policy else []
-    ao_pass = any(allow_only_ok(host, r["value"], wf_dir, ao_dir) for r in aos)
+    ao_pass = any(allow_only_ok(host, r["value"], wf_dir, ao_dir, webscan_dir) for r in aos)
     ao_done = False
     for r in parse_policy(policy_text) if policy else []:
         k, v = r["kind"], r["value"]

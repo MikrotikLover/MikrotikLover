@@ -155,6 +155,12 @@ ao_parse() { # ao_parse PROFILE -> globals nets hosts domains deny quic
             *) echo "build.sh: unknown directive '$key' in $prof" >&2; exit 1 ;;
         esac
     done < "$prof"
+    # names learned while the profile was used (tools/webscan.py: ao-PROFILE.txt), opened like "domain"
+    if [ -f "$WEBSCAN_DIR/ao-$1.txt" ]; then
+        while IFS= read -r line || [ -n "$line" ]; do
+            [[ $line =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] && domains+=("$line")
+        done < "$WEBSCAN_DIR/ao-$1.txt"
+    fi
 }
 
 ao_lists() { # ao_lists PROFILE COMMENT -> address lists the profile allows
@@ -372,7 +378,9 @@ for pf in $(policy_files); do
                     [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9\ .\&+()\'/-]{0,39}$ ]] || { echo "build.sh: bad app name '$name' in $pf" >&2; exit 1; }
                     mapfile -t appd < <(python3 -I "$CDNMAP" domains "$name" 2>/dev/null) || true
                     [ ${#appd[@]} -gt 0 ] || { echo "build.sh: unknown app '$name' in $pf" >&2; exit 1; }
-                    for d in "${appd[@]}"; do
+                    slug=$(tr 'A-Z' 'a-z' <<<"$name" | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')
+                    [ -f "$WEBSCAN_DIR/app-$slug.txt" ] && mapfile -t -O "${#appd[@]}" appd < "$WEBSCAN_DIR/app-$slug.txt"
+                    for d in "${appd[@]}"; do   # + names learned while the app was used (webscan.py: app-NAME.txt)
                         [[ $d =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] && allows+=("$d")
                     done ;;
                 allow-site)

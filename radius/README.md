@@ -1117,12 +1117,20 @@ Dashboard → **Blocking → Why blocked? → Block page for users** on (ya `rad
 ## 7u. Website ya app ka sirf naam — baqi khud (automatic)
 
 Policy → Edit → **Websites always open** mein sirf `minascollection.com` likhein (file mein `allow-web minascollection.com`), ya **Apps always open** mein app ka naam (`allow-app Instagram`).
-- **Server site ko khud parhta hai** (`tools/webscan.py`): home page + 4 andar ke pages + un ki CSS. Jahan jahan se cheezein aati hain — Google Fonts, `fonts.gstatic.com`, CDN (jsDelivr, Shopify), Instagram tasveerein (`cdninstagram.com`) — sab khul jati hain. **Ads / trackers** (Google Analytics, Tag Manager, Facebook pixel …) nahi kholte. Embed (YouTube, maps) sirf pooche jate hain.
-- **Har roz dobara** parhta hai (hourly job, 24 ghante se purana ho to).
-- **Istemal se seekhta hai**: policy wala device site ka naam poochne ke 20 second ke andar jo aur naam poochta hai aur band hain — jane pehchane helpers (fonts, CDNs) khud khul jate hain, baqi **Blocking → Allowed websites** mein **Allow / Ignore**.
-- Apps: app catalog ke saare domains (seekhe hue bhi) — catalog mein na ho to **App profiles → Learn an app**.
-- CLI: `radius-admin webscan list | scan SITE | show SITE | allow SITE NAME | ignore SITE NAME | auto`.
-- Server sirf **public** addresses parhta hai (LAN / localhost nahi). Tests: `tests/test-webscan.sh` (25).
+- **Server site ko khud parhta hai** (`tools/webscan.py`). Pehle foran ek **jaldi read** (home page + 4 pages), phir **poori site background mein**:
+  `robots.txt` aur `sitemap.xml` se saare pages (sitemap index bhi), **150 pages tak**, 4 ek saath, zyada se zyada 4 minute; har page ki CSS aur **JavaScript files** bhi.
+  Jahan jahan se cheezein aati hain — Google Fonts, `fonts.gstatic.com`, CDN (jsDelivr, Shopify), Instagram tasveerein (`cdninstagram.com`) — sab khul jati hain.
+  JS mein likhe naam: file jaise (`cdn.`, `static.`, `img.`, `media.` …) khud khulte hain, baqi (maslan API) sirf pooche jate hain.
+  **Ads / trackers** (Google Analytics, Tag Manager, Facebook pixel …) nahi kholte. Embed (YouTube, maps) sirf pooche jate hain.
+  Parhai khatam hote hi routers ko khud naye rules mil jate hain. Dashboard par progress dikhta hai ("40 of up to 150 pages").
+- **Har roz dobara** poori site parhta hai (hourly job, har ghante 3 purani sites).
+- **Istemal se seekhta hai** — websites, **apps** (`allow-app`) aur **app profiles** (`allow-only`, maslan hikconnect) teeno:
+  policy wala device naam poochne ke 20 second ke andar jo aur naam poochta hai aur band hain — jane pehchane helpers (fonts, CDNs) khud khul jate hain, baqi **Blocking → Allowed websites & apps** mein **Allow / Ignore**.
+  App profile ki `host` lines se company pata chalti hai: `host g.whatsapp.net` ho to koi bhi `*.whatsapp.net` khud khul jata hai (lekin `deny-sni facebook` wale nahi).
+  App ke liye "same company" khud nahi kholta (Instagram ki list mein ek facebook.com naam hai — poora Facebook na khul jaye), sirf poochta hai.
+- Apps: app catalog ke saare domains + seekhe hue (`webscan/app-NAME.txt`) — catalog mein na ho to **App profiles → Learn an app**.
+- CLI: `radius-admin webscan list | scan SITE [--deep] | deep SITE | show KEY | allow KEY NAME | ignore KEY NAME | auto` (KEY: site, `app-instagram`, `ao-hikconnect`).
+- Server sirf **public** addresses parhta hai (LAN / localhost nahi). Tests: `tests/test-webscan.sh` (48, API ke saath), `tests/test-whyblocked.py`.
 
 ## 7t. Sirf kuch apps (maslan WhatsApp + Hik-Connect)
 

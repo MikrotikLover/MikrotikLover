@@ -714,6 +714,8 @@ webscan_new() {   # stdin: policy text; scan every allow-web site that was never
         echo "Reading $site to find what it needs …" >&2
         python3 -I /usr/local/lib/mikrotiklover/webscan.py scan "$site" --dir "$WEBSCAN_DIR" >/dev/null 2>&1 || true
         [ -f "$WEBSCAN_DIR/$site.txt" ] || : > "$WEBSCAN_DIR/$site.txt" 2>/dev/null || true
+        # then the whole site (sitemap, up to 150 pages, JS files) in the background; the routers get it after
+        python3 -I /usr/local/lib/mikrotiklover/webscan.py scan "$site" --deep --background --rebuild --dir "$WEBSCAN_DIR" >/dev/null 2>&1 || true
     done < <(sed -n 's/#.*//; s/^[[:space:]]*allow-web[[:space:]]\+\(www\.\)\?\([a-z0-9.-]\+\).*/\2/p' | sort -u)
 }
 
@@ -723,25 +725,28 @@ cmd_webscan() {
     local tool=/usr/local/lib/mikrotiklover/webscan.py
     case $sub in
     list)
-        local f s
-        for f in "$WEBSCAN_DIR"/*.json; do
-            [ -f "$f" ] || continue; s=$(basename "$f" .json)
-            python3 -I -c 'import json,sys,time; d=json.load(open(sys.argv[1])); print(f"{d[\"site\"]:<28} {len(d[\"allowed\"]):>3} allowed  {len(d[\"suggest\"]):>3} to answer  scanned {time.strftime(\"%Y-%m-%d %H:%M\", time.localtime(d.get(\"scanned\",0))) if d.get(\"scanned\") else \"never\"}  {d.get(\"error\",\"\")}")' "$f"
-        done ;;
+        python3 -I "$tool" list --dir "$WEBSCAN_DIR" ;;
     scan)
-        local site=${1:-}; [ -n "$site" ] || die "usage: radius-admin webscan scan SITE"
-        python3 -I "$tool" scan "$site" --dir "$WEBSCAN_DIR" || die "Could not read the site (see above)"
+        local site=${1:-}; [ -n "$site" ] || die "usage: radius-admin webscan scan SITE [--deep]"
+        if [ "${2:-}" = --deep ]; then
+            python3 -I "$tool" scan "$site" --deep --dir "$WEBSCAN_DIR" || die "Could not read the site (see above)"
+        else
+            python3 -I "$tool" scan "$site" --dir "$WEBSCAN_DIR" || die "Could not read the site (see above)"
+        fi
         cmd_policy build >/dev/null 2>&1 || true ;;
+    deep)   # the whole site in the background (sitemap, up to 150 pages, JS files); routers updated after
+        local site=${1:-}; [ -n "$site" ] || die "usage: radius-admin webscan deep SITE"
+        python3 -I "$tool" scan "$site" --deep --background --rebuild --dir "$WEBSCAN_DIR" || die "Could not start reading the site" ;;
     show)
         python3 -I "$tool" show "${1:-}" --dir "$WEBSCAN_DIR" ;;
     allow|ignore)
-        python3 -I "$tool" "$sub" "${1:-}" "${2:-}" --dir "$WEBSCAN_DIR" || die "usage: radius-admin webscan $sub SITE NAME"
+        python3 -I "$tool" "$sub" "${1:-}" "${2:-}" --dir "$WEBSCAN_DIR" || die "usage: radius-admin webscan $sub SITE|app-NAME|ao-PROFILE NAME"
         cmd_policy build >/dev/null 2>&1 || true ;;
-    auto)   # hourly: rescan sites older than a day, learn helpers from the DNS log
-        local out; out=$(python3 -I "$tool" auto --dir "$WEBSCAN_DIR" --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" --policies "$POLICY_DIR") || die "$out"
+    auto)   # hourly: read old sites deeply again, learn helpers (sites, apps, app profiles) from the DNS log
+        local out; out=$(python3 -I "$tool" auto --dir "$WEBSCAN_DIR" --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" --policies "$POLICY_DIR" --allowonly "$AO_DIR") || die "$out"
         echo "$out"
         [ "$out" = "changed: -" ] || cmd_policy build >/dev/null 2>&1 || true ;;
-    *) die "usage: radius-admin webscan list | scan SITE | show SITE | allow SITE NAME | ignore SITE NAME | auto" ;;
+    *) die "usage: radius-admin webscan list | scan SITE [--deep] | deep SITE | show KEY | allow KEY NAME | ignore KEY NAME | auto" ;;
     esac
 }
 
@@ -3013,8 +3018,9 @@ Why blocked?
   why SITE [USER|IP]                    which list / policy rule blocks a site for a user, and is it active now
   blockpage on|off                      users with a policy see a page (logo, reason, code) for blocked http:// sites
   blockpage ref CODE | status           look up the code a user read from the page
-  webscan list | scan SITE | show SITE  allow-web sites: what each needs from elsewhere (fonts, CDNs), found by the server
-  webscan allow|ignore SITE NAME        answer a suggestion (names asked right after the site but blocked)
+  webscan list | scan SITE [--deep]     allow-web sites: what each needs from elsewhere (fonts, CDNs), found by the server
+  webscan deep SITE                     read the whole site in the background (sitemap, 150 pages, JS files)
+  webscan show|allow|ignore KEY [NAME]  KEY: a site, app-NAME (allow-app) or ao-PROFILE (allow-only); answer a suggestion
   allowonly list | show NAME            "only these apps" profiles (whatsapp, hikconnect, your own)
   allowonly set NAME < file | del NAME  edit one (lines: domain NAME, host NAME, net CIDR|@lan, deny-sni WORD)
   allowonly learn IP|USER [15]          names a phone asked in the last minutes (DNS logger) -> domain lines
