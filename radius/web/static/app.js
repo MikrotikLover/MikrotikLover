@@ -1816,11 +1816,21 @@ function policyEditor(meta, pol) {
   const used = new Set(), first = (pred) => { const i = rules.findIndex((r, n) => !used.has(n) && pred(r)); if (i >= 0) used.add(i); return i >= 0 ? rules[i] : null; };
   const name = h("input", { name: "name", required: true, pattern: "[a-z0-9\\-]{1,40}", placeholder: "e.g. kids", value: pol?.name || "", disabled: !!pol });
   const desc = h("input", { placeholder: "e.g. Kids: no TikTok, no YouTube videos", value: pol?.description || "" });
-  const onlyRule = first((r) => r.kind === "allow-only");
+  const onlyRules = []; let o;
+  while ((o = first((r) => r.kind === "allow-only"))) onlyRules.push(o);
+  const onlyRule = onlyRules[0] || null;
   const noneRule = onlyRule ? null : first((r) => r.kind === "block-all" && !r.time);
   const mode = onlyRule ? "only" : noneRule ? "none" : "block";
-  const modeSel = h("select", {}, [["block", "Block what I choose (the rest works)"], ["only", "WhatsApp ONLY (everything else blocked)"], ["none", "No internet at all"]]
+  const modeSel = h("select", {}, [["block", "Block what I choose (the rest works)"], ["only", "ONLY the apps I choose (everything else blocked)"], ["none", "No internet at all"]]
     .map(([v, l]) => h("option", { value: v, selected: v === mode }, l)));
+  const onlyChosen = new Set(onlyRules.map((r) => r.value));
+  if (!onlyChosen.size) onlyChosen.add("whatsapp");
+  const onlyBoxes = h("div", { class: "chips" }, (meta.allow_only || []).map((a) => {
+    const cb = h("input", { type: "checkbox", checked: onlyChosen.has(a) });
+    const chip = h("label", { class: "chip" + (onlyChosen.has(a) ? " on" : "") }, cb, a);
+    cb.addEventListener("change", () => { cb.checked ? onlyChosen.add(a) : onlyChosen.delete(a); chip.classList.toggle("on", cb.checked); preview(); });
+    return chip;
+  }));
   const row = (title, help, rule) => {        // a tick + its own time
     const cb = h("input", { type: "checkbox", checked: !!rule });
     const label = h("label", { class: "check" + (rule ? " on" : "") }, cb, h("div", {}, h("b", {}, title), help ? h("span", {}, help) : null));
@@ -1907,7 +1917,7 @@ function policyEditor(meta, pol) {
     h("label", { class: "field" }, "DNS for these users", dnsSel), ech, extraBox);
   function text() {
     const lines = [`# ${desc.value.trim() || name.value || "policy"}`];
-    if (modeSel.value === "only") lines.push(`allow-only ${onlyRule?.value || "whatsapp"}`);
+    if (modeSel.value === "only") [...onlyChosen].sort().forEach((a) => lines.push(`allow-only ${a}`));
     else if (modeSel.value === "none") lines.push("block-all");
     else {
       cats.filter((c) => c.cb.checked).forEach((c) => lines.push(`block ${c.value}${tm(c.tp.value())}`));
@@ -1930,7 +1940,9 @@ function policyEditor(meta, pol) {
   [modeSel, dnsSel].forEach((el) => el.addEventListener("change", preview));
   [desc, name].forEach((el) => el.addEventListener("input", preview));
   drawApps(); drawChosen(); preview();
-  const onlyNote = h("div", { class: "note", hidden: modeSel.value !== "only" }, "WhatsApp only: chat, voice/video calls, photos and status work. Facebook, Instagram, YouTube, browsers and every other app are blocked.");
+  const onlyNote = h("div", { class: "stack", hidden: modeSel.value !== "only" },
+    h("div", { class: "field" }, h("b", {}, "Apps that work"), h("div", { class: "help" }, "Tick one or more. Everything else is blocked. Make or change an app: Blocking → App profiles."), onlyBoxes),
+    h("div", { class: "note" }, "whatsapp: chat, calls, photos and status (Facebook / Instagram stay blocked). hikconnect: Hik-Connect cloud + an NVR / DVR in this network (add one at another place in App profiles)."));
   const form = h("form", { class: "form policy-editor", onsubmit: (e) => e.preventDefault() },
     h("div", { class: "form cols" }, h("label", { class: "field" }, "Policy name", h("span", { class: "help" }, "small letters, digits, -"), name),
       h("label", { class: "field" }, "Description", h("span", { class: "help" }, "shown when you pick a policy"), desc)),
@@ -1948,6 +1960,7 @@ ROUTES.blocking = async (tab = "policies", ...rest) => {
   if (tab === "parental") return parentalPage();
   if (tab === "why") return whyBlocked(...rest);
   if (tab === "requests") return unblockRequests();
+  if (tab === "apps") return appProfiles();
   const [meta, ul] = await Promise.all([api("GET", "/api/blocking"), api("GET", "/api/users")]);
   const r = meta.router;
   const openEditor = (pol) => {
@@ -2119,8 +2132,71 @@ async function parentalPage() {
     card("For the parents", null, h("div", { class: "muted" }, "Which sites and apps a child used: Users → the child → Top sites (7 days), or Insights for the whole network. A blocked try shows up in Blocking logs."))));
 }
 
-const blockingTabs = (tab) => h("div", { class: "tabs" }, [["policies", "Policies"], ["parental", "Parental controls"], ["logs", "Blocking logs"], ["why", "Why blocked?"], ["requests", "Requests"]]
+const blockingTabs = (tab) => h("div", { class: "tabs" }, [["policies", "Policies"], ["parental", "Parental controls"], ["logs", "Blocking logs"], ["why", "Why blocked?"], ["requests", "Requests"], ["apps", "App profiles"]]
   .map(([k, l]) => h("a", { href: `#/blocking/${k}`, class: k === tab ? "active" : "" }, l)));
+async function appProfiles() {
+  const d = await api("GET", "/api/allowonly");
+  const edit = (pr) => {
+    const nameIn = h("input", { name: "name", required: true, pattern: "[a-z0-9][a-z0-9\\-]{0,30}", value: pr ? pr.name : "", readonly: !!pr, placeholder: "e.g. hikconnect" });
+    const ta = h("textarea", { name: "text", rows: 14, spellcheck: "false", class: "mono" }, pr ? pr.text : "# Profile: My app\ndomain example.com\n");
+    const form = h("form", { class: "form", onsubmit: (e) => e.preventDefault() },
+      h("label", { class: "field" }, "Name", nameIn),
+      h("label", { class: "field" }, "Lines", h("span", { class: "help" }, "domain NAME (every name under it) · host NAME · net 203.0.113.25 or net @lan (this office) · deny-sni WORD · block-quic"), ta));
+    dialog(pr ? `App profile ${pr.name}` : "New app profile", form, [{ label: "Cancel" }, { label: "Save", class: "primary", action: async () => {
+      if (!form.reportValidity()) return false;
+      if (!(await act(api("POST", "/api/allowonly", { name: nameIn.value.trim(), text: ta.value })))) return false;
+      route();
+    } }]);
+  };
+  const cards = d.profiles.map((pr) => card(pr.name, pr.used_by.length ? `used by: ${pr.used_by.join(", ")}` : "not used yet",
+    h("div", { class: "muted" }, pr.title),
+    h("pre", { class: "code-box small" }, pr.text.split("\n").filter((l) => l.trim() && !l.startsWith("#")).join("\n") || "(empty)"),
+    isAdmin() ? h("div", { class: "toolbar" }, h("button", { class: "small", onclick: () => edit(pr) }, "Edit"),
+      !pr.used_by.length ? h("button", { class: "small danger", onclick: async () => {
+        if (await confirmDlg("Delete app profile", `Delete ${pr.name}?`, "Delete")) if (await act(api("DELETE", `/api/allowonly/${pr.name}`))) route();
+      } }, "Delete") : null) : null));
+  // learn an app from what a phone looked up
+  const whoIn = h("input", { type: "search", placeholder: "user or the phone's IP", list: "ao-users" });
+  const minSel = h("select", {}, [["10", "last 10 minutes"], ["30", "last 30 minutes"], ["60", "last hour"], ["1440", "last day"]].map(([v, l]) => h("option", { value: v }, l)));
+  const out = h("div", { class: "stack" });
+  const users = await api("GET", "/api/users").then((r) => (r.users || []).map((u) => u.username)).catch(() => []);
+  const show = async () => {
+    let r;
+    try { r = await api("GET", `/api/allowonly/learn?${new URLSearchParams({ who: whoIn.value.trim(), minutes: minSel.value })}`); }
+    catch (e) { out.replaceChildren(h("div", { class: "note" }, e.message)); return; }
+    if (!r.sites.length) { out.replaceChildren(h("div", { class: "empty" }, `No names asked by ${r.ip} in that time. Use the app on the phone, then press Show again.`)); return; }
+    const ticks = r.sites.map((g) => ({ g, cb: h("input", { type: "checkbox", checked: !g.background, onchange: (e) => e.target.closest("label").classList.toggle("on", e.target.checked) }) }));
+    const target = h("input", { placeholder: "profile name, e.g. hikconnect", list: "ao-names", pattern: "[a-z0-9][a-z0-9\\-]{0,30}" });
+    out.replaceChildren(
+      h("div", { class: "muted" }, `${r.ip}: ${r.sites.length} sites. Ticked = probably the app; the others are what every phone asks in the background.`),
+      h("div", { class: "stack tight" }, ticks.map(({ g, cb }) => h("label", { class: "check" + (cb.checked ? " on" : "") }, cb,
+        h("div", {}, h("b", {}, g.site), h("span", {}, `${g.count}× · ${g.names.slice(0, 4).join(", ")}${g.names.length > 4 ? " …" : ""}`))))),
+      isAdmin() ? h("div", { class: "toolbar wrap" }, target, h("button", { class: "primary", onclick: async () => {
+        const name = target.value.trim();
+        if (!/^[a-z0-9][a-z0-9-]{0,30}$/.test(name)) return toast("Profile name: a-z 0-9 -", true);
+        const sites = ticks.filter((x) => x.cb.checked).map((x) => x.g.site);
+        if (!sites.length) return toast("Tick at least one site", true);
+        const old = d.profiles.find((p) => p.name === name);
+        const have = new Set((old ? old.text : "").split("\n").map((l) => l.trim()));
+        const add = sites.map((x) => `domain ${x}`).filter((l) => !have.has(l));
+        const text = (old ? old.text.replace(/\n*$/, "\n") : `# Profile: ${name} (learned from ${r.ip})\n`) + add.join("\n") + "\n";
+        if (await act(api("POST", "/api/allowonly", { name, text }))) route();
+      } }, "Save as app profile")) : null);
+  };
+  shell("Blocking", h("div", { class: "stack" }, blockingTabs("apps"),
+    h("div", { class: "note" }, "An app profile lists what one app needs. In a policy choose \"ONLY the apps I choose\" and tick the profiles — e.g. whatsapp + hikconnect: those two work, everything else is blocked."),
+    isAdmin() ? h("div", { class: "toolbar" }, h("span", { class: "grow" }), h("button", { class: "primary", onclick: () => edit(null) }, icon("plus"), "New app profile")) : null,
+    h("div", { class: "grid dept-grid" }, cards),
+    card("Learn an app", d.dnslog ? "from the DNS logger" : "needs the DNS logger",
+      h("ol", { class: "steps" },
+        h("li", {}, "Take a phone that is NOT limited yet (or give its user a normal policy for a moment)."),
+        h("li", {}, "On it, open the app and use everything: login, live view, playback …"),
+        h("li", {}, "Here: the user or the phone's IP → Show → tick the app's sites → Save as app profile.")),
+      h("div", { class: "toolbar wrap" }, whoIn, minSel, h("button", { onclick: show }, icon("search"), "Show"),
+        h("datalist", { id: "ao-users" }, users.map((u) => h("option", { value: u }))), h("datalist", { id: "ao-names" }, d.profiles.map((p) => h("option", { value: p.name })))),
+      out)));
+}
+
 async function unblockRequests() {
   const d = await api("GET", "/api/unblock");
   const who = (r) => h("span", {}, r.username || h("span", { class: "muted" }, "(no login)"), h("div", { class: "muted small" }, r.ip || ""));

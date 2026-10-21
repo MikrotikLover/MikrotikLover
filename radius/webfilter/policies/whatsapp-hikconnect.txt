@@ -1,0 +1,3 @@
+# Only WhatsApp and Hik-Connect (cameras); everything else is blocked
+allow-only whatsapp
+allow-only hikconnect

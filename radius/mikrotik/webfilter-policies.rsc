@@ -7,16 +7,51 @@
 #   subnet / VLAN       : /ip firewall address-list add list=policy-staff address=192.168.20.0/24
 #   hotspot user        : radius-admin user policy ali students
 #   hotspot group       : radius-admin group add class-9 --policy students
-# Policies: guests kids-night night-off no-internet no-tiktok-pubg no-video-day no-video no-vpn staff students whatsapp-only 
+# Policies: guests kids-night night-off no-internet no-tiktok-pubg no-video-day no-video no-vpn staff students whatsapp-hikconnect whatsapp-only 
 # Checks the HTTPS site name (SNI), so it works per device even when DNS answers are cached.
 
 /ip firewall address-list
 remove [find comment~"^wfpolicy:"]
+/ip dns static
+remove [find comment~"^wfchain:"]
 /ip firewall filter
 remove [find comment~"^wfpolicy:"]
 remove [find comment~"^wfchain:"]
 /ip firewall nat
 remove [find comment~"^wfpolicy:"]
+
+# ---- allow-only profile hikconnect (address lists)
+/ip firewall address-list
+remove [find comment~"^wfchain:ao-hikconnect"]
+add list=hikconnect-servers address=10.0.0.0/8 comment="wfchain:ao-hikconnect"
+add list=hikconnect-servers address=172.16.0.0/12 comment="wfchain:ao-hikconnect"
+add list=hikconnect-servers address=192.168.0.0/16 comment="wfchain:ao-hikconnect"
+/ip dns static
+remove [find comment="wfchain:ao-hikconnect dns"]
+:do {
+  :local up [:tostr [:pick [/ip dns get servers] 0]]
+  :if ([:len $up] = 0) do={ :set up [:tostr [:pick [/ip dns get dynamic-servers] 0]] }
+  :if ([:len $up] = 0) do={ :set up "1.1.1.1" }
+  /ip dns static add name=hik-connect.com match-subdomain=yes type=FWD forward-to=$up address-list=hikconnect-servers address-list-timeout=1d comment="wfchain:ao-hikconnect dns"
+  /ip dns static add name=hikvision.com match-subdomain=yes type=FWD forward-to=$up address-list=hikconnect-servers address-list-timeout=1d comment="wfchain:ao-hikconnect dns"
+} on-error={ :log warning "allow-only hikconnect: DNS names not added (RouterOS 7.15+ needed)" }
+/ip firewall address-list
+# Phone/PC support: Wi-Fi "internet available" checks (HTTP only) and push notifications
+remove [find comment="allowonly:support"]
+add list=allowonly-checks address=connectivitycheck.gstatic.com comment="allowonly:support"
+add list=allowonly-checks address=connectivitycheck.android.com comment="allowonly:support"
+add list=allowonly-checks address=clients3.google.com comment="allowonly:support"
+add list=allowonly-checks address=captive.apple.com comment="allowonly:support"
+add list=allowonly-checks address=www.msftconnecttest.com comment="allowonly:support"
+add list=allowonly-gpush address=mtalk.google.com comment="allowonly:support"
+add list=allowonly-gpush address=alt1-mtalk.google.com comment="allowonly:support"
+add list=allowonly-gpush address=alt2-mtalk.google.com comment="allowonly:support"
+add list=allowonly-gpush address=alt3-mtalk.google.com comment="allowonly:support"
+add list=allowonly-gpush address=alt4-mtalk.google.com comment="allowonly:support"
+add list=allowonly-gpush address=alt5-mtalk.google.com comment="allowonly:support"
+add list=allowonly-gpush address=alt6-mtalk.google.com comment="allowonly:support"
+add list=allowonly-gpush address=alt7-mtalk.google.com comment="allowonly:support"
+add list=allowonly-gpush address=alt8-mtalk.google.com comment="allowonly:support"
 
 # ---- allow-only profile whatsapp (address lists)
 /ip firewall address-list
@@ -478,6 +513,12 @@ add chain=wf-app-tiktok protocol=tcp tls-host="*.tiktokw.us" action=reject rejec
 add chain=wf-app-tiktok protocol=tcp tls-host="ttwstatic.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-app-tiktok" comment="wfchain:wf-app-tiktok"
 add chain=wf-app-tiktok protocol=tcp tls-host="*.ttwstatic.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-app-tiktok" comment="wfchain:wf-app-tiktok"
 add chain=wf-app-tiktok action=return comment="wfchain:wf-app-tiktok"
+# allow-only profile hikconnect
+add chain=ao-hikconnect dst-address-list=hikconnect-servers action=accept comment="wfchain:ao-hikconnect allow"
+add chain=ao-hikconnect dst-address-list=allowonly-checks protocol=tcp dst-port=80 action=accept comment="wfchain:ao-hikconnect connectivity check"
+add chain=ao-hikconnect dst-address-list=allowonly-gpush protocol=tcp dst-port=5228-5230 action=accept comment="wfchain:ao-hikconnect Android push"
+add chain=ao-hikconnect dst-address=17.0.0.0/8 protocol=tcp dst-port=5223 action=accept comment="wfchain:ao-hikconnect Apple push"
+add chain=ao-hikconnect action=return comment="wfchain:ao-hikconnect"
 # allow-only profile whatsapp
 add chain=ao-whatsapp protocol=tcp dst-port=443 tls-host="*facebook*" action=reject reject-with=tcp-reset comment="wfchain:ao-whatsapp deny facebook"
 add chain=ao-whatsapp protocol=tcp dst-port=443 tls-host="*fbcdn*" action=reject reject-with=tcp-reset comment="wfchain:ao-whatsapp deny fbcdn"
@@ -494,9 +535,7 @@ add chain=ao-whatsapp dst-address-list=whatsapp-servers action=accept comment="w
 add chain=ao-whatsapp dst-address-list=allowonly-checks protocol=tcp dst-port=80 action=accept comment="wfchain:ao-whatsapp connectivity check"
 add chain=ao-whatsapp dst-address-list=allowonly-gpush protocol=tcp dst-port=5228-5230 action=accept comment="wfchain:ao-whatsapp Android push"
 add chain=ao-whatsapp dst-address=17.0.0.0/8 protocol=tcp dst-port=5223 action=accept comment="wfchain:ao-whatsapp Apple push"
-add chain=ao-whatsapp connection-state=new action=log log-prefix="WF-allowonly" limit=20/1m,10:packet comment="wfchain:ao-whatsapp blocked (log)"
-add chain=ao-whatsapp protocol=tcp action=reject reject-with=tcp-reset comment="wfchain:ao-whatsapp block rest"
-add chain=ao-whatsapp action=reject reject-with=icmp-admin-prohibited comment="wfchain:ao-whatsapp block rest"
+add chain=ao-whatsapp action=return comment="wfchain:ao-whatsapp"
 
 # ---- quarantine: infected devices (address list ml-quarantine, filled by the server) get no internet,
 #      only DNS and the server's warning page (every http:// address shows it)
@@ -592,9 +631,19 @@ add chain=wfp-students protocol=udp dst-port=443 action=drop comment="wfpolicy:s
 add chain=dstnat src-address-list=policy-students protocol=udp dst-port=53 action=dst-nat to-addresses=185.228.168.168 comment="wfpolicy:students dns cleanbrowsing-family"
 add chain=dstnat src-address-list=policy-students protocol=tcp dst-port=53 action=dst-nat to-addresses=185.228.168.168 comment="wfpolicy:students dns cleanbrowsing-family"
 /ip firewall filter
+# --- policy whatsapp-hikconnect: Only WhatsApp and Hik-Connect (cameras); everything else is blocked
+add chain=forward src-address-list=policy-whatsapp-hikconnect action=jump jump-target=wfp-whatsapp-hikconnect comment="wfpolicy:whatsapp-hikconnect"
+add chain=wfp-whatsapp-hikconnect action=jump jump-target=ao-hikconnect comment="wfpolicy:whatsapp-hikconnect allow only hikconnect"
+add chain=wfp-whatsapp-hikconnect action=jump jump-target=ao-whatsapp comment="wfpolicy:whatsapp-hikconnect allow only whatsapp"
+add chain=wfp-whatsapp-hikconnect connection-state=new action=log log-prefix="WF-allowonly" limit=20/1m,10:packet comment="wfpolicy:whatsapp-hikconnect allow-only: blocked (log)"
+add chain=wfp-whatsapp-hikconnect protocol=tcp action=reject reject-with=tcp-reset comment="wfpolicy:whatsapp-hikconnect allow-only: block rest"
+add chain=wfp-whatsapp-hikconnect action=reject reject-with=icmp-admin-prohibited comment="wfpolicy:whatsapp-hikconnect allow-only: block rest"
 # --- policy whatsapp-only: WhatsApp only: chat, calls, photos and status work; every other app and website is blocked
 add chain=forward src-address-list=policy-whatsapp-only action=jump jump-target=wfp-whatsapp-only comment="wfpolicy:whatsapp-only"
 add chain=wfp-whatsapp-only action=jump jump-target=ao-whatsapp comment="wfpolicy:whatsapp-only allow only whatsapp"
+add chain=wfp-whatsapp-only connection-state=new action=log log-prefix="WF-allowonly" limit=20/1m,10:packet comment="wfpolicy:whatsapp-only allow-only: blocked (log)"
+add chain=wfp-whatsapp-only protocol=tcp action=reject reject-with=tcp-reset comment="wfpolicy:whatsapp-only allow-only: block rest"
+add chain=wfp-whatsapp-only action=reject reject-with=icmp-admin-prohibited comment="wfpolicy:whatsapp-only allow-only: block rest"
 
 # Policy rules above every other forward rule; DNS rules above the base DNS redirect.
 /ip firewall filter

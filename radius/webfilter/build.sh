@@ -6,12 +6,14 @@
 # Environment (radius-admin policy build on the server sets these):
 #   WF_OUT=DIR        where the .rsc files go (default ../mikrotik)
 #   POLICY_DIR=DIR    the policies (default ./policies; the dashboard edits /var/lib/mikrotiklover/policies)
+#   AO_DIR=DIR        allow-only app profiles (default ./allowonly; the dashboard edits /var/lib/mikrotiklover/allowonly)
 #   VPN_DOMAINS=FILE  VPN names learned on this network (tools/vpn.py), for "block-vpn"
 #   CDNMAP=FILE       tools/cdnmap.py — app domain lists for "block-app"
 set -euo pipefail
 cd "$(dirname "$0")"
 OUT=${WF_OUT:-../mikrotik}
 POLICY_DIR=${POLICY_DIR:-policies}
+AO_DIR=${AO_DIR:-allowonly}          # allow-only app profiles (the dashboard edits /var/lib/mikrotiklover/allowonly)
 CDNMAP=${CDNMAP:-$( [ -f ../tools/cdnmap.py ] && echo ../tools/cdnmap.py || echo ../cdnmap.py )}
 
 if [ "${1:-}" = --update-meta ]; then
@@ -131,18 +133,22 @@ join() { local IFS='|'; echo "$*"; }
 echo "build.sh: keywords — ${#kw_any[@]} anywhere, ${#kw_start[@]} at start" >&2
 
 # ---------------------------------------------------------------- allow-only profiles (e.g. WhatsApp only)
-ao_parse() { # ao_parse PROFILE -> globals nets hosts deny quic
-    local prof="allowonly/$1.txt" line key val
+ao_parse() { # ao_parse PROFILE -> globals nets hosts domains deny quic
+    local prof="$AO_DIR/$1.txt" line key val
     [ -f "$prof" ] || { echo "build.sh: unknown allow-only profile '$1'" >&2; exit 1; }
-    nets=() hosts=() deny=() quic=0
+    nets=() hosts=() domains=() deny=() quic=0
     while IFS= read -r line || [ -n "$line" ]; do
         line=${line%%#*}; read -r key val _ <<<"$line" || true
         [ -n "${key:-}" ] || continue
         case $key in
             net)  if [ "$val" = @meta ]; then mapfile -t -O "${#nets[@]}" nets < <(grep -E '^[0-9.]+/[0-9]+$' allowonly/meta-ipv4.txt)
+                  elif [ "$val" = @lan ]; then nets+=(10.0.0.0/8 172.16.0.0/12 192.168.0.0/16)
                   elif [[ $val =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?$ ]]; then nets+=("$val")
                   else echo "build.sh: bad net '$val' in $prof" >&2; exit 1; fi ;;
             host) [[ $val =~ ^[a-z0-9.-]+$ ]] || { echo "build.sh: bad host '$val' in $prof" >&2; exit 1; }; hosts+=("$val") ;;
+            domain) # every name under it: the router's DNS puts the addresses it answers into the list (RouterOS 7.15+)
+                  [[ $val =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] || { echo "build.sh: bad domain '$val' in $prof" >&2; exit 1; }
+                  domains+=("$val") ;;
             deny-sni) [[ $val =~ ^[a-z0-9.-]+$ ]] || { echo "build.sh: bad deny-sni '$val' in $prof" >&2; exit 1; }; deny+=("$val") ;;
             block-quic) quic=1 ;;
             *) echo "build.sh: unknown directive '$key' in $prof" >&2; exit 1 ;;
@@ -156,6 +162,20 @@ ao_lists() { # ao_lists PROFILE COMMENT -> address lists the profile allows
     echo "remove [find comment~\"^$C\"]"
     for n in "${nets[@]}"; do echo "add list=$p-servers address=$n comment=\"$C\""; done
     for h in "${hosts[@]}"; do echo "add list=$p-servers address=$h comment=\"$C\""; done
+    if [ ${#domains[@]} -gt 0 ]; then
+        # every name under these domains: the router's DNS adds the addresses it answers to the list
+        echo "/ip dns static"
+        echo "remove [find comment=\"$C dns\"]"
+        echo ":do {"
+        echo "  :local up [:tostr [:pick [/ip dns get servers] 0]]"
+        echo "  :if ([:len \$up] = 0) do={ :set up [:tostr [:pick [/ip dns get dynamic-servers] 0]] }"
+        echo "  :if ([:len \$up] = 0) do={ :set up \"1.1.1.1\" }"
+        for d in "${domains[@]}"; do
+            echo "  /ip dns static add name=$d match-subdomain=yes type=FWD forward-to=\$up address-list=$p-servers address-list-timeout=1d comment=\"$C dns\""
+        done
+        echo "} on-error={ :log warning \"allow-only $p: DNS names not added (RouterOS 7.15+ needed)\" }"
+        echo "/ip firewall address-list"
+    fi
     echo "# Phone/PC support: Wi-Fi \"internet available\" checks (HTTP only) and push notifications"
     echo "remove [find comment=\"allowonly:support\"]"
     for h in connectivitycheck.gstatic.com connectivitycheck.android.com clients3.google.com captive.apple.com www.msftconnecttest.com; do
@@ -166,8 +186,8 @@ ao_lists() { # ao_lists PROFILE COMMENT -> address lists the profile allows
     done
 }
 
-ao_rules() { # ao_rules PROFILE CHAIN MATCH COMMENT -> filter rules (MATCH e.g. " src-address-list=X", or "")
-    local p=$1 ch=$2 M=$3 C=$4 w
+ao_rules() { # ao_rules PROFILE CHAIN MATCH COMMENT [return] -> filter rules (MATCH e.g. " src-address-list=X", or "")
+    local p=$1 ch=$2 M=$3 C=$4 last=${5:-} w
     for w in "${deny[@]}"; do
         echo "add chain=$ch$M protocol=tcp dst-port=443 tls-host=\"*$w*\" action=reject reject-with=tcp-reset comment=\"$C deny $w\""
     done
@@ -176,12 +196,16 @@ ao_rules() { # ao_rules PROFILE CHAIN MATCH COMMENT -> filter rules (MATCH e.g. 
     echo "add chain=$ch$M dst-address-list=allowonly-checks protocol=tcp dst-port=80 action=accept comment=\"$C connectivity check\""
     echo "add chain=$ch$M dst-address-list=allowonly-gpush protocol=tcp dst-port=5228-5230 action=accept comment=\"$C Android push\""
     echo "add chain=$ch$M dst-address=17.0.0.0/8 protocol=tcp dst-port=5223 action=accept comment=\"$C Apple push\""
+    if [ "$last" = return ]; then      # inside a policy with more apps: the policy refuses the rest after all of them
+        echo "add chain=$ch$M action=return comment=\"$C\""
+        return
+    fi
     echo "add chain=$ch$M connection-state=new action=log log-prefix=\"WF-allowonly\" limit=20/1m,10:packet comment=\"$C blocked (log)\""
     echo "add chain=$ch$M protocol=tcp action=reject reject-with=tcp-reset comment=\"$C block rest\""
     echo "add chain=$ch$M action=reject reject-with=icmp-admin-prohibited comment=\"$C block rest\""
 }
 
-for prof in allowonly/*.txt; do
+for prof in "$AO_DIR"/*.txt; do
     p=$(basename "$prof" .txt)
     [ "$p" = meta-ipv4 ] && continue
     [[ $p =~ ^[a-z0-9-]+$ ]] || { echo "build.sh: bad profile name $p" >&2; exit 1; }
@@ -276,7 +300,7 @@ for pf in $(policy_files); do
     p=$(basename "$pf" .txt)
     [[ $p =~ ^[a-z0-9-]{1,40}$ ]] || { echo "build.sh: bad policy name $p" >&2; exit 1; }
     L="policy-$p" C="wfpolicy:$p"
-    any=0 ech=0 dns=router untimed=0 qtimes=() ao="" allows=() hard=0
+    any=0 ech=0 dns=router untimed=0 qtimes=() aos=() allows=() hard=0
     pbody=$(mktemp)
     {
         while IFS= read -r line || [ -n "$line" ]; do
@@ -313,8 +337,8 @@ for pf in $(policy_files); do
                     if [ -z "$t" ]; then untimed=1; else qtimes+=("${TT[@]}"); fi
                     for tt in "${TT[@]}"; do echo "add chain=forward src-address-list=$L action=jump jump-target=wf-vpn$tt comment=\"$C vpn\""; done ;;
                 allow-only)
-                    [[ $val =~ ^[a-z0-9-]+$ && -f allowonly/$val.txt && $val != meta-ipv4 ]] || { echo "build.sh: unknown allow-only profile '$val' in $pf" >&2; exit 1; }
-                    ao=$val; used_ao+=("$val"); hard=1 ;;
+                    [[ $val =~ ^[a-z0-9-]+$ && -f $AO_DIR/$val.txt && $val != meta-ipv4 ]] || { echo "build.sh: unknown allow-only profile '$val' in $pf" >&2; exit 1; }
+                    aos+=("$val"); used_ao+=("$val"); hard=1 ;;
                 block-site)
                     # block-site example.com [time=...]   one site (and its subdomains) for this policy only
                     [[ $val =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] || { echo "build.sh: bad site '$val' in $pf" >&2; exit 1; }
@@ -356,8 +380,15 @@ for pf in $(policy_files); do
                 echo "add chain=forward src-address-list=$L protocol=udp dst-port=443 action=drop$qt comment=\"$C no QUIC\""
             done
         fi
-        # allow-only last: everything not blocked above and not in the profile is refused
-        [ -z "$ao" ] || echo "add chain=forward src-address-list=$L action=jump jump-target=ao-$ao comment=\"$C allow only $ao\""
+        # allow-only last: what one of the apps needs is let through, everything else is refused
+        if [ ${#aos[@]} -gt 0 ]; then
+            for a in $(printf '%s\n' "${aos[@]}" | sort -u); do
+                echo "add chain=forward src-address-list=$L action=jump jump-target=ao-$a comment=\"$C allow only $a\""
+            done
+            echo "add chain=forward src-address-list=$L connection-state=new action=log log-prefix=\"WF-allowonly\" limit=20/1m,10:packet comment=\"$C allow-only: blocked (log)\""
+            echo "add chain=forward src-address-list=$L protocol=tcp action=reject reject-with=tcp-reset comment=\"$C allow-only: block rest\""
+            echo "add chain=forward src-address-list=$L action=reject reject-with=icmp-admin-prohibited comment=\"$C allow-only: block rest\""
+        fi
         if [ "$dns" != router ]; then
             echo "/ip firewall nat"
             echo "add chain=dstnat src-address-list=$L protocol=udp dst-port=53 action=dst-nat to-addresses=${DNS_IP[$dns]} comment=\"$C dns $dns\""
@@ -414,6 +445,8 @@ sni_rules() { # sni_rules CHAIN PREFIX < patterns
     echo
     echo "/ip firewall address-list"
     echo "remove [find comment~\"^wfpolicy:\"]"
+    echo "/ip dns static"
+    echo "remove [find comment~\"^wfchain:\"]"
     echo "/ip firewall filter"
     echo "remove [find comment~\"^wfpolicy:\"]"
     echo "remove [find comment~\"^wfchain:\"]"
@@ -451,7 +484,7 @@ sni_rules() { # sni_rules CHAIN PREFIX < patterns
     for a in $(printf '%s\n' "${used_ao[@]}" | sort -u); do
         echo "# allow-only profile $a"
         ao_parse "$a"
-        ao_rules "$a" "ao-$a" "" "wfchain:ao-$a"
+        ao_rules "$a" "ao-$a" "" "wfchain:ao-$a" return
     done
     echo
     echo "# ---- quarantine: infected devices (address list ml-quarantine, filled by the server) get no internet,"

@@ -81,6 +81,14 @@ t("block-site with time=, outside it", r["verdict"] == "blocked-other-times", r)
 r = w.explain("www.facebook.com", "staff", POL2, MON_10, WF, Cat())
 t("rest of the category still blocked", r["verdict"] == "blocked", r)
 
+AO = os.path.join(WF, "allowonly")
+r = w.explain("api.hik-connect.com", "wh", "allow-only whatsapp\nallow-only hikconnect\n", MON_10, WF, Cat(), ao_dir=AO)
+t("two apps only: Hik-Connect cloud name allowed (domain line)", r["verdict"] == "allowed", r)
+r = w.explain("web.whatsapp.com", "wh", "allow-only whatsapp\nallow-only hikconnect\n", MON_10, WF, Cat(), ao_dir=AO)
+t("two apps only: WhatsApp allowed", r["verdict"] == "allowed", r)
+r = w.explain("www.google.com", "wh", "allow-only whatsapp\nallow-only hikconnect\n", MON_10, WF, Cat(), ao_dir=AO)
+t("two apps only: the rest blocked, one reason naming both", r["verdict"] == "blocked" and len(r["rules"]) == 1 and "whatsapp + hikconnect are allowed" in r["summary"], r)
+
 URL = os.environ.get("URL")
 if URL:
     ctx = ssl._create_unverified_context()

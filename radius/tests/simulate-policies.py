@@ -15,6 +15,8 @@ for line in open(RSC):
 
 # filled by the server's router sync on a real router; a sample entry here
 lists.setdefault("vpn-servers", []).append("203.0.113.50")
+# the router's DNS adds what it answers for "domain hik-connect.com" (a sample cloud server here)
+lists.setdefault("hikconnect-servers", []).append("203.0.113.90")
 FAKE_DNS = {"moe.gov.pk": "203.0.113.77", "www.moe.gov.pk": "198.51.100.88", "g.whatsapp.net": "57.144.110.32", "connectivitycheck.gstatic.com": "142.250.181.3"}
 
 def in_list(ip, name):
@@ -82,6 +84,14 @@ CASES = [
     ("no-internet: first packet to moe.gov.pk (address)", F("policy-no-internet", None, "tcp", 443, dst="203.0.113.77"), "allow"),
     ("no-internet: first packet to www.moe.gov.pk (other address)", F("policy-no-internet", None, "tcp", 443, dst="198.51.100.88"), "allow"),
     ("no-internet: first packet elsewhere", F("policy-no-internet", None, "tcp", 443, dst="198.51.100.9"), "reject"),
+    ("whatsapp+hik: whatsapp chat", F("policy-whatsapp-hikconnect", None, "tcp", 5222, dst="157.240.1.53"), "accept"),
+    ("whatsapp+hik: Hik-Connect cloud", F("policy-whatsapp-hikconnect", "api.hik-connect.com", "tcp", 443, dst="203.0.113.90"), "accept"),
+    ("whatsapp+hik: NVR in this office", F("policy-whatsapp-hikconnect", None, "tcp", 8000, dst="192.168.1.64"), "accept"),
+    ("whatsapp+hik: NVR video (UDP) in this office", F("policy-whatsapp-hikconnect", None, "udp", 554, dst="192.168.1.64"), "accept"),
+    ("whatsapp+hik: google", F("policy-whatsapp-hikconnect", "www.google.com", "tcp", 443, dst="142.250.181.4"), "reject"),
+    ("whatsapp+hik: facebook on Meta servers", F("policy-whatsapp-hikconnect", "www.facebook.com", "tcp", 443, dst="157.240.1.35"), "reject"),
+    ("whatsapp+hik: youtube over QUIC", F("policy-whatsapp-hikconnect", None, "udp", 443, dst="142.250.181.4"), "reject"),
+    ("whatsapp-only: still refuses Hik-Connect", F("policy-whatsapp-only", "api.hik-connect.com", "tcp", 443, dst="203.0.113.90"), "reject"),
     ("guests: facebook",                   F("policy-guests", "www.facebook.com"),          "allow"),
     ("guests: thepiratebay",               F("policy-guests", "thepiratebay.org"),          "reject"),
     ("no-internet: google",                F("policy-no-internet", "www.google.com"),       "reject"),

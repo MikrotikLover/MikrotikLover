@@ -808,7 +808,7 @@ def block_decision(host, ip):
         cat = cdnmap.catalog()
     except Exception:                                       # noqa: BLE001
         cat = None
-    r = whyblocked.explain(host, policy, text, datetime.now(), WF_DIR, cat)
+    r = whyblocked.explain(host, policy, text, datetime.now(), WF_DIR, cat, ao_dir=AO_DIR)
     act = next((x for x in r["rules"] if x["active"]), None)
     return r["verdict"] == "blocked", {"user": user, "policy": policy, "rule": act["rule"] if act else "",
                                        "why": act["why"] if act else "", "lists": r["lists"]}
@@ -1069,7 +1069,7 @@ def why_blocked():
         cat = cdnmap.catalog()
     except Exception:                                       # noqa: BLE001
         cat = None
-    res = whyblocked.explain(host, policy, text, at, WF_DIR, cat, vpn_extra)
+    res = whyblocked.explain(host, policy, text, at, WF_DIR, cat, vpn_extra, ao_dir=AO_DIR)
     notes = []
     if lst == "web-filter-exempt":
         notes.append("This user is in web-filter-exempt: the web filter does not apply to them.")
@@ -1912,8 +1912,7 @@ def blocking():
             cats.append({"name": c, "description": d})
     apps = sorted(({"app": a["app"], "category": a["category"] or "other", "discovered": bool(a.get("discovered"))}
                    for a in cdnmap.catalog().apps().values()), key=lambda a: (a["category"], a["app"].lower()))
-    allow_only = sorted(f[:-4] for f in os.listdir(os.path.join(WF_DIR, "allowonly"))
-                        if f.endswith(".txt") and f != "meta-ipv4.txt") if os.path.isdir(os.path.join(WF_DIR, "allowonly")) else []
+    allow_only = ao_profiles()
     return jsonify(policies=pols, categories=cats, apps=apps, allow_only=allow_only, router=router_info())
 
 
@@ -2256,6 +2255,90 @@ def traffic_series():
     tot_rx, tot_tx = sum(v[0] for v in by.values()), sum(v[1] for v in by.values())
     return jsonify(points=pts, step=step, total_rx=tot_rx, total_tx=tot_tx, limit=limit, members=len(names), top=top,
                    peak_rx=max((p["rx_bps"] for p in pts), default=0), peak_tx=max((p["tx_bps"] for p in pts), default=0))
+
+
+# ------------------------------------------------------------------ allow-only app profiles ("only these apps")
+AO_DIR = os.environ.get("MLWEB_ALLOWONLY", "/var/lib/mikrotiklover/allowonly")
+AO_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}$")
+
+
+def ao_profiles():
+    d = AO_DIR if os.path.isdir(AO_DIR) else os.path.join(WF_DIR, "allowonly")
+    try:
+        return sorted(f[:-4] for f in os.listdir(d) if f.endswith(".txt") and f != "meta-ipv4.txt")
+    except OSError:
+        return []
+
+
+@app.get("/api/allowonly")
+@login_required()
+def allowonly_list():
+    used = {}
+    for f in sorted(os.listdir(POLICY_DIR)) if os.path.isdir(POLICY_DIR) else []:
+        if f.endswith(".txt") and f != "README.txt":
+            for line in open(os.path.join(POLICY_DIR, f), encoding="utf-8", errors="replace"):
+                m = re.match(r"^\s*allow-only\s+([a-z0-9-]+)\s*$", line)
+                if m:
+                    used.setdefault(m.group(1), []).append(f[:-4])
+    out = []
+    d = AO_DIR if os.path.isdir(AO_DIR) else os.path.join(WF_DIR, "allowonly")
+    for n in ao_profiles():
+        try:
+            text = open(os.path.join(d, n + ".txt"), encoding="utf-8", errors="replace").read()
+        except OSError:
+            text = ""
+        first = text.splitlines()[0] if text else ""
+        out.append({"name": n, "title": re.sub(r"^#\s*(Profile:\s*)?", "", first) if first.startswith("#") else n,
+                    "text": text, "used_by": used.get(n, []), "shipped": os.path.isfile(os.path.join(WF_DIR, "allowonly", n + ".txt"))})
+    dnslog = os.path.exists(mlreport.DNS_LOG)
+    return jsonify(profiles=out, dnslog=dnslog)
+
+
+@app.post("/api/allowonly")
+@login_required("admin")
+def allowonly_save():
+    data = body()
+    name = field(data, "name", AO_NAME_RE, required=True, maxlen=31)
+    if name == "meta-ipv4":
+        abort(400, "invalid name")
+    text = str(data.get("text", ""))
+    if len(text) > 20000 or not text.strip() or re.search(r"[^\x20-\x7e\n\t]", text):
+        abort(400, "profile text: plain lines (domain NAME, host NAME, net CIDR|@lan, deny-sni WORD, block-quic)")
+    return result(*radius_admin(["allowonly", "set", name], stdin=text.replace("\r", "") + "\n", action=f"allowonly set {name}"))
+
+
+@app.delete("/api/allowonly/<name>")
+@login_required("admin")
+def allowonly_delete(name):
+    if not AO_NAME_RE.match(name):
+        abort(400, "invalid name")
+    return result(*radius_admin(["allowonly", "del", name]))
+
+
+@app.get("/api/allowonly/learn")
+@login_required()
+def allowonly_learn():
+    """Names a device looked up since a time (DNS logger): to make an allow-only profile from."""
+    import applearn
+    who = request.args.get("who", "").strip()
+    try:
+        since = float(request.args.get("since") or (time.time() - 60 * float(request.args.get("minutes", "15"))))
+    except ValueError:
+        abort(400, "since: seconds since 1970, or minutes")
+    since = max(since, time.time() - 7 * 86400)
+    if re.match(r"^\d+\.\d+\.\d+\.\d+$", who):
+        ip = who
+    elif NAME_RE.match(who):
+        r = q1("SELECT framedipaddress FROM radacct WHERE username=%s AND acctstoptime IS NULL ORDER BY acctstarttime DESC LIMIT 1", (who,))
+        if not r or not r["framedipaddress"]:
+            abort(404, f"'{who}' is not online — give the device's IP address")
+        ip = r["framedipaddress"]
+    else:
+        abort(400, "who: a user name or the device's IP address")
+    if not os.path.exists(mlreport.DNS_LOG):
+        abort(409, "the DNS logger is off — turn it on first (Security / radius-admin dnslog on ROUTER_IP)")
+    rows = applearn.learn(ip, since)
+    return jsonify(ip=ip, since=int(since), sites=[{**g, "first": int(g["first"])} for g in rows])
 
 
 # ------------------------------------------------------------------ IP binding (user keeps one LAN address)

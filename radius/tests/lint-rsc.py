@@ -18,7 +18,7 @@ PROPS = {
     "/radius incoming": {"accept"},
     "/ip dns": {"allow-remote-requests", "servers"},
     "/ip dns static": {"name", "regexp", "type", "match-subdomain", "comment", "cname",
-                       "forward-to", "address", "disabled"},
+                       "forward-to", "address", "disabled", "address-list", "address-list-timeout"},
     "/ip dns adlist": {"url", "ssl-verify", "comment", "file", "disabled"},
     "/ip firewall address-list": {"list", "address", "comment", "timeout"},
     "/ipv6 firewall address-list": {"list", "address", "comment", "timeout"},

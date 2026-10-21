@@ -1114,6 +1114,18 @@ Dashboard → **Blocking → Why blocked? → Block page for users** on (ya `rad
 - LAN / private addresses kabhi redirect nahi hote; server band ho to router ka netwatch yeh rasta khud band kar deta hai (internet nahi rukta).
 - Tests: `tests/test-blockpage.sh` (27 checks).
 
+## 7t. Sirf kuch apps (maslan WhatsApp + Hik-Connect)
+
+Blocking → policy → **"ONLY the apps I choose"** → apps par tick (whatsapp, hikconnect, apne banaye hue) → baqi sab band.
+Tayyar policy: **whatsapp-hikconnect**. User ko do: Blocking → "Give a policy to a user".
+- **App profiles** (Blocking → App profiles, `/var/lib/mikrotiklover/allowonly`, `radius-admin allowonly`):
+  `domain hik-connect.com` (har subdomain — router ki DNS jo IP batati hai woh khud list mein, RouterOS 7.15+),
+  `net @lan` (is office ka NVR/DVR), `net 203.0.113.25` / `host mynvr.ddns.net` (doosri jagah ka NVR), `host`, `deny-sni`, `block-quic`.
+- **hikconnect** profile: Hik-Connect cloud (`hik-connect.com`, `hikvision.com`) + office ka NVR. Doosri jagah ka NVR ho to us ka public IP ya DDNS **Edit** se add karein.
+- **Learn an app**: ek khula phone par app chalayein → user/IP likh kar **Show** → app ki sites tick → **Save as app profile** (DNS logger chahiye). CLI: `radius-admin allowonly learn IP 15`.
+- Router: har app ki chain sirf ijazat deti hai (return), aakhir mein policy baqi sab rokti hai.
+- Tests: `tests/test-allowonly.sh` (23), simulator (+8: WhatsApp, Hik cloud, office NVR khule; Google, Facebook, QUIC band).
+
 ## 7s. Policy editor: har rule ka apna waqt
 
 Blocking → policy → **Edit**: har tick (category, VPN, har app, har site, "Internet off completely") ke saath apna **When**:

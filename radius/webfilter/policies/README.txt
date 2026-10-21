@@ -16,8 +16,10 @@ First line: "# description". Directives (one per line):
                               your network (address list vpn-servers, kept up to date by the server) and the
                               VPN protocols (OpenVPN, WireGuard, WARP, IPsec, L2TP, PPTP, SoftEther, Tor).
                               Every try is logged (WF-vpn) — radius-admin vpn / dashboard → VPN watch
-  allow-only PROFILE          only this profile works (../allowonly/PROFILE.txt, e.g. whatsapp),
-                              everything else is refused
+  allow-only PROFILE          only this app works (../allowonly/PROFILE.txt, e.g. whatsapp, hikconnect),
+                              everything else is refused; several lines = several apps
+                              (allow-only whatsapp + allow-only hikconnect). On the server the profiles are
+                              /var/lib/mikrotiklover/allowonly (dashboard → Blocking → App profiles)
   block-all [time=...]        no internet at all (during time= if given)
   dns router|family|adguard-family|cleanbrowsing-family|cleanbrowsing-adult
                               which DNS the members use (default: router = all router-wide filters)

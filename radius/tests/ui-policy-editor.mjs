@@ -46,6 +46,18 @@ for (const pol of meta.policies) {
   await p.keyboard.press("Escape");
 }
 
+// only these apps: a policy with two app profiles shows both ticked and keeps both
+const two = meta.policies.find((x) => x.name === "whatsapp-hikconnect");
+if (two) {
+  await openEditor(two);
+  const dd = p.locator("dialog[open]");
+  ok("only-apps policy: mode and both apps ticked", (await dd.locator("select").first().inputValue()) === "only"
+    && await dd.locator("label.chip", { hasText: /^whatsapp$/ }).locator("input").isChecked() && await dd.locator("label.chip", { hasText: /^hikconnect$/ }).locator("input").isChecked());
+  await dd.locator("label.chip", { hasText: /^hikconnect$/ }).locator("input").uncheck();
+  ok("  ... untick one: only the other stays", norm(await editorText()) === norm("allow-only whatsapp"));
+  await p.keyboard.press("Escape");
+}
+
 // 2. a new policy, one time per rule
 admin("policy", "del", "ui-times");
 await openEditor(null);

@@ -142,22 +142,40 @@ def parse_policy(text):
     return rules
 
 
-def allow_only_ok(host, profile, wf_dir):
-    """Is the host one of the names an allow-only profile lets through (host lines; networks need the IP)?"""
-    for line in read_list(os.path.join(wf_dir, "allowonly", profile + ".txt")):
+AO_DIR = "/var/lib/mikrotiklover/allowonly"
+
+
+def ao_file(profile, wf_dir, ao_dir=None):
+    for d in (ao_dir or AO_DIR, os.path.join(wf_dir, "allowonly")):
+        f = os.path.join(d, profile + ".txt")
+        if os.path.isfile(f):
+            return f
+    return ""
+
+
+def allow_only_ok(host, profile, wf_dir, ao_dir=None):
+    """Does an allow-only profile let this name through (host / domain lines; networks need the IP)?"""
+    for line in read_list(ao_file(profile, wf_dir, ao_dir)):
         key, _, val = line.partition(" ")
-        if key == "host" and domain_hit(host, val.strip()):
+        val = val.strip()
+        if key == "host" and (host == val or (val.startswith("www.") and host == val[4:])):
+            return True
+        if key == "domain" and domain_hit(host, val):
             return True
     return False
 
 
-def explain(host, policy=None, policy_text="", at=None, wf_dir=WF_DIR, catalog=None, vpn_extra=()):
+def explain(host, policy=None, policy_text="", at=None, wf_dir=WF_DIR, catalog=None, vpn_extra=(), ao_dir=None):
     """-> {host, lists, policy, rules: [{rule, blocks, active, why, router}], verdict, summary}"""
     at = at or datetime.now()
     lists = lists_for(host, wf_dir, catalog, vpn_extra)
     cats = {h["name"] for h in lists if h["kind"] == "category"}
     apps = {h["name"].lower() for h in lists if h["kind"] == "app"}
     out = []
+    # several "allow-only" lines: the site is let through when one of the apps needs it
+    aos = [r for r in parse_policy(policy_text) if r["kind"] == "allow-only"] if policy else []
+    ao_pass = any(allow_only_ok(host, r["value"], wf_dir, ao_dir) for r in aos)
+    ao_done = False
     for r in parse_policy(policy_text) if policy else []:
         k, v = r["kind"], r["value"]
         why, router = None, ""
@@ -172,8 +190,11 @@ def explain(host, policy=None, policy_text="", at=None, wf_dir=WF_DIR, catalog=N
             why, router = f"{v} is blocked by name in this policy", "WF-site"
         elif k == "block-all":
             why, router = "no internet for this policy", "WF-noinet"
-        elif k == "allow-only" and not allow_only_ok(host, v, wf_dir):
-            why, router = f"only '{v}' is allowed", "WF-allowonly"
+        elif k == "allow-only" and not ao_pass and not ao_done:
+            ao_done = True
+            names = " + ".join(x["value"] for x in aos)
+            why, router = f"only {names} {'is' if len(aos) == 1 else 'are'} allowed", "WF-allowonly"
+            r = dict(r, line=" + ".join(x["line"] for x in aos))
         if why:
             try:
                 active = time_active(r["time"], at)

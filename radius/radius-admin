@@ -706,6 +706,65 @@ cmd_log() {
     echo "SELECT authdate AS time, username AS user, reply AS result FROM radpostauth ORDER BY id DESC LIMIT $n;" | dbt
 }
 
+# ======================================================================= allow-only app profiles
+ao_ensure() {   # first use: the shipped profiles become editable copies
+    [ -d "$AO_DIR" ] && return 0
+    install -d -m 755 "$AO_DIR"
+    local f
+    for f in "$WF_DIR"/allowonly/*.txt; do
+        [ -f "$f" ] && [ "$(basename "$f")" != meta-ipv4.txt ] && install -m 644 "$f" "$AO_DIR/"
+    done
+}
+valid_ao() { [[ $1 =~ ^[a-z0-9][a-z0-9-]{0,30}$ && $1 != meta-ipv4 ]] || die "Profile name: a-z 0-9 - (31 at most)"; }
+ao_used() { grep -lx "allow-only $1" "$POLICY_DIR"/*.txt 2>/dev/null | xargs -r -n1 basename 2>/dev/null | sed 's/\.txt$//' | tr '\n' ' '; }
+
+cmd_allowonly() {
+    local sub=${1:-list}; shift || true
+    ao_ensure
+    case $sub in
+    list)
+        local f n
+        for f in "$AO_DIR"/*.txt; do
+            [ -f "$f" ] || continue; n=$(basename "$f" .txt)
+            printf '%-20s %s   used by: %s\n' "$n" "$(sed -n '1s/^# *\(Profile: *\)\?//p' "$f" | cut -c1-60)" "$(ao_used "$n")"
+        done ;;
+    show)
+        local n=${1:-}; valid_ao "$n"; [ -f "$AO_DIR/$n.txt" ] || die "No profile '$n'"; cat "$AO_DIR/$n.txt" ;;
+    set)    # allowonly set NAME < profile.txt
+        local n=${1:-}; valid_ao "$n"; [ ! -t 0 ] || die "usage: radius-admin allowonly set NAME < profile.txt"
+        local new old="" out; new=$(head -c 20000 | tr -d '\r')
+        grep -qv '^[[:space:]]*\(#.*\)\?$' <<<"$new" || die "The profile has no lines"
+        [ -f "$AO_DIR/$n.txt" ] && old=$(cat "$AO_DIR/$n.txt")
+        printf '%s\n' "$new" > "$AO_DIR/$n.txt"
+        # check it the way the router rules are made (also when no policy uses it yet)
+        local tmp rc=0; tmp=$(mktemp -d)
+        out=$(cd "$WF_DIR" && WF_OUT="$tmp" POLICY_DIR="$tmp/none" AO_DIR="$AO_DIR" CDNMAP=/usr/local/lib/mikrotiklover/cdnmap.py bash ./build.sh 2>&1 >/dev/null) || rc=1
+        rm -rf "${tmp:?}"
+        if [ "$rc" != 0 ]; then
+            if [ -n "$old" ]; then printf '%s\n' "$old" > "$AO_DIR/$n.txt"; else rm -f "$AO_DIR/$n.txt"; fi
+            die "Profile not saved: $(grep 'build.sh: ' <<<"$out" | tail -1 | sed 's/^build.sh: //')"
+        fi
+        cmd_policy build >/dev/null 2>&1 || true
+        ok "App profile '$n' saved$([ -n "$(ao_used "$n")" ] && echo "; used by: $(ao_used "$n")"). Routers: auto-sync" ;;
+    del)
+        local n=${1:-}; valid_ao "$n"; [ -f "$AO_DIR/$n.txt" ] || die "No profile '$n'"
+        [ -z "$(ao_used "$n")" ] || die "Profile '$n' is used by policy: $(ao_used "$n")— take it out there first"
+        rm -f "$AO_DIR/$n.txt"; ok "App profile '$n' deleted" ;;
+    learn)  # allowonly learn IP|USER [MINUTES]
+        local who=${1:-} min=${2:-15} ip=""
+        [ -n "$who" ] || die "usage: radius-admin allowonly learn IP|USER [MINUTES]   (the device used the app in the last MINUTES)"
+        valid_int "$min" minutes
+        if [[ $who =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then ip=$who
+        else
+            valid_name "$who" username
+            ip=$(echo "SELECT framedipaddress FROM radacct WHERE username=$(q "$who") AND acctstoptime IS NULL ORDER BY acctstarttime DESC LIMIT 1" | db)
+            [ -n "$ip" ] || die "'$who' is not online — give the device's IP instead"
+        fi
+        python3 -I /usr/local/lib/mikrotiklover/applearn.py "$ip" --minutes "$min" ;;
+    *) die "usage: radius-admin allowonly list | show NAME | set NAME < file | del NAME | learn IP|USER [MINUTES]" ;;
+    esac
+}
+
 # ======================================================================= unblock requests / temporary exceptions
 unblock_until() {   # 1h..24h | today -> SQL expression
     case $1 in
@@ -1641,6 +1700,7 @@ cmd_apps() {
 
 # ---------------------------------------------------------------- web-filter policies + router sync
 POLICY_DIR=/var/lib/mikrotiklover/policies
+AO_DIR=/var/lib/mikrotiklover/allowonly      # allow-only app profiles (WhatsApp, Hik-Connect, learned ones)
 ROUTER_DIR=/var/lib/mikrotiklover/router
 WF_DIR=/usr/local/lib/mikrotiklover/webfilter
 
@@ -1700,7 +1760,8 @@ cmd_policy() {
         flock -w 300 9 || die "another router-rules build is still running"
         local lists; lists=$(mktemp -d)
         { echo "SELECT domain FROM ml_vpn_domain ORDER BY domain" | db 2>/dev/null || true; } | grep -E '^[a-z0-9.-]+$' > "$lists/vpn-domains.txt" || true
-        if ! WF_OUT="$lists" POLICY_DIR="$POLICY_DIR" VPN_DOMAINS="$lists/vpn-domains.txt" CDNMAP=/usr/local/lib/mikrotiklover/cdnmap.py \
+        ao_ensure
+        if ! WF_OUT="$lists" POLICY_DIR="$POLICY_DIR" AO_DIR="$AO_DIR" VPN_DOMAINS="$lists/vpn-domains.txt" CDNMAP=/usr/local/lib/mikrotiklover/cdnmap.py \
                QUARANTINE_SERVER="$(setting_get server_ip)" \
                bash "$WF_DIR/build.sh" 2>"$lists/build.log"; then
             cat "$lists/build.log" >&2; rm -rf "${lists:?}"; die "router rules not built"
@@ -2910,6 +2971,9 @@ Why blocked?
   why SITE [USER|IP]                    which list / policy rule blocks a site for a user, and is it active now
   blockpage on|off                      users with a policy see a page (logo, reason, code) for blocked http:// sites
   blockpage ref CODE | status           look up the code a user read from the page
+  allowonly list | show NAME            "only these apps" profiles (whatsapp, hikconnect, your own)
+  allowonly set NAME < file | del NAME  edit one (lines: domain NAME, host NAME, net CIDR|@lan, deny-sni WORD)
+  allowonly learn IP|USER [15]          names a phone asked in the last minutes (DNS logger) -> domain lines
   unblock list                          requests from the block page + exceptions open now
   unblock approve ID 1h|today|always    open the site for that user (always = allow-site in their policy)
   unblock deny ID | end ID              refuse / end an exception now
@@ -3066,6 +3130,7 @@ case ${1:-help} in
     why)     shift; cmd_why "$@" ;;
     blockpage) shift; cmd_blockpage "$@" ;;
     unblock) shift; cmd_unblock "$@" ;;
+    allowonly) shift; cmd_allowonly "$@" ;;
     traffic-collect) traffic_collect; ok "Traffic counted" ;;
     hotspot) shift; cmd_hotspot "$@" ;;
     social)  shift; cmd_social "$@" ;;
