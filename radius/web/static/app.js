@@ -58,6 +58,9 @@ const ICONS = {
   ports: "M7 7h10v10H7zM3 9h4M3 15h4M17 9h4M17 15h4M9 3v4M15 3v4M9 17v4M15 17v4",
   plus: "M12 5v14M5 12h14",
   refresh: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7",
+  info: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18M12 16v-4M12 8h.01",
+  edit: "M4 20h4L19 9l-4-4L4 16zM14 6l4 4",
+  trash: "M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3",
 };
 const icon = (name) => svg("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" }, svg("path", { d: ICONS[name] }));
 
@@ -1921,13 +1924,15 @@ function policyEditor(meta, pol) {
   const extraBox = extras.length ? h("div", { class: "note" }, h("b", {}, "Other rules (kept as they are): "), h("code", {}, extras.join(" · "))) : null;
   const out = h("pre", { class: "code-box" });
   const blockSection = h("div", { class: "stack" },
-    h("div", { class: "note" }, "Every tick has its own time: e.g. social media only in office hours, games always, internet off at night."),
-    h("label", { class: "field" }, "Categories", h("span", { class: "help" }, "Whole groups of sites and apps. Lists are kept up to date on the server."), h("div", { class: "rule-list" }, cats)),
-    vpn,
-    h("label", { class: "field" }, "Single apps", h("span", { class: "help" }, "Every known domain of the app is blocked, the ones learned on your network too. \"new\" = discovered automatically."), appSearch, appBox, chosenBox),
-    h("div", { class: "field" }, h("span", {}, "Single websites to block"), h("span", { class: "help" }, "like example.com — its subdomains too"), siteBox, h("div", {}, addSiteBtn)),
-    off,
-    h("label", { class: "field" }, "DNS for these users", dnsSel), ech, extraBox);
+    h("div", { class: "pe-section stack" }, h("h3", {}, "What to block"),
+      h("div", { class: "muted small" }, "Every rule has its own time: e.g. social media only in office hours, games always, internet off at night."),
+      h("label", { class: "field" }, "Categories", h("span", { class: "help" }, "Whole groups of sites and apps. Lists are kept up to date on the server."), h("div", { class: "rule-list" }, cats)),
+      vpn, off),
+    h("div", { class: "pe-section stack" }, h("h3", {}, "Single apps and websites"),
+      h("label", { class: "field" }, "Single apps", h("span", { class: "help" }, "Every known domain of the app is blocked, the ones learned on your network too. \"new\" = discovered automatically."), appSearch, appBox, chosenBox),
+      h("div", { class: "field" }, h("span", {}, "Single websites to block"), h("span", { class: "help" }, "like example.com — its subdomains too"), siteBox, h("div", {}, addSiteBtn))),
+    h("details", { class: "pe-section", open: !!(dnsRule || echRule || extraBox) }, h("summary", {}, "Advanced: DNS, hidden site names, other rules"),
+      h("div", { class: "stack" }, h("label", { class: "field" }, "DNS for these users", dnsSel), ech, extraBox)));
   function text() {
     const lines = [`# ${desc.value.trim() || name.value || "policy"}`];
     if (modeSel.value === "only") [...onlyChosen].sort().forEach((a) => lines.push(`allow-only ${a}`));
@@ -1956,81 +1961,160 @@ function policyEditor(meta, pol) {
   drawApps(); drawChosen(); drawAllowApps(); preview();
   const onlyNote = h("div", { class: "stack", hidden: modeSel.value !== "only" },
     h("div", { class: "field" }, h("b", {}, "Apps that work"), h("div", { class: "help" }, "Tick one or more. Everything else is blocked. Make or change an app: Blocking → App profiles."), onlyBoxes),
-    h("div", { class: "note" }, "whatsapp: chat, calls, photos and status (Facebook / Instagram stay blocked). hikconnect: Hik-Connect cloud + an NVR / DVR in this network (add one at another place in App profiles)."));
+    h("div", { class: "muted small" }, "whatsapp: chat, calls, photos and status (Facebook / Instagram stay blocked). hikconnect: Hik-Connect cloud + an NVR / DVR in this network (add one at another place in App profiles)."));
   const form = h("form", { class: "form policy-editor", onsubmit: (e) => e.preventDefault() },
     h("div", { class: "form cols" }, h("label", { class: "field" }, "Policy name", h("span", { class: "help" }, "small letters, digits, -"), name),
       h("label", { class: "field" }, "Description", h("span", { class: "help" }, "shown when you pick a policy"), desc)),
     h("label", { class: "field" }, "What should these users get?", modeSel),
     onlyNote,
     blockSection,
+    h("div", { class: "pe-section" }, h("h3", {}, "Always open (exceptions)")),
     h("label", { class: "field" }, "Websites always open", h("span", { class: "help" }, `one per line, like example.com. The server reads the whole site (sitemap, up to 150 pages, JavaScript files) and opens what it needs too (fonts, CDNs, image hosts — no ads / trackers), reads it again every day and learns more while it is used (Blocking → Allowed websites & apps). Also with "no internet" or "only apps".`), allowSites),
     h("div", { class: "field" }, h("b", {}, "Apps always open"), h("div", { class: "help" }, "Every server of the app from the app catalog (kept up to date), plus helpers learned while it is used."), allowAppIn, allowAppBox,
       h("datalist", { id: "pe-apps" }, meta.apps.map((a) => h("option", { value: a.app })))),
-    h("label", { class: "field" }, "Policy file (what the server stores)", out));
+    h("details", { class: "pe-section" }, h("summary", {}, "Policy file (what the server stores)"), out));
   modeSel.addEventListener("change", () => { onlyNote.hidden = modeSel.value !== "only"; });
   return { form, text, name: () => name.value.trim() };
 }
 
-ROUTES.blocking = async (tab = "policies", ...rest) => {
+ROUTES.blocking = async (tab = "overview", ...rest) => {
   if (tab === "logs") return blockingLogs();
   if (tab === "parental") return parentalPage();
   if (tab === "why") return whyBlocked(...rest);
   if (tab === "requests") return unblockRequests();
   if (tab === "apps") return appProfiles();
   if (tab === "web") return allowedWebsites();
-  const [meta, ul] = await Promise.all([api("GET", "/api/blocking"), api("GET", "/api/users")]);
-  const r = meta.router;
-  const openEditor = (pol) => {
-    const ed = policyEditor(meta, pol);
-    dialog(pol ? `Edit policy ${pol.name}` : "New blocking policy", ed.form, [{ label: "Cancel" }, { label: "Save policy", class: "primary", action: async () => {
-      if (!ed.form.reportValidity()) return false;
-      const res = await act(api("POST", "/api/policies", { name: ed.name(), text: ed.text() }));
-      if (!res) return false;
-      route();
-    } }]);
-  };
-  const policySel = (id) => h("select", { id }, meta.policies.map((p) => h("option", { value: p.name }, `${p.name} — ${p.description}`)));
-  const userIn = h("input", { list: "bl-users", placeholder: "User name", autocomplete: "off" });
-  const userPol = policySel("bl-upol"), groupPol = policySel("bl-gpol");
-  const groupSel = h("select", {}, h("option", { value: "" }, "— group —"));
-  api("GET", "/api/groups").then((g) => g.groups.forEach((x) => groupSel.append(h("option", { value: x.name }, x.name)))).catch(() => {});
-  const cards = meta.policies.map((p) => h("div", { class: "card policy-card" },
-    h("h2", {}, h("span", {}, p.name), h("span", { class: "sub" }, `${p.users.length} user(s), ${p.groups.length} group(s)`)),
-    h("div", { class: "muted" }, p.description),
-    h("div", { class: "rules" }, p.rules.map(ruleLabel)),
-    p.users.length || p.groups.length ? h("div", { class: "muted" }, "Used by: ", [...p.users, ...p.groups.map((g) => `${g} (group)`)].join(", ")) : null,
-    isAdmin() ? h("div", { class: "toolbar" }, h("button", { class: "small", onclick: () => openEditor(p) }, "Edit"),
-      h("button", { class: "small", onclick: async () => { if (await confirmDlg("Delete policy", `Delete policy "${p.name}"?`)) { await act(api("DELETE", `/api/policies/${encodeURIComponent(p.name)}`)); route(); } } }, "Delete")) : null));
-  const script = h("pre", { class: "code-box" }, `# Router auto-sync (every 15 min, only when something changed)
-# Dashboard → "Download router script", then on the router:
-#   Files → upload mikrotiklover-autosync.rsc   →   Terminal:  /import mikrotiklover-autosync.rsc
-# Server: ${r.url}   version ${r.version || "—"}   built ${r.built || "—"}`);
-  const ipIn = h("input", { placeholder: "server IP as the router sees it", value: /^\d+\.\d+\.\d+\.\d+$/.test(location.hostname) ? location.hostname : "" });
-  shell("Blocking", h("div", { class: "stack" }, blockingTabs("policies"),
-    card("How to block apps or websites for a user", null, h("div", { class: "steps" },
-      h("div", {}, h("span", {}, h("b", {}, "Make a policy"), " — tick categories, single apps (TikTok, PUBG …), Block VPN, or choose WhatsApp ONLY. Ready-made ones are below.")),
-      h("div", {}, h("span", {}, h("b", {}, "Give it to a user or a group"), " — box below, or Users → user → Own web-filter policy. The user is disconnected once and gets it at the next login.")),
-      h("div", {}, h("span", {}, h("b", {}, "Router auto-sync"), " — import the router script once; afterwards every change reaches the router by itself within 15 minutes.")))),
-    isAdmin() ? h("div", { class: "grid g-2" },
-      card("Give a policy to a user", null, h("div", { class: "toolbar" }, userIn, h("datalist", { id: "bl-users" }, ul.users.map((u) => h("option", { value: u.username }))), userPol,
-        h("button", { class: "primary", onclick: async () => {
-          if (!userIn.value.trim()) return toast("Type a user name", true);
-          await act(api("POST", `/api/users/${encodeURIComponent(userIn.value.trim())}/policy`, { policy: userPol.value })); route();
-        } }, "Apply"))),
-      card("Give a policy to a whole group", null, h("div", { class: "toolbar" }, groupSel, groupPol,
-        h("button", { class: "primary", onclick: async () => {
-          if (!groupSel.value) return toast("Choose a group", true);
-          await act(api("POST", "/api/groups", { name: groupSel.value, policy: groupPol.value, edit: true })); route();
-        } }, "Apply")))) : null,
-    card("Policies", `${meta.policies.length}`, isAdmin() ? h("div", { class: "toolbar" }, h("button", { class: "primary", onclick: () => openEditor(null) }, "+ New policy")) : null),
-    h("div", { class: "grid g-2" }, cards),
-    card("Router auto-sync", r.version ? `version ${r.version} · built ${r.built} · ${num(r.vpn_servers)} VPN servers` : "not built yet",
-      script,
-      isAdmin() ? h("div", { class: "toolbar" }, ipIn,
-        h("button", { onclick: () => { if (!/^\d+\.\d+\.\d+\.\d+$/.test(ipIn.value.trim())) return toast("Type the server's IP address", true); location.href = `/api/router/autosync.rsc?ip=${encodeURIComponent(ipIn.value.trim())}`; } }, "⬇ Download router script"),
-        h("button", { onclick: async () => { await act(api("POST", "/api/router/build")); route(); } }, "Rebuild now")) : null),
-  ));
+  if (tab === "policies") return blockingPolicies(rest[0]);
+  return blockingOverview();
 };
+
+// the policy editor in a dialog; saved -> page drawn again
+function openPolicyEditor(meta, pol) {
+  const ed = policyEditor(meta, pol);
+  dialog(pol ? `Edit policy · ${pol.name}` : "New blocking policy", ed.form, [{ label: "Cancel" }, { label: "Save policy", class: "primary", action: async () => {
+    if (!ed.form.reportValidity()) return false;
+    const res = await act(api("POST", "/api/policies", { name: ed.name(), text: ed.text() }));
+    if (!res) return false;
+    blSummary = null; route();
+  } }]);
+}
+
+// give a policy to a user or a whole group, in one dialog
+function givePolicyDialog(meta, users, preset) {
+  let who = "user";
+  const seg = h("div", { class: "seg" });
+  const userIn = h("input", { list: "bl-users", placeholder: "User name", autocomplete: "off", name: "user" });
+  const groupSel = h("select", { name: "group" }, h("option", { value: "" }, "— choose a group —"));
+  api("GET", "/api/groups").then((g) => g.groups.forEach((x) => groupSel.append(h("option", { value: x.name }, x.name)))).catch(() => {});
+  const polSel = h("select", { id: "bl-pol", name: "policy" }, meta.policies.map((p) => h("option", { value: p.name, selected: p.name === preset }, `${p.name} — ${p.description}`)));
+  const userField = h("label", { class: "field" }, "User", userIn, h("datalist", { id: "bl-users" }, users.map((u) => h("option", { value: u.username }))));
+  const groupField = h("label", { class: "field", hidden: true }, "Group", groupSel, h("span", { class: "help" }, "every user of the group gets it, unless the user has an own policy"));
+  const draw = () => { seg.replaceChildren(...[["user", "One user"], ["group", "A whole group"]].map(([k, l]) => h("button", { type: "button", class: k === who ? "on" : "", onclick: () => { who = k; draw(); } }, l)));
+    userField.hidden = who !== "user"; groupField.hidden = who !== "group"; };
+  draw();
+  const form = h("form", { class: "form", onsubmit: (e) => e.preventDefault() }, seg, userField, groupField, h("label", { class: "field" }, "Policy", polSel),
+    h("div", { class: "muted small" }, "A user who is online is disconnected once and gets the policy at the next login."));
+  dialog("Give a policy", form, [{ label: "Cancel" }, { label: "Apply", class: "primary", action: async () => {
+    if (who === "user") {
+      if (!userIn.value.trim()) { toast("Type a user name", true); return false; }
+      if (!await act(api("POST", `/api/users/${encodeURIComponent(userIn.value.trim())}/policy`, { policy: polSel.value }))) return false;
+    } else {
+      if (!groupSel.value) { toast("Choose a group", true); return false; }
+      if (!await act(api("POST", "/api/groups", { name: groupSel.value, policy: polSel.value, edit: true }))) return false;
+    }
+    blSummary = null; route();
+  } }]);
+}
+
+const routerSyncCard = (r) => {
+  const ipIn = h("input", { placeholder: "server IP as the router sees it", value: /^\d+\.\d+\.\d+\.\d+$/.test(location.hostname) ? location.hostname : "" });
+  return card("Router auto-sync", r.version ? `built ${r.built} · ${num(r.vpn_servers)} VPN servers` : "not built yet",
+    h("div", { class: "muted small" }, "Import the script on the router once (Files → upload → Terminal: /import mikrotiklover-autosync.rsc). After that every change here reaches the router by itself within 15 minutes."),
+    isAdmin() ? h("div", { class: "toolbar" }, ipIn,
+      h("button", { onclick: () => { if (!/^\d+\.\d+\.\d+\.\d+$/.test(ipIn.value.trim())) return toast("Type the server's IP address", true); location.href = `/api/router/autosync.rsc?ip=${encodeURIComponent(ipIn.value.trim())}`; } }, "⬇ Download router script"),
+      h("button", { onclick: async () => { await act(api("POST", "/api/router/build")); route(); } }, icon("refresh"), "Rebuild now")) : null,
+    h("details", { class: "small" }, h("summary", { class: "muted" }, "Technical details"), h("pre", { class: "code-box" }, `server ${r.url}\nversion ${r.version || "—"}\nbuilt ${r.built || "—"}`)));
+};
+
+async function blockingOverview() {
+  const [sum, logs] = await Promise.all([blockingSummary(true), api("GET", "/api/blocked?days=1&n=300").catch(() => ({ summary: [], rows: [] }))]);
+  const attn = [];
+  const item = (n, kind, title, sub, href) => attn.push(h("a", { href }, h("span", { class: "n " + kind }, String(n)), h("span", { class: "t" }, title, h("small", {}, sub))));
+  if (sum.requests) item(sum.requests, "", `${sum.requests === 1 ? "A user asks" : "Users ask"} to open a blocked site`, "Allow for 1 hour, today, always — or refuse", "#/blocking/requests");
+  if (sum.suggestions) item(sum.suggestions, "info", "Allowed websites / apps may need more", "Names or connections seen right after them — Allow or Ignore", "#/blocking/web");
+  if (sum.reading) item(sum.reading, "info", "Website being read", "The server reads the whole site in the background", "#/blocking/web");
+  if (!sum.router.version) item("!", "", "Router rules not built yet", "Press Rebuild now below, then import the script on the router", "#/blocking/overview");
+  const topBlocked = (logs.summary || []).slice(0, 6);
+  shell("Blocking", h("div", { class: "stack" }, blockingTabs("overview"),
+    h("div", { class: "grid g-tiles" },
+      tile("Policies", num(sum.policies), "ready-made + your own"),
+      tile("Users with a policy", num(sum.users), `${num(sum.groups)} group(s) too`),
+      tile("Requests waiting", num(sum.requests), sum.exceptions ? `${num(sum.exceptions)} site(s) open for a while` : "from the block page"),
+      tile("Blocked today", num((logs.rows || []).length), (logs.rows || []).length >= 300 ? "300 or more" : "tries the router logged")),
+    h("div", { class: "grid g-2" },
+      card("Needs your attention", null, attn.length ? h("div", { class: "attn" }, attn)
+        : h("div", { class: "attn" }, h("div", { class: "ok-line" }, h("span", { class: "n ok" }, "✓"), h("span", { class: "t" }, "Nothing waiting", h("small", {}, "No requests, no suggestions to answer."))))),
+      card("Quick actions", null, h("div", { class: "quick" },
+        isAdmin() ? h("a", { href: "#/blocking/policies/new" }, icon("plus"), h("span", {}, "New policy", h("small", {}, "block categories, apps, sites"))) : null,
+        isAdmin() ? h("a", { href: "#/blocking/policies/give" }, icon("users"), h("span", {}, "Give a policy", h("small", {}, "to a user or a group"))) : null,
+        h("a", { href: "#/blocking/parental" }, icon("clock"), h("span", {}, "Parental controls", h("small", {}, "homework, bedtime, games"))),
+        h("a", { href: "#/blocking/why" }, icon("search"), h("span", {}, "Why is it blocked?", h("small", {}, "a site + a user, or a block code")))))),
+    card("Blocked today", topBlocked.length ? "most often" : null, table([{ label: "User", render: (r) => r.user !== "-" ? h("a", { href: `#/users/${encodeURIComponent(r.user)}` }, r.user) : h("span", { class: "muted" }, "(no login)") },
+      { label: "Policy", render: (r) => badge(r.policy, "info") }, { label: "Blocked by", render: (r) => badge(r.reason, "bad") }, { label: "Times", key: "count", num: true }],
+      topBlocked, "Nothing blocked today."), topBlocked.length ? h("div", { class: "toolbar" }, h("a", { class: "btn small", href: "#/blocking/logs" }, "All activity")) : null),
+    routerSyncCard(sum.router),
+    hint("How blocking works",
+      h("ol", {},
+        h("li", {}, h("b", {}, "Policy"), " — what is blocked: categories, single apps, sites, VPN, internet off, or only some apps. Each rule can have its own time."),
+        h("li", {}, h("b", {}, "Give it"), " to a user or a group. The user gets it at the next login."),
+        h("li", {}, h("b", {}, "Router auto-sync"), " — the router gets every change by itself."),
+        h("li", {}, h("b", {}, "Users see a block page"), " with a code and can ask to open the site (Requests).")))));
+}
+
+async function blockingPolicies(action) {
+  const [meta, ul] = await Promise.all([api("GET", "/api/blocking"), api("GET", "/api/users")]);
+  const search = h("input", { type: "search", placeholder: "Search policies, users, rules …" });
+  const show = h("select", {}, [["all", "All policies"], ["used", "In use"], ["unused", "Not used"]].map(([v, l]) => h("option", { value: v }, l)));
+  const MAXR = 5;
+  const usedBy = (p) => {
+    const all = [...p.users, ...p.groups.map((g) => `${g} (group)`)];
+    if (!all.length) return h("span", { class: "muted" }, "not used");
+    return h("div", { class: "pol-used", title: all.join(", ") }, all.slice(0, 3).join(", "), all.length > 3 ? h("span", { class: "muted" }, ` +${all.length - 3} more`) : null);
+  };
+  const rows = meta.policies.map((p) => {
+    const extra = p.rules.length - MAXR;
+    const tr = h("tr", { class: "policy-row", "data-name": p.name },
+      h("td", { class: "pol-name" }, h("b", {}, p.name), h("span", {}, p.description)),
+      h("td", { class: "pol-rules-td" }, h("div", { class: "pol-rules" }, p.rules.slice(0, MAXR).map(ruleLabel), extra > 0 ? badge(`+${extra} more`) : null)),
+      h("td", { class: "pol-used-td" }, usedBy(p)),
+      h("td", {}, isAdmin() ? h("div", { class: "pol-actions" },
+        h("button", { class: "small", onclick: () => openPolicyEditor(meta, p) }, "Edit"),
+        h("button", { class: "small", title: "give this policy to a user or a group", onclick: () => givePolicyDialog(meta, ul.users, p.name) }, "Give"),
+        h("button", { class: "small", title: "delete", onclick: async () => { if (await confirmDlg("Delete policy", `Delete policy "${p.name}"?`)) { await act(api("DELETE", `/api/policies/${encodeURIComponent(p.name)}`)); blSummary = null; route(); } } }, "Delete")) : null));
+    tr._text = [p.name, p.description, ...p.users, ...p.groups, ...p.rules.map((r) => `${r.kind} ${r.value}`)].join(" ").toLowerCase();
+    tr._used = p.users.length + p.groups.length > 0;
+    return tr;
+  });
+  const empty = h("div", { class: "empty", hidden: true }, "No policy matches.");
+  const filter = () => {
+    const t = search.value.trim().toLowerCase();
+    let n = 0;
+    rows.forEach((r) => { r.hidden = (t && !r._text.includes(t)) || (show.value === "used" && !r._used) || (show.value === "unused" && r._used); n += r.hidden ? 0 : 1; });
+    empty.hidden = n > 0;
+  };
+  search.addEventListener("input", filter); show.addEventListener("change", filter);
+  shell("Blocking", h("div", { class: "stack" }, blockingTabs("policies"),
+    h("div", { class: "page-head" }, search, show, h("span", { class: "grow" }),
+      isAdmin() ? h("button", { onclick: () => givePolicyDialog(meta, ul.users) }, icon("users"), "Give a policy") : null,
+      isAdmin() ? h("button", { class: "primary", onclick: () => openPolicyEditor(meta, null) }, "+ New policy") : null),
+    h("div", { class: "card" }, h("h2", {}, h("span", {}, "Policies"), h("span", { class: "sub" }, `${meta.policies.length} · ${meta.policies.filter((p) => p.users.length || p.groups.length).length} in use`)),
+      h("div", { class: "table-wrap" }, h("table", { class: "pol-table" },
+        h("thead", {}, h("tr", {}, h("th", {}, "Policy"), h("th", {}, "Rules"), h("th", {}, "Used by"), h("th", {}, ""))),
+        h("tbody", {}, rows))), empty),
+    hint("A policy is a set of rules. Give it to users or groups; one user has one policy (own, else the group's).")));
+  if (action === "new" && isAdmin()) { history.replaceState(null, "", "#/blocking/policies"); openPolicyEditor(meta, null); }
+  if (action === "give" && isAdmin()) { history.replaceState(null, "", "#/blocking/policies"); givePolicyDialog(meta, ul.users); }
+}
 
 // ------------------------------------------------------------------ VPN watch: who tries a VPN + the automatic VPN lists
 ROUTES.vpn = async (tab = "users") => {
@@ -2149,8 +2233,28 @@ async function parentalPage() {
     card("For the parents", null, h("div", { class: "muted" }, "Which sites and apps a child used: Users → the child → Top sites (7 days), or Insights for the whole network. A blocked try shows up in Blocking logs."))));
 }
 
-const blockingTabs = (tab) => h("div", { class: "tabs" }, [["policies", "Policies"], ["parental", "Parental controls"], ["logs", "Blocking logs"], ["why", "Why blocked?"], ["requests", "Requests"], ["apps", "App profiles"], ["web", "Allowed websites & apps"]]
-  .map(([k, l]) => h("a", { href: `#/blocking/${k}`, class: k === tab ? "active" : "" }, l)));
+// Blocking: six areas, two of them with sub-pages; red numbers = something waits for the admin
+const BL_AREAS = [["overview", "Overview", ["overview"]], ["policies", "Policies", ["policies"]], ["parental", "Parental controls", ["parental"]],
+  ["requests", "Requests", ["requests"]], ["logs", "Activity", ["logs", "why"]], ["web", "Apps & websites", ["web", "apps"]]];
+const BL_SUB = { logs: [["logs", "Blocked tries"], ["why", "Why blocked?"]], web: [["web", "Allowed websites & apps"], ["apps", "App profiles"]] };
+let blSummary = null, blSummaryAt = 0;
+async function blockingSummary(fresh) {
+  if (fresh || !blSummary || Date.now() - blSummaryAt > 30000) { blSummary = await api("GET", "/api/blocking/summary"); blSummaryAt = Date.now(); }
+  return blSummary;
+}
+const blockingTabs = (tab) => {
+  const area = BL_AREAS.find((a) => a[2].includes(tab)) || BL_AREAS[0];
+  const links = BL_AREAS.map(([k, l]) => h("a", { href: `#/blocking/${k}`, class: k === area[0] ? "active" : "", "data-area": k }, l));
+  blockingSummary().then((d) => {
+    const n = { requests: d.requests, web: d.suggestions };
+    links.forEach((a) => { const c = n[a.dataset.area]; if (c) a.append(h("span", { class: "count", title: "waiting for you" }, String(c))); });
+  }).catch(() => {});
+  const sub = BL_SUB[area[0]];
+  return h("div", { class: "stack tight" }, h("div", { class: "tabs" }, links),
+    sub ? h("div", {}, h("div", { class: "subtabs" }, sub.map(([k, l]) => h("a", { href: `#/blocking/${k}`, class: k === tab ? "active" : "" }, l)))) : null);
+};
+// calm help: one line, or a "How it works" that opens
+const hint = (text, ...more) => h("div", { class: "bl-hint" }, icon("info"), more.length ? h("details", {}, h("summary", {}, text), ...more) : h("div", {}, text));
 // ports of an allowed website / app / profile: what it uses, direct connections it tried (blocked), opened ones
 const netLabel = (k) => { const [n, pr, pt] = k.split(" "); return `${n} · ${pr.toUpperCase()} ${pt}`; };
 function portParts(x, answer) {
@@ -2207,8 +2311,24 @@ async function allowedWebsites() {
     every(3000, async () => { try { const n = await api("GET", "/api/webscan"); if (sig(n.sites) !== was) route(); } catch (e) { /* next time */ } });
   }
   shell("Blocking", h("div", { class: "stack" }, blockingTabs("web"),
-    h("div", { class: "note" }, "Type only a website or an app name in a policy. A new website is read at once, then the whole site in the background: its sitemap, up to " + d.deep_pages + " pages and its JavaScript files. What it loads from elsewhere is opened — fonts, CSS / JS libraries, image CDNs — but no ads or trackers. Every day it is read again, and while people use websites, apps and app profiles the server learns more: well-known helpers (and for app profiles, names of the same company) are opened by themselves, the rest is asked here. Each card also shows the ports it uses, and direct connections to bare addresses (P2P, relays) that were blocked right after it was used — Allow opens only that network and port."),
+    hint("How it works", h("div", {}, "Type only a website or an app name in a policy. A new website is read at once, then the whole site in the background: its sitemap, up to " + d.deep_pages + " pages and its JavaScript files. What it loads from elsewhere is opened — fonts, CSS / JS libraries, image CDNs — but no ads or trackers. Every day it is read again, and while people use websites, apps and app profiles the server learns more: well-known helpers (and for app profiles, names of the same company) are opened by themselves, the rest is asked here. Each card also shows the ports it uses, and direct connections to bare addresses (P2P, relays) that were blocked right after it was used — Allow opens only that network and port.")),
     cards.length ? h("div", { class: "stack" }, cards) : card(null, null, h("div", { class: "empty" }, "Nothing yet — add a website or an app in a policy: Blocking → Edit → Websites always open / Apps always open, or an app profile under Only these apps."))));
+}
+
+// an app profile in words: "2 whole domains · this office (LAN) · 6 servers · 10 hidden apps refused"
+function aoSummary(text) {
+  const n = { domain: 0, host: 0, net: 0, "deny-sni": 0, "block-quic": 0 }; let lan = false, meta = false;
+  text.split("\n").forEach((l) => { const [k, v] = l.replace(/#.*/, "").trim().split(/\s+/); if (k in n) n[k]++; if (k === "net" && v === "@lan") lan = true; if (k === "net" && v === "@meta") meta = true; });
+  const parts = [];
+  if (n.domain) parts.push(badge(`${n.domain} whole domain${n.domain > 1 ? "s" : ""}`, "ok"));
+  if (n.host) parts.push(badge(`${n.host} server${n.host > 1 ? "s" : ""}`, "ok"));
+  if (meta) parts.push(badge("Meta network", "ok"));
+  if (lan) parts.push(badge("this office (LAN)", "ok"));
+  const nets = n.net - (lan ? 1 : 0) - (meta ? 1 : 0);
+  if (nets > 0) parts.push(badge(`${nets} address range${nets > 1 ? "s" : ""}`, "ok"));
+  if (n["deny-sni"]) parts.push(badge(`${n["deny-sni"]} look-alike app${n["deny-sni"] > 1 ? "s" : ""} refused`, "bad"));
+  if (n["block-quic"]) parts.push(badge("QUIC off", "warn"));
+  return h("div", { class: "ao-sum" }, parts.length ? parts : badge("empty"));
 }
 
 async function appProfiles() {
@@ -2227,7 +2347,8 @@ async function appProfiles() {
   };
   const cards = d.profiles.map((pr) => card(pr.name, pr.used_by.length ? `used by: ${pr.used_by.join(", ")}` : "not used yet",
     h("div", { class: "muted" }, pr.title),
-    h("pre", { class: "code-box small" }, pr.text.split("\n").filter((l) => l.trim() && !l.startsWith("#")).join("\n") || "(empty)"),
+    aoSummary(pr.text),
+    h("details", {}, h("summary", { class: "muted small" }, "Show lines"), h("pre", { class: "code-box small" }, pr.text.split("\n").filter((l) => l.trim() && !l.startsWith("#")).join("\n") || "(empty)")),
     isAdmin() ? h("div", { class: "toolbar" }, h("button", { class: "small", onclick: () => edit(pr) }, "Edit"),
       !pr.used_by.length ? h("button", { class: "small danger", onclick: async () => {
         if (await confirmDlg("Delete app profile", `Delete ${pr.name}?`, "Delete")) if (await act(api("DELETE", `/api/allowonly/${pr.name}`))) route();
@@ -2261,7 +2382,7 @@ async function appProfiles() {
       } }, "Save as app profile")) : null);
   };
   shell("Blocking", h("div", { class: "stack" }, blockingTabs("apps"),
-    h("div", { class: "note" }, "An app profile lists what one app needs. In a policy choose \"ONLY the apps I choose\" and tick the profiles — e.g. whatsapp + hikconnect: those two work, everything else is blocked."),
+    hint("How it works", h("div", {}, "An app profile lists what one app needs. In a policy choose \"ONLY the apps I choose\" and tick the profiles — e.g. whatsapp + hikconnect: those two work, everything else is blocked.")),
     isAdmin() ? h("div", { class: "toolbar" }, h("span", { class: "grow" }), h("button", { class: "primary", onclick: () => edit(null) }, icon("plus"), "New app profile")) : null,
     h("div", { class: "grid dept-grid" }, cards),
     card("Learn an app", d.dnslog ? "from the DNS logger" : "needs the DNS logger",
@@ -2292,7 +2413,7 @@ async function unblockRequests() {
   } }, user, site, howSel, h("button", { class: "primary", type: "submit", disabled: !isAdmin() }, "Open for this user"), h("datalist", { id: "req-users" }, users.map((u) => h("option", { value: u }))));
   const STATUS = { always: ["always open (policy)", "ok"], allowed: ["was open", ""], ended: ["ended", ""], denied: ["refused", "bad"] };
   shell("Blocking", h("div", { class: "stack" }, blockingTabs("requests"),
-    h("div", { class: "note" }, "Users ask from the block page (\"Khulwane ki darkhwast\"). You get an alert (Settings → Alerts: Unblock requests). Temporary openings reach the routers within a minute and close by themselves."),
+    hint("How it works", h("div", {}, "Users ask from the block page (\"Khulwane ki darkhwast\"). You get an alert (Settings → Alerts: Unblock requests). Temporary openings reach the routers within a minute and close by themselves.")),
     card("Waiting for an answer", `${d.pending.length}`, table([
       { label: "When", render: (r) => r.at.slice(5, 16) }, { label: "User", render: who },
       { label: "Site", render: (r) => h("code", {}, r.host), wrap: true }, { label: "Policy", render: (r) => r.policy ? badge(r.policy, "info") : "—" },
@@ -2370,7 +2491,7 @@ async function whyBlocked(site = "", who = "", ref = "") {
     h("details", {}, h("summary", {}, "Preview (logo and colours from the Hotspot page designer)"), h("div", { class: "bp-wrap" }, frame)));
   frame.src = "/api/blockpage/preview";
   shell("Blocking", h("div", { class: "stack" }, blockingTabs("why"),
-    h("div", { class: "note" }, "A user says a site does not open? Type the site and the user: you see which list it is on, which rule of their policy blocks it, whether that rule is active right now, and the router log lines. Tip: \"Why?\" in Blocking logs fills this in."),
+    hint("How it works", h("div", {}, "A user says a site does not open? Type the site and the user: you see which list it is on, which rule of their policy blocks it, whether that rule is active right now, and the router log lines. Tip: \"Why?\" in Blocking logs fills this in.")),
     card(null, null, form, h("datalist", { id: "why-users" }, users.map((u) => h("option", { value: u })))), holder, bpCard));
   if (!site) siteIn.focus();
 }
@@ -2392,7 +2513,7 @@ async function blockingLogs() {
         { label: "", render: (r) => r.site ? h("a", { class: "btn small", href: `#/blocking/why/${encodeURIComponent(r.site)}/${encodeURIComponent(r.user !== "-" ? r.user : r.ip)}` }, "Why?") : null }], d.rows, "Nothing blocked in this period.")));
   };
   shell("Blocking", h("div", { class: "stack" }, blockingTabs("logs"),
-    h("div", { class: "note" }, "Every block the router logged, with the user's policy (own policy, else the group's), what blocked it (category, app, VPN, allow-only …) and the site name the device asked for. Needs webfilter-logging.rsc on the router."),
+    hint("How it works", h("div", {}, "Every block the router logged, with the user's policy (own policy, else the group's), what blocked it (category, app, VPN, allow-only …) and the site name the device asked for. Needs webfilter-logging.rsc on the router.")),
     card(null, null, h("div", { class: "toolbar" }, days, user, policy, h("button", { class: "primary", onclick: () => load().catch((e) => toast(e.message, true)) }, "Show"))),
     holder));
   await load();

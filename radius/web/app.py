@@ -1916,6 +1916,29 @@ def blocking():
     return jsonify(policies=pols, categories=cats, apps=apps, allow_only=allow_only, router=router_info())
 
 
+@app.get("/api/blocking/summary")
+@login_required()
+def blocking_summary():
+    """Small numbers for the Blocking overview and the tab badges."""
+    import webscan
+    users, groups = policy_members()
+    npol = len([f for f in os.listdir(POLICY_DIR) if f.endswith(".txt") and f != "README.txt"]) if os.path.isdir(POLICY_DIR) else 0
+    pending = q1("SELECT COUNT(*) AS n FROM ml_unblock WHERE status='pending'") or {}
+    open_now = q1("SELECT COUNT(*) AS n FROM ml_unblock WHERE status='allowed' AND until > NOW()") or {}
+    sugg, reading = 0, 0
+    try:
+        for key in webscan.targets(POLICY_DIR, AO_DIR):
+            st = webscan.load(WEBSCAN_DIR, key)
+            sugg += len(st.get("suggest", {})) + len(st.get("suggest_net", {}))
+            sc = st.get("scanning")
+            reading += 1 if sc and time.time() - sc.get("since", 0) < 900 else 0
+    except Exception:                                     # noqa: BLE001 — the overview still shows the rest
+        pass
+    return jsonify(policies=npol, users=len({u for v in users.values() for u in v}),
+                   groups=len({g for v in groups.values() for g in v}), requests=int(pending.get("n", 0) or 0),
+                   exceptions=int(open_now.get("n", 0) or 0), suggestions=sugg, reading=reading, router=router_info())
+
+
 @app.post("/api/policies")
 @login_required("admin")
 def policy_save():

@@ -584,7 +584,21 @@ sudo radius-admin apps update               # abhi update karein (cron har ghant
 
 ## 5h. Blocking dashboard se — user ko apps/websites band karna, WhatsApp-only, VPN
 
-**Dashboard → Blocking** par 3 qadam hain:
+**Dashboard → Blocking** 6 hisson mein hai:
+
+| Hissa | Kya hai |
+|---|---|
+| **Overview** | Ginti (policies, kitne users par policy, darkhwastein, aaj kitna block hua), **Needs your attention** (darkhwastein, jawab ke muntazir suggestions), quick actions, aaj sab se zyada block, **Router auto-sync** |
+| **Policies** | Saari policies ek table mein: rules ke chips, kis ko di gayi; **search** aur "In use / Not used" filter; har line par **Edit · Give · Delete**; upar **Give a policy** (user ya poora group, ek hi dialog) aur **+ New policy** |
+| **Parental controls** | Bachon ke tayyar schedules |
+| **Requests** | Block page se khulwane ki darkhwastein (laal number = kitni baqi) |
+| **Activity** | **Blocked tries** (logs) · **Why blocked?** |
+| **Apps & websites** | **Allowed websites & apps** (laal number = kitne jawab baqi) · **App profiles** (khulasa: "2 whole domains · this office (LAN)", lines "Show lines" mein) |
+
+Policy editor bhi hisson mein hai: *What to block* → *Single apps and websites* → *Advanced* (DNS, ECH, doosre rules; band rehta hai) → *Always open (exceptions)* → *Policy file* (band rehta hai).
+Phone par policies cards ki tarah dikhti hain.
+
+3 qadam:
 
 1. **Policy banayein:** "+ New policy" dabayein. Is mein yeh sab chun sakte hain:
    - categories tick karein (social, sirf videos, YouTube/Netflix, games, messaging, torrent, adult words);
@@ -595,8 +609,8 @@ sudo radius-admin apps update               # abhi update karein (cron har ghant
    - mode **No internet**.
 
    Neeche "Policy file" mein wohi dikhta hai jo server save karta hai.
-2. **User ya group ko dein:** "Give a policy to a user" mein naam likhein, policy chunein aur **Apply** dabayein. Poore group ke liye "Give a policy to a whole group" istemal karein. Doosra tareeqa: Users → user → *Own web-filter policy*. User ek dafa disconnect hota hai aur agle login par nayi policy lag jati hai.
-3. **Router auto-sync (sirf ek dafa):** "Router auto-sync" mein server ka IP likhein, **⬇ Download router script** dabayein, file router par upload karein aur `/import mikrotiklover-autosync.rsc` chalayein (`mikrotik/autosync.rsc`).
+2. **User ya group ko dein:** **Give a policy** (ya policy ki line par **Give**) → "One user" / "A whole group" → naam → policy → **Apply**. Doosra tareeqa: Users → user → *Own web-filter policy*. User ek dafa disconnect hota hai aur agle login par nayi policy lag jati hai.
+3. **Router auto-sync (sirf ek dafa):** Overview → "Router auto-sync" mein server ka IP likhein, **⬇ Download router script** dabayein, file router par upload karein aur `/import mikrotiklover-autosync.rsc` chalayein (`mikrotik/autosync.rsc`).
    - Router har 15 minute mein server se poochta hai ke kuch badla hai ya nahi. Badla ho to policies, app lists aur VPN server list khud import kar leta hai.
    - Pehle `webfilter-base.rsc` ek dafa haath se import hona chahiye.
    - Router par server ka naam (certificate wala) `/ip dns static` se server IP par point karta hai, aur server ka CA ek dafa import hota hai. Yeh dono kaam script khud karti hai.
@@ -842,7 +856,7 @@ sudo radius-admin security quarantine-server 192.168.88.10   # server ka IP jo r
 
 ## 5l. Blocking logs — kaunsi policy kis user ko kya block kar rahi hai
 
-Dashboard → **Blocking → Blocking logs** (aur Reports → Blocked) par yeh dikhta hai:
+Dashboard → **Blocking → Activity → Blocked tries** (aur Reports → Blocked) par yeh dikhta hai:
 - **Summary:** policy → user → kis cheez ne block kiya → kitni dafa.
 - **Har koshish:** waqt, user/IP, **policy**, **kis ne block kiya** (category, app, VPN/proxy, allow-only, no internet, adult word, security), **website ka naam** (DNS log se) aur destination.
 ```bash
@@ -1014,7 +1028,7 @@ sudo radius-admin security reports                   # /var/lib/mikrotiklover/re
 ## 7k. Network control
 
 **1. Router health (multi-router dashboard)** — Dashboard → **Routers**: har MikroTik ka CPU, memory, disk, uptime, users online (hotspot / PPPoE / DHCP), har interface (up / down, abhi ki raftar, kul data), internet links, aur 24 ghante ka traffic chart.
-- Router par naya auto-sync script import karein (Blocking → Router auto-sync → Download script). Is mein `ml-stats` (har minute sirf parh kar bhejta hai, config nahi badalta) aur do netwatch internet checks (8.8.8.8, 1.1.1.1) shamil hain. Apna doosra ISP: `/tool netwatch add host=... comment="ml-link: ISP2"`.
+- Router par naya auto-sync script import karein (Blocking → Overview → Router auto-sync → Download script). Is mein `ml-stats` (har minute sirf parh kar bhejta hai, config nahi badalta) aur do netwatch internet checks (8.8.8.8, 1.1.1.1) shamil hain. Apna doosra ISP: `/tool netwatch add host=... comment="ml-link: ISP2"`.
 - Alerts (event `router`): router 5 minute chup → "Router silent"; netwatch link down → "Internet link DOWN on …"; wapas aane par bhi.
 
 **2. Parental controls** — Blocking → **Parental controls**: aik click mein Homework time (16–19, social / video / games band), Bedtime (22–6, internet band), School hours, Games sirf weekend, Family-safe DNS, VPN band. Bachon ke users ya group chunein → **Apply**: `parental-kids` policy ban kar lag jati hai (baad mein Policies mein badal sakte hain).
@@ -1140,7 +1154,7 @@ Policy → Edit → **Websites always open** mein sirf `minascollection.com` lik
 ## 7t. Sirf kuch apps (maslan WhatsApp + Hik-Connect)
 
 Blocking → policy → **"ONLY the apps I choose"** → apps par tick (whatsapp, hikconnect, apne banaye hue) → baqi sab band.
-Tayyar policy: **whatsapp-hikconnect**. User ko do: Blocking → "Give a policy to a user".
+Tayyar policy: **whatsapp-hikconnect**. User ko do: Blocking → Policies → **Give**.
 - **App profiles** (Blocking → App profiles, `/var/lib/mikrotiklover/allowonly`, `radius-admin allowonly`):
   `domain hik-connect.com` (har subdomain — router ki DNS jo IP batati hai woh khud list mein, RouterOS 7.15+),
   `net @lan` (is office ka NVR/DVR), `net 203.0.113.25` / `host mynvr.ddns.net` (doosri jagah ka NVR), `host`, `deny-sni`, `block-quic`.

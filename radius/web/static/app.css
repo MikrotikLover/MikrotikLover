@@ -304,3 +304,54 @@ input[type=color] { width: 60px; height: 34px; padding: 2px; }
 .tp-custom { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .chip.small { padding: 2px 8px; font-size: 12px; }
 .stack.tight { gap: 6px; }
+
+/* Blocking section: two-level navigation, overview, policy table, calm hints */
+.tabs a .count { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 6px; border-radius: 999px; background: var(--bad); color: #fff; font-size: 11px; font-weight: 700; }
+.subtabs { display: inline-flex; gap: 4px; padding: 3px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; margin: -4px 0 4px; flex-wrap: wrap; }
+.subtabs a { padding: 6px 12px; border-radius: 7px; color: var(--muted); font-weight: 600; font-size: 13.5px; }
+.subtabs a.active { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(15, 23, 42, .08); }
+.subtabs a:hover { text-decoration: none; color: var(--text); }
+.bl-hint { display: flex; gap: 10px; align-items: flex-start; background: var(--accent-soft); color: var(--text); border-radius: 10px; padding: 10px 14px; font-size: 13px; line-height: 1.5; }
+.bl-hint svg { flex: none; width: 18px; height: 18px; color: var(--accent); margin-top: 1px; }
+.bl-hint details > summary { margin: 0; font-weight: 600; color: var(--accent); }
+.bl-hint details[open] > summary { margin-bottom: 6px; }
+.page-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.page-head .grow { flex: 1 1 220px; }
+.page-head input[type=search] { max-width: 320px; }
+.attn { display: grid; gap: 8px; }
+.attn a, .attn div.ok-line { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; color: var(--text); }
+.attn a:hover { text-decoration: none; border-color: var(--accent); }
+.attn .n { flex: none; min-width: 32px; height: 32px; display: grid; place-items: center; border-radius: 8px; font-weight: 700; background: var(--warn-soft); color: var(--warn); }
+.attn .n.ok { background: var(--ok-soft); color: var(--ok); }
+.attn .n.info { background: var(--accent-soft); color: var(--accent); }
+.attn .t { flex: 1; } .attn .t small { display: block; color: var(--muted); }
+.quick { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.quick a { display: flex; gap: 10px; align-items: center; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; color: var(--text); font-weight: 600; background: var(--panel); }
+.quick a:hover { text-decoration: none; border-color: var(--accent); color: var(--accent); }
+.quick a small { display: block; font-weight: 400; color: var(--muted); }
+.pol-table td { vertical-align: top; }
+.pol-name b { display: block; font-size: 14.5px; }
+.pol-name span { color: var(--muted); font-size: 12.5px; }
+.pol-rules { display: flex; flex-wrap: wrap; gap: 5px; max-width: 520px; }
+.pol-used { font-size: 13px; } .pol-used .muted { font-size: 12px; }
+.pol-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.policy-editor .pe-section { border-top: 1px solid var(--border); padding-top: 14px; }
+.policy-editor .pe-section > h3 { margin: 0 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.policy-editor .rule-list.cols-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 760px) { .policy-editor .rule-list.cols-2 { grid-template-columns: 1fr; } .pol-actions { justify-content: flex-start; } }
+.ao-sum { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
+.quick a svg { flex: none; width: 20px; height: 20px; color: var(--accent); }
+.page-head button svg { width: 16px; height: 16px; }
+.pol-table td.pol-name { white-space: normal; min-width: 200px; width: 38%; }
+.pol-table td.pol-rules-td { white-space: normal; width: 36%; }
+.pol-table td.pol-used-td { white-space: normal; min-width: 110px; }
+.pol-table .pol-rules .badge { white-space: nowrap; }
+.pol-table td:last-child { white-space: nowrap; }
+.bl-hint ol { margin: 4px 0 0 18px; padding: 0; }
+@media (max-width: 760px) {
+  .pol-table thead { display: none; }
+  .pol-table tr { display: block; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .pol-table td, .pol-table td.pol-name, .pol-table td.pol-rules-td { display: block; width: auto; min-width: 0; padding: 4px 0; border: 0; white-space: normal; }
+  .pol-table td.pol-used-td:empty { display: none; }
+  .page-head input[type=search] { max-width: none; flex: 1 1 100%; }
+}

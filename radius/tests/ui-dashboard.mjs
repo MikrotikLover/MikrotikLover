@@ -259,6 +259,9 @@ try {
 
   // blocking: make a policy in the editor, give it to a user, WhatsApp only, router script, delete
   await go(page, "#/blocking", "Blocking");
+  await page.locator(".attn, .quick").first().waitFor({ timeout: 15000 });
+  ok("blocking overview: numbers, what waits, quick actions");
+  await go(page, "#/blocking/policies", "Blocking");
   await page.getByRole("button", { name: "+ New policy" }).click();
   const ed = page.locator("dialog[open]");
   await ed.locator("input[name=name]").fill("ui-kids");
@@ -275,24 +278,31 @@ try {
     if (!policyText.includes(want)) throw new Error(`policy text misses "${want}":\n${policyText}`);
   await shot(page, "40-policy-editor");
   await clickToast(page, dlgButton(page, "Save policy"));
-  const kidsCard = page.locator(".policy-card", { has: page.locator("h2 span", { hasText: /^ui-kids$/ }) });
+  const kidsCard = page.locator('.policy-row[data-name="ui-kids"]');
   await kidsCard.waitFor({ timeout: 30000 });
-  await page.locator("input[list=bl-users]").fill("ui-user");
-  await page.locator("#bl-upol").selectOption("ui-kids");
-  await clickToast(page, page.locator(".card", { hasText: "Give a policy to a user" }).getByRole("button", { name: "Apply" }));
-  await kidsCard.locator("div.muted", { hasText: /Used by:.*ui-user/ }).waitFor({ timeout: 30000 });
+  await kidsCard.getByRole("button", { name: "Give", exact: true }).click();
+  await page.locator("dialog[open] input[list=bl-users]").fill("ui-user");
+  if (await page.locator("dialog[open] #bl-pol").inputValue() !== "ui-kids") throw new Error("give dialog: the row's policy not chosen");
+  await clickToast(page, dlgButton(page, "Apply"));
+  await kidsCard.locator("td.pol-used-td", { hasText: "ui-user" }).waitFor({ timeout: 30000 });
   ok("blocking: policy made in the editor (category + app + VPN + time) and given to a user");
-  await page.locator("input[list=bl-users]").fill("ui-user");
-  await page.locator("#bl-upol").selectOption("whatsapp-only");
-  await clickToast(page, page.locator(".card", { hasText: "Give a policy to a user" }).getByRole("button", { name: "Apply" }));
-  await page.locator(".policy-card", { has: page.locator("h2 span", { hasText: /^whatsapp-only$/ }) }).locator("div.muted", { hasText: /Used by:.*ui-user/ }).waitFor({ timeout: 30000 });
+  await page.locator(".page-head").getByRole("button", { name: "Give a policy" }).click();
+  await page.locator("dialog[open] input[list=bl-users]").fill("ui-user");
+  await page.locator("dialog[open] #bl-pol").selectOption("whatsapp-only");
+  await clickToast(page, dlgButton(page, "Apply"));
+  await page.locator('.policy-row[data-name="whatsapp-only"] td.pol-used-td', { hasText: "ui-user" }).waitFor({ timeout: 30000 });
+  await page.locator(".page-head input[type=search]").fill("whatsapp");
+  if (await page.locator('.policy-row[data-name="guests"]').isVisible()) throw new Error("policy search: other policies still shown");
+  await page.locator(".page-head input[type=search]").fill("");
   ok("blocking: WhatsApp-only given to a user");
+  await go(page, "#/blocking/overview", "Blocking");
   await page.locator("input[placeholder^='server IP']").fill("192.168.88.10");
   const [dl] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "⬇ Download router script" }).click()]);
   const syncRsc = require("fs").readFileSync(await dl.path(), "utf8");
   if (!syncRsc.includes("/api/public/router") || syncRsc.includes("PUT-THE-KEY-HERE") || !syncRsc.includes("address=192.168.88.10"))
     throw new Error("router auto-sync script not filled in");
   ok("router auto-sync script downloaded with server, IP and key");
+  await go(page, "#/blocking/policies", "Blocking");
   await kidsCard.getByRole("button", { name: "Delete" }).click();
   await clickToast(page, dlgButton(page, "Confirm"));
   await kidsCard.waitFor({ state: "detached", timeout: 30000 });

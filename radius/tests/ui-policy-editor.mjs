@@ -30,10 +30,9 @@ async function openEditor(pol) {
   await p.goto(URL + "/#/blocking/policies"); await p.waitForTimeout(600);
   if (!pol) { await p.getByRole("button", { name: "+ New policy" }).click(); }
   else {
-    const card = p.locator(".card").filter({ has: p.locator(`text=${pol.description || pol.name}`) }).filter({ has: p.getByRole("button", { name: "Edit", exact: true }) }).last();
-    await card.getByRole("button", { name: "Edit", exact: true }).click();
+    await p.locator(`.policy-row[data-name="${pol.name}"]`).getByRole("button", { name: "Edit", exact: true }).click();
   }
-  await p.locator("dialog[open] pre.code-box").waitFor();
+  await p.locator("dialog[open] pre.code-box").waitFor({ state: "attached" });
 }
 const editorText = () => p.locator("dialog[open] pre.code-box").textContent();
 
