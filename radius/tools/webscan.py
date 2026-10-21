@@ -5,7 +5,8 @@ places (fonts, CSS / JS libraries, image CDNs …) so the admin only types the s
   webscan.py scan SITE [--deep] [--background] [--url URL] [--dir DIR] [--allow-private]
                   quick: the home page + 4 pages; --deep: the sitemap, up to 150 pages and the JS files
   webscan.py auto [--cnf FILE] [--db NAME] [--dir DIR]   read old sites deeply again, learn from the DNS log
-  webscan.py allow|ignore KEY NAME [--dir DIR]           the admin's answer (KEY: a site, app-NAME or ao-PROFILE)
+  webscan.py allow|ignore KEY NAME [--dir DIR]           the admin's answer (KEY: a site, app-NAME or ao-PROFILE;
+                                                         NAME: a name, or 'NET/24 udp PORT' for a direct connection)
   webscan.py show KEY [--dir DIR]                        what is known (JSON)
   webscan.py list [--dir DIR]                            one line each
 
@@ -18,6 +19,9 @@ Files: DIR/SITE.json (everything) and DIR/SITE.txt (the names to allow, read by 
    its names and within 20 seconds others the policy blocks — well-known helpers are allowed by themselves,
    the rest is suggested (Allow / Ignore). An app profile's "host" lines name its company: other names
    under that domain (not denied by deny-sni) are allowed by themselves.
+3. Ports: the ports each one's names use (traffic collector, ml_app_port), and connections to bare addresses
+   (P2P, relays, cameras) the policy blocked right after it was used — suggested as 'NET/24 proto PORT';
+   allowed ones go to DIR/KEY.nets, opened by the router only for that network and port.
 """
 import html.parser, ipaddress, json, os, re, socket, ssl, sys, time, urllib.parse, urllib.request
 
@@ -336,7 +340,9 @@ def load(d, key):
 def save(d, st):
     os.makedirs(d, exist_ok=True)
     names = sorted(st["allowed"])
-    for ext, data in (("json", json.dumps(st, indent=1, sort_keys=True)), ("txt", "".join(n + "\n" for n in names))):
+    nets = sorted(st.get("nets", {}))
+    for ext, data in (("json", json.dumps(st, indent=1, sort_keys=True)), ("txt", "".join(n + "\n" for n in names)),
+                      ("nets", "".join(n + "\n" for n in nets))):
         tmp = path(d, st["site"], ext) + f".tmp{os.getpid()}"
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(data)
@@ -492,6 +498,87 @@ def learn(lines, clients, tg, states, window=20):
     return changed
 
 
+# ---------------------------------------------------------------- ports
+PROTO = {6: "tcp", 17: "udp"}
+NET_RE = re.compile(r"^(\d{1,3}(?:\.\d{1,3}){3})/(2[4-9]|3[0-2]) (tcp|udp) (\d{1,5})$")
+WF_PORT_RE = re.compile(r"^(\S+) \S+ .*?WF-(allowonly|noinet)\b.*?proto (TCP|UDP)\b.*?"
+                        r"(\d+\.\d+\.\d+\.\d+):\d+->(\d+\.\d+\.\d+\.\d+):(\d+)")
+REPLY_RE = re.compile(r"\breply \S+ is (\d+\.\d+\.\d+\.\d+)$")
+
+
+def good_net(key):
+    """'47.91.12.0/24 udp 6000' -> the same text when valid (a public network, a real port), else ''."""
+    m = NET_RE.match(key or "")
+    if not m or not 0 < int(m.group(4)) < 65536:
+        return ""
+    try:
+        net = ipaddress.ip_network(f"{m.group(1)}/{m.group(2)}", strict=True)
+    except ValueError:
+        return ""
+    return key if net.is_global else ""
+
+
+def ports_used(rows, tg, states, top=12):
+    """rows: (site, proto, port, direction, bytes, last_seen) from ml_app_port (what the traffic collector
+    saw). Each website / app / profile gets the ports its names use: state["ports"]."""
+    for k, t in tg.items():
+        names = list(t["base"]) + list(states[k]["allowed"]) + list(t.get("company", ()))
+        agg = {}
+        for site, proto, port, direction, nbytes, last in rows:
+            if direction != "out" or not names or not under(str(site), names):
+                continue
+            pr = PROTO.get(int(proto), str(proto))
+            a = agg.setdefault((pr, int(port)), {"proto": pr, "port": int(port), "bytes": 0, "last": 0})
+            a["bytes"] += int(nbytes or 0)
+            a["last"] = max(a["last"], int(last or 0))
+        states[k]["ports"] = sorted(agg.values(), key=lambda a: -a["bytes"])[:top]
+
+
+def learn_ports(dns_lines, wf_lines, clients, tg, states, window=20):
+    """Connections to bare addresses (no name asked: P2P, relays, cameras …) that the policy blocked right
+    after a device used an allowed website / app / profile: suggested as 'NETWORK/24 proto port'."""
+    import mlreport
+    hits, named = {}, set()
+    for l in dns_lines:
+        r = REPLY_RE.search(l.rstrip())
+        if r:
+            named.add(r.group(1))                     # this address has a name: name learning covers it
+            continue
+        m = mlreport.DNS_RE.match(l)
+        if not m or m.group(4) not in clients:
+            continue
+        name, ip = m.group(3).lower().rstrip("."), m.group(4)
+        k = next((k for k, t in tg.items() if clients[ip] in t["policies"]
+                  and (under(name, t["base"]) or under(name, list(states[k]["allowed"])))), None)
+        if k:
+            hits.setdefault(ip, []).append((mlreport.ts_of(m.group(1)) or 0, k))
+    for l in wf_lines:
+        m = WF_PORT_RE.match(l)
+        if not m or m.group(4) not in clients:
+            continue
+        ts, proto, src, dst, port = mlreport.ts_of(m.group(1)) or 0, m.group(3).lower(), m.group(4), m.group(5), m.group(6)
+        if dst in named:
+            continue
+        try:
+            if not ipaddress.ip_address(dst).is_global:
+                continue
+        except ValueError:
+            continue
+        before = [h for h in hits.get(src, []) if 0 <= ts - h[0] <= window]
+        if not before:
+            continue
+        key = max(before)[1]
+        net = f"{ipaddress.ip_network(dst + '/24', strict=False).network_address}/24 {proto} {port}"
+        st, t = states[key], tg[key]
+        if net in st.get("nets", {}) or net in st["ignored"]:
+            continue
+        s = st.setdefault("suggest_net", {}).setdefault(net, {"count": 0, "ips": [], "why": ""})
+        s["count"] += 1
+        if dst not in s["ips"]:
+            s["ips"] = (s["ips"] + [dst])[-5:]
+        s["why"] = f"blocked right after {t['name']}{' (app profile)' if t['kind'] == 'ao' else ''} was used"
+
+
 def cmd_auto(d, cnf, db, policy_dir=POLICY_DIR, ao_dir=AO_DIR, max_age=86400, deep_per_run=3):
     import insights, mlreport
     tg = targets(policy_dir, ao_dir)
@@ -515,6 +602,13 @@ def cmd_auto(d, cnf, db, policy_dir=POLICY_DIR, ao_dir=AO_DIR, max_age=86400, de
                 clients[ip] = pols[u]
         lines = [l for l in mlreport.read_lines(mlreport.DNS_LOG, since) if (mlreport.ts_of(l.split(" ", 1)[0]) or 0) >= since]
         changed |= learn(lines, clients, tg, states)
+        wf = [l for l in mlreport.read_lines(mlreport.WF_LOG, since) if (mlreport.ts_of(l.split(" ", 1)[0]) or 0) >= since]
+        learn_ports(lines, wf, clients, tg, states)
+        try:
+            ports_used(rows("SELECT site, proto, port, direction, bytes, UNIX_TIMESTAMP(last_seen) FROM ml_app_port "
+                            "WHERE direction = 'out'"), tg, states)
+        except Exception:                                 # noqa: BLE001 — no traffic collector: no ports
+            pass
         for st in states.values():
             st["learned_until"] = int(time.time())
     for st in states.values():
@@ -525,7 +619,7 @@ def cmd_auto(d, cnf, db, policy_dir=POLICY_DIR, ao_dir=AO_DIR, max_age=86400, de
     # names no policy uses any more: forget them after 30 days
     for f in os.listdir(d) if os.path.isdir(d) else []:
         key, _, ext = f.rpartition(".")
-        if ext in ("json", "txt") and key not in tg and time.time() - os.path.getmtime(os.path.join(d, f)) > 30 * 86400:
+        if ext in ("json", "txt", "nets") and key not in tg and time.time() - os.path.getmtime(os.path.join(d, f)) > 30 * 86400:
             os.unlink(os.path.join(d, f))
     return changed
 
@@ -590,10 +684,25 @@ def main():
             print(f"{st['site']:<28} {len(st['allowed']):>3} allowed  {len(st['suggest']):>3} to answer  {state}  {st.get('error', '')}")
     elif cmd == "show":
         print(json.dumps(load(d, key), indent=1, sort_keys=True))
+    elif cmd in ("allow", "ignore") and (good_net(" ".join(a[2:3]).lower()) or good_net(" ".join(a[2:5]).lower())):
+        net = good_net(" ".join(a[2:3]).lower()) or good_net(" ".join(a[2:5]).lower())
+        st = load(d, key)
+        st.setdefault("suggest_net", {}).pop(net, None)
+        st.setdefault("nets", {})
+        if cmd == "allow":
+            st["nets"][net] = {"from": "admin", "why": "allowed by the admin"}
+            if net in st["ignored"]:
+                st["ignored"].remove(net)
+        else:
+            st["nets"].pop(net, None)
+            if net not in st["ignored"]:
+                st["ignored"].append(net)
+        save(d, st)
+        print(f"{key}: {net} {'allowed' if cmd == 'allow' else 'ignored'}")
     elif cmd in ("allow", "ignore"):
         name = (a[2] if len(a) > 2 else "").lower()
         if not SITE_RE.match(name):
-            sys.exit("give a name, e.g. cdn.example.com")
+            sys.exit("give a name (cdn.example.com) or a network with a port ('47.91.12.0/24 udp 6000')")
         st = load(d, key)
         st["suggest"].pop(name, None)
         if cmd == "allow":

@@ -2278,7 +2278,8 @@ def webscan_list():
                     "skipped": st.get("skipped", {}), "ignored": st.get("ignored", []), "scanned": st.get("scanned", 0),
                     "error": st.get("error", ""), "pages": st.get("pages", [])[:40],
                     "pages_read": st.get("pages_read", len(st.get("pages", []))), "deep": st.get("deep", False),
-                    "seconds": st.get("seconds", 0), "scanning": sc})
+                    "seconds": st.get("seconds", 0), "scanning": sc, "ports": st.get("ports", []),
+                    "nets": st.get("nets", {}), "suggest_net": st.get("suggest_net", {})})
     return jsonify(sites=out, deep_pages=webscan.DEEP_PAGES, deep_minutes=webscan.DEEP_SECONDS // 60)
 
 
@@ -2306,7 +2307,7 @@ def webscan_answer(site):
     data = body()
     name = str(data.get("name", "")).lower()
     key = webscan_key(site)
-    if not key or not webscan.SITE_RE.match(name):
+    if not key or not (webscan.SITE_RE.match(name) or webscan.good_net(name)):
         abort(400, "invalid name")
     return result(*radius_admin(["webscan", "allow" if data.get("allow") else "ignore", key, name]))
 

@@ -2151,6 +2151,22 @@ async function parentalPage() {
 
 const blockingTabs = (tab) => h("div", { class: "tabs" }, [["policies", "Policies"], ["parental", "Parental controls"], ["logs", "Blocking logs"], ["why", "Why blocked?"], ["requests", "Requests"], ["apps", "App profiles"], ["web", "Allowed websites & apps"]]
   .map(([k, l]) => h("a", { href: `#/blocking/${k}`, class: k === tab ? "active" : "" }, l)));
+// ports of an allowed website / app / profile: what it uses, direct connections it tried (blocked), opened ones
+const netLabel = (k) => { const [n, pr, pt] = k.split(" "); return `${n} · ${pr.toUpperCase()} ${pt}`; };
+function portParts(x, answer) {
+  const sn = Object.entries(x.suggest_net || {}).sort((a, b) => b[1].count - a[1].count), nets = Object.entries(x.nets || {});
+  return [
+    x.ports && x.ports.length ? h("div", { class: "stack tight" }, h("b", {}, "Ports it uses"),
+      h("div", { class: "chips" }, x.ports.map((p) => h("span", { class: "chip", title: p.last ? "last seen " + new Date(p.last * 1000).toLocaleString() : "" }, `${p.proto.toUpperCase()} ${p.port} · ${bytes(p.bytes)}`)))) : null,
+    sn.length ? h("div", { class: "stack tight" }, h("b", {}, "Direct connections it tried (no name, blocked)"),
+      sn.map(([k, v]) => h("div", { class: "rule-row item" }, h("code", { class: "grow" }, netLabel(k)),
+        h("span", { class: "muted small" }, `${v.count}× · ${v.why} · ${v.ips.join(", ")}`),
+        isAdmin() ? [h("button", { class: "small primary", onclick: answer(x.site, k, true) }, "Allow"), h("button", { class: "small", onclick: answer(x.site, k, false) }, "Ignore")] : null))) : null,
+    nets.length ? h("div", { class: "stack tight" }, h("b", {}, `Open networks + ports (${nets.length})`),
+      nets.map(([k, v]) => h("div", { class: "rule-row item" }, h("code", { class: "grow" }, netLabel(k)), badge("by you", ""), h("span", { class: "muted small" }, "only this network and port"),
+        isAdmin() ? h("button", { class: "chip-x", title: "close this", onclick: answer(x.site, k, false) }, "×") : null))) : null];
+}
+
 async function allowedWebsites() {
   const d = await api("GET", "/api/webscan");
   const FROM = { scan: ["found on the site", "info"], learned: ["learned", "ok"], admin: ["by you", ""] };
@@ -2179,6 +2195,7 @@ async function allowedWebsites() {
           isAdmin() ? h("button", { class: "chip-x", title: "do not open this", onclick: answer(x.site, n, false) }, "×") : null))
           : h("span", { class: "muted" }, site ? "Nothing from other places yet." : "Nothing learned yet.")),
       skipped.length ? h("div", { class: "muted small" }, `Left out (ads / trackers): ${skipped.map(([n]) => n).join(", ")}`) : null,
+      ...portParts(x, answer),
       site && x.pages && x.pages.length ? h("details", {}, h("summary", { class: "muted small" }, `Pages read (${x.pages_read})`),
         h("div", { class: "mono small" }, x.pages.map((u) => h("div", {}, u)), x.pages_read > x.pages.length ? h("div", { class: "muted" }, "…") : null)) : null,
       site && isAdmin() ? h("div", { class: "toolbar" },
@@ -2190,7 +2207,7 @@ async function allowedWebsites() {
     every(3000, async () => { try { const n = await api("GET", "/api/webscan"); if (sig(n.sites) !== was) route(); } catch (e) { /* next time */ } });
   }
   shell("Blocking", h("div", { class: "stack" }, blockingTabs("web"),
-    h("div", { class: "note" }, "Type only a website or an app name in a policy. A new website is read at once, then the whole site in the background: its sitemap, up to " + d.deep_pages + " pages and its JavaScript files. What it loads from elsewhere is opened — fonts, CSS / JS libraries, image CDNs — but no ads or trackers. Every day it is read again, and while people use websites, apps and app profiles the server learns more: well-known helpers (and for app profiles, names of the same company) are opened by themselves, the rest is asked here."),
+    h("div", { class: "note" }, "Type only a website or an app name in a policy. A new website is read at once, then the whole site in the background: its sitemap, up to " + d.deep_pages + " pages and its JavaScript files. What it loads from elsewhere is opened — fonts, CSS / JS libraries, image CDNs — but no ads or trackers. Every day it is read again, and while people use websites, apps and app profiles the server learns more: well-known helpers (and for app profiles, names of the same company) are opened by themselves, the rest is asked here. Each card also shows the ports it uses, and direct connections to bare addresses (P2P, relays) that were blocked right after it was used — Allow opens only that network and port."),
     cards.length ? h("div", { class: "stack" }, cards) : card(null, null, h("div", { class: "empty" }, "Nothing yet — add a website or an app in a policy: Blocking → Edit → Websites always open / Apps always open, or an app profile under Only these apps."))));
 }
 

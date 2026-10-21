@@ -740,7 +740,7 @@ cmd_webscan() {
     show)
         python3 -I "$tool" show "${1:-}" --dir "$WEBSCAN_DIR" ;;
     allow|ignore)
-        python3 -I "$tool" "$sub" "${1:-}" "${2:-}" --dir "$WEBSCAN_DIR" || die "usage: radius-admin webscan $sub SITE|app-NAME|ao-PROFILE NAME"
+        python3 -I "$tool" "$sub" "${1:-}" "${*:2}" --dir "$WEBSCAN_DIR" || die "usage: radius-admin webscan $sub SITE|app-NAME|ao-PROFILE NAME|'NET/24 udp PORT'"
         cmd_policy build >/dev/null 2>&1 || true ;;
     auto)   # hourly: read old sites deeply again, learn helpers (sites, apps, app profiles) from the DNS log
         local out; out=$(python3 -I "$tool" auto --dir "$WEBSCAN_DIR" --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" --policies "$POLICY_DIR" --allowonly "$AO_DIR") || die "$out"
@@ -3021,6 +3021,7 @@ Why blocked?
   webscan list | scan SITE [--deep]     allow-web sites: what each needs from elsewhere (fonts, CDNs), found by the server
   webscan deep SITE                     read the whole site in the background (sitemap, 150 pages, JS files)
   webscan show|allow|ignore KEY [NAME]  KEY: a site, app-NAME (allow-app) or ao-PROFILE (allow-only); answer a suggestion
+                                        (NAME: a name, or 'NET/24 udp PORT' for a direct connection it tried)
   allowonly list | show NAME            "only these apps" profiles (whatsapp, hikconnect, your own)
   allowonly set NAME < file | del NAME  edit one (lines: domain NAME, host NAME, net CIDR|@lan, deny-sni WORD)
   allowonly learn IP|USER [15]          names a phone asked in the last minutes (DNS logger) -> domain lines

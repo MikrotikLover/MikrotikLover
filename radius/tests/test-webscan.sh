@@ -7,6 +7,7 @@ db() { mysql --defaults-extra-file=/etc/mikrotiklover-radius/my.cnf -N -B radius
 fails=0
 t() { if [[ $2 == "$3" ]]; then echo "ok   $1"; else echo "FAIL $1: got '$2' expected '$3'"; fails=$((fails+1)); fi; }
 WS=/var/lib/mikrotiklover/webscan S=/var/lib/mikrotiklover/router/webfilter-policies.rsc DNSLOG=/var/log/mikrotik/dns.log DEV=10.99.0.55
+WFLOG=/var/log/mikrotik/webfilter.log
 SITE=example-test.com WWW=/tmp/ml-webscan-site PORT=18081
 DEEP=deepshop-test.com DWWW=/tmp/ml-webscan-deep DPORT=18083 DEV2=10.99.0.56 DEV3=10.99.0.57
 cleanup() {
@@ -14,7 +15,8 @@ cleanup() {
     for u in ws-user ws-user2 ws-user3; do radius-admin user del $u >/dev/null 2>&1; done
     rm -f /var/lib/mikrotiklover/policies/ws-test.txt /var/lib/mikrotiklover/policies/ws-app.txt /var/lib/mikrotiklover/policies/ws-ao.txt /var/lib/mikrotiklover/policies/ws-deep.txt \
         "$WS/$SITE".* "$WS/new-site-test.com".* "$WS/shop.example-test.com".* "$WS/$DEEP".* "$WS/app-instagram".* "$WS/ao-whatsapp".* "$WS/ao-hikconnect".*
-    for d in $DEV $DEV2 $DEV3; do sed -i "/ from $d\$/d" "$DNSLOG" 2>/dev/null; done; sed -i '/shop.example-test.com\|www.deepshop-test.com/d' /etc/hosts
+    for d in $DEV $DEV2 $DEV3; do sed -i "/ from $d\$/d; / $d\/5000 reply /d" "$DNSLOG" 2>/dev/null; sed -i "/ $d:40000->/d" "$WFLOG" 2>/dev/null; done
+    [ -n "${PORTROWS:-}" ] && db "DELETE FROM ml_app_port WHERE site='hik-connect.com'"; sed -i '/shop.example-test.com\|www.deepshop-test.com/d' /etc/hosts
     db "DELETE FROM radacct WHERE acctuniqueid IN ('wst-1','wst-2','wst-3')"
     [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null; [ -n "${SRV2:-}" ] && kill "$SRV2" 2>/dev/null
     rm -rf "$WWW" "$DWWW"; radius-admin policy build >/dev/null 2>&1
@@ -115,7 +117,13 @@ db "INSERT INTO radacct (acctsessionid, acctuniqueid, username, nasipaddress, fr
   echo "$(ts '-39 sec') 127.0.0.1 dnsmasq[1]: query[A] e7.whatsapp.net from $DEV3"
   echo "$(ts '-38 sec') 127.0.0.1 dnsmasq[1]: query[A] www.facebook.com from $DEV3"
   echo "$(ts '-30 sec') 127.0.0.1 dnsmasq[1]: query[A] i-api.hik-connect.com from $DEV3"
-  echo "$(ts '-29 sec') 127.0.0.1 dnsmasq[1]: query[A] devlogs.ezvizlife.com from $DEV3"; } >> "$DNSLOG"
+  echo "$(ts '-29 sec') 127.0.0.1 dnsmasq[1]: query[A] devlogs.ezvizlife.com from $DEV3"
+  echo "$(ts '-29 sec') 127.0.0.1 dnsmasq[1]: 7 $DEV3/5000 reply api.named-test.com is 8.8.4.4"; } >> "$DNSLOG"
+# connections to bare addresses the profile blocked right after Hik-Connect was used (P2P relay), one with a name, one LAN
+wfl() { echo "$(ts "$1") 127.0.0.1 firewall,info: WF-allowonly forward: in:bridge out:ether1, connection-state:new src-mac aa:bb:cc:00:00:57, proto $2, $DEV3:40000->$3, len 60"; }
+{ wfl '-28 sec' UDP 47.91.12.34:6000; wfl '-27 sec' UDP 47.91.12.80:6000; wfl '-27 sec' "TCP (SYN)" 8.8.4.4:443; wfl '-26 sec' UDP 192.168.1.5:6000; } >> "$WFLOG"
+[ "$(db "SELECT COUNT(*) FROM ml_app_port WHERE site='hik-connect.com'")" = 0 ] && PORTROWS=1 && \
+    db "INSERT INTO ml_app_port (site, proto, port, direction, bytes, flows) VALUES ('hik-connect.com',6,443,'out',5000000,10), ('hik-connect.com',17,6000,'out',900000,4), ('hik-connect.com',6,8000,'in',1,1)"
 radius-admin webscan auto >/dev/null
 AJ="python3 -c \"import json,sys; a=json.load(open('$WS/app-instagram.json')); w=json.load(open('$WS/ao-whatsapp.json')); k=json.load(open('$WS/ao-hikconnect.json'))"
 t "app: a helper asked right after it is opened" "$(eval "$AJ; print(a['allowed'].get('cdnjs.cloudflare.com', {}).get('from'))\"")" "learned"
@@ -128,6 +136,20 @@ t "  ... learned profile name reaches the router (DNS list)" "$(grep -c 'name=wh
 radius-admin webscan allow ao-hikconnect ezvizlife.com >/dev/null
 t "admin allows a profile suggestion" "$(grep -c 'chain=ao-hikconnect dst-address-list=mlname-ezvizlife.com action=accept' $S)" "1"
 t "bad key refused" "$(radius-admin webscan allow 'ao-x;y' a.com 2>&1 | grep -c usage)" "1"
+# 7. ports: what each one uses, direct connections it tried
+PJ="python3 -c \"import json,sys; k=json.load(open('$WS/ao-hikconnect.json'))"
+t "ports: what the profile's names use (traffic collector), outgoing only" "$(eval "$PJ; print([(p['proto'], p['port']) for p in k['ports']])\"")" "[('tcp', 443), ('udp', 6000)]"
+t "direct connections right after it: grouped per /24 + port, both addresses" "$(eval "$PJ; v=k['suggest_net']['47.91.12.0/24 udp 6000']; print(v['count'], v['ips'])\"")" "2 ['47.91.12.34', '47.91.12.80']"
+t "  ... an address with a name and a LAN address not asked" "$(eval "$PJ; print(sorted(k['suggest_net']))\"")" "['47.91.12.0/24 udp 6000']"
+radius-admin webscan allow ao-hikconnect "47.91.12.0/24 udp 6000" >/dev/null
+t "admin allows it: only that network and port opened in the profile" "$(grep -c 'chain=ao-hikconnect dst-address=47.91.12.0/24 protocol=udp dst-port=6000 action=accept' $S)$(grep -c 'chain=ao-hikconnect dst-address=47.91.12.0/24 action' $S)" "10"
+t "  ... not asked again" "$(eval "$PJ; print(list(k.get('suggest_net', {})), list(k['nets']))\"")" "[] ['47.91.12.0/24 udp 6000']"
+radius-admin webscan allow app-instagram 157.240.0.0/24 tcp 5222 >/dev/null
+t "an app's network + port in a no-internet policy" "$(grep -c 'chain=wfp-ws-app dst-address=157.240.0.0/24 protocol=tcp dst-port=5222 action=return' $S)" "1"
+t "LAN / bad networks refused" "$(radius-admin webscan allow ao-hikconnect '10.1.2.0/24 udp 6000' 2>&1 | grep -c usage)$(radius-admin webscan allow ao-hikconnect '47.91.12.0/16 udp 6000' 2>&1 | grep -c usage)$(radius-admin webscan allow ao-hikconnect '47.91.12.0/24 udp 70000' 2>&1 | grep -c usage)" "111"
+t "sync.rsc and policies pass the RouterOS lint" "$(python3 "$HERE/lint-rsc.py" $S | head -1)" "ok   webfilter-policies.rsc"
+radius-admin webscan ignore app-instagram "157.240.0.0/24 tcp 5222" >/dev/null
+t "removed again" "$(grep -c 'dst-address=157.240.0.0/24' $S)" "0"
 if [ -n "${URL:-}" ]; then
     jar=$(mktemp)
     csrf=$(curl -sk -c "$jar" -H 'Content-Type: application/json' -d "{\"username\":\"$USER\",\"password\":\"$PASS\"}" "$URL/api/login" | python3 -c 'import json,sys; print(json.load(sys.stdin)["csrf"])')
@@ -139,6 +161,9 @@ if [ -n "${URL:-}" ]; then
     t "API: apps and profiles listed with their kind" "$(api GET /api/webscan)$(js "sorted((x['site'], x['kind']) for x in d['sites'] if x['site'] in ('app-instagram','ao-whatsapp','$DEEP'))")" "200[('ao-whatsapp', 'ao'), ('app-instagram', 'app'), ('$DEEP', 'site')]"
     t "API: answer for an app" "$(api POST /api/webscan/app-instagram/answer '{"name":"edge-chat.facebook.com","allow":false}')$(eval "$AJ; print('edge-chat.facebook.com' in a['ignored'])\"")" "200True"
     t "API: bad key 400" "$(api POST '/api/webscan/app-x%3By/answer' '{"name":"a.com","allow":true}')" "400"
+    t "API: ports and direct connections listed" "$(api GET /api/webscan)$(js "[(x['ports'][0]['port'], list(x['nets'])) for x in d['sites'] if x['site']=='ao-hikconnect']")" "200[(443, ['47.91.12.0/24 udp 6000'])]"
+    t "API: close a network + port" "$(api POST /api/webscan/ao-hikconnect/answer '{"name":"47.91.12.0/24 udp 6000","allow":false}')$(grep -c 'dst-address=47.91.12.0/24' $S)" "2000"
+    t "API: bad network 400" "$(api POST /api/webscan/ao-hikconnect/answer '{"name":"47.91.12.0/24 udp 6000;x","allow":true}')" "400"
     t "API: whole-site read starts in the background" "$(api POST /api/webscan/$DEEP/scan '{"deep":true}')$(js "d.get('message','')" | grep -c 'background')" "2001"
     t "API finder: learned app name is open" "$(api GET "/api/why?site=cdnjs.cloudflare.com&user=ws-user2")$(js "d['verdict']")" "200allowed"
     t "API finder: learned profile name is open" "$(api GET "/api/why?site=e9.whatsapp.net&user=ws-user3")$(js "d['verdict']")" "200allowed"

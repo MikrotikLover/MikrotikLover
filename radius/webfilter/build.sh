@@ -134,10 +134,15 @@ join() { local IFS='|'; echo "$*"; }
 echo "build.sh: keywords — ${#kw_any[@]} anywhere, ${#kw_start[@]} at start" >&2
 
 # ---------------------------------------------------------------- allow-only profiles (e.g. WhatsApp only)
-ao_parse() { # ao_parse PROFILE -> globals nets hosts domains deny quic
+read_nets() { # read_nets FILE -> lines "NET/24 proto PORT" the admin allowed (tools/webscan.py: KEY.nets)
+    [ -f "$1" ] || return 0
+    grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}/(2[4-9]|3[0-2]) (tcp|udp) [0-9]{1,5}$' "$1" || true
+}
+
+ao_parse() { # ao_parse PROFILE -> globals nets hosts domains deny quic aonets
     local prof="$AO_DIR/$1.txt" line key val
     [ -f "$prof" ] || { echo "build.sh: unknown allow-only profile '$1'" >&2; exit 1; }
-    nets=() hosts=() domains=() deny=() quic=0
+    nets=() hosts=() domains=() deny=() quic=0 aonets=()
     while IFS= read -r line || [ -n "$line" ]; do
         line=${line%%#*}; read -r key val _ <<<"$line" || true
         [ -n "${key:-}" ] || continue
@@ -161,6 +166,7 @@ ao_parse() { # ao_parse PROFILE -> globals nets hosts domains deny quic
             [[ $line =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] && domains+=("$line")
         done < "$WEBSCAN_DIR/ao-$1.txt"
     fi
+    mapfile -t aonets < <(read_nets "$WEBSCAN_DIR/ao-$1.nets")
 }
 
 ao_lists() { # ao_lists PROFILE COMMENT -> address lists the profile allows
@@ -196,12 +202,16 @@ ao_lists() { # ao_lists PROFILE COMMENT -> address lists the profile allows
 }
 
 ao_rules() { # ao_rules PROFILE CHAIN MATCH COMMENT [return] -> filter rules (MATCH e.g. " src-address-list=X", or "")
-    local p=$1 ch=$2 M=$3 C=$4 last=${5:-} w
+    local p=$1 ch=$2 M=$3 C=$4 last=${5:-} w wn wpr wpt
     for w in "${deny[@]}"; do
         echo "add chain=$ch$M protocol=tcp dst-port=443 tls-host=\"*$w*\" action=reject reject-with=tcp-reset comment=\"$C deny $w\""
     done
     [ "$quic" = 0 ] || echo "add chain=$ch$M dst-address-list=$p-servers protocol=udp dst-port=443 action=drop comment=\"$C block QUIC\""
     echo "add chain=$ch$M dst-address-list=$p-servers action=accept comment=\"$C allow\""
+    for w in "${aonets[@]}"; do   # direct connections the admin allowed: only that network and port
+        read -r wn wpr wpt <<<"$w"
+        echo "add chain=$ch$M dst-address=$wn protocol=$wpr dst-port=$wpt action=accept comment=\"$C allow $wpr/$wpt\""
+    done
     if [ "$last" = return ]; then
         for w in "${domains[@]}"; do echo "add chain=$ch$M dst-address-list=mlname-$w action=accept comment=\"$C allow $w\""; done
     fi
@@ -313,7 +323,7 @@ for pf in $(policy_files); do
     p=$(basename "$pf" .txt)
     [[ $p =~ ^[a-z0-9-]{1,40}$ ]] || { echo "build.sh: bad policy name $p" >&2; exit 1; }
     L="policy-$p" C="wfpolicy:$p"
-    any=0 ech=0 dns=router untimed=0 qtimes=() aos=() allows=() hard=0
+    any=0 ech=0 dns=router untimed=0 qtimes=() aos=() allows=() wnets=() hard=0
     pbody=$(mktemp)
     {
         while IFS= read -r line || [ -n "$line" ]; do
@@ -371,7 +381,8 @@ for pf in $(policy_files); do
                         while IFS= read -r d || [ -n "$d" ]; do
                             [[ $d =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] && allows+=("$d")
                         done < "$WEBSCAN_DIR/$site.txt"
-                    fi ;;
+                    fi
+                    mapfile -t -O "${#wnets[@]}" wnets < <(read_nets "$WEBSCAN_DIR/$site.nets") ;;
                 allow-app)
                     # allow-app Instagram   every domain the app catalog knows for it (learned ones too)
                     name=$(sed -E 's/^[[:space:]]*allow-app[[:space:]]+//; s/[[:space:]]+$//' <<<"$line")
@@ -380,6 +391,7 @@ for pf in $(policy_files); do
                     [ ${#appd[@]} -gt 0 ] || { echo "build.sh: unknown app '$name' in $pf" >&2; exit 1; }
                     slug=$(tr 'A-Z' 'a-z' <<<"$name" | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')
                     [ -f "$WEBSCAN_DIR/app-$slug.txt" ] && mapfile -t -O "${#appd[@]}" appd < "$WEBSCAN_DIR/app-$slug.txt"
+                    mapfile -t -O "${#wnets[@]}" wnets < <(read_nets "$WEBSCAN_DIR/app-$slug.nets")
                     for d in "${appd[@]}"; do   # + names learned while the app was used (webscan.py: app-NAME.txt)
                         [[ $d =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] && allows+=("$d")
                     done ;;
@@ -455,6 +467,12 @@ for pf in $(policy_files); do
             for d in "${allows[@]}"; do
                 dnsnames+=("$d")
                 echo "add chain=wfp-$p dst-address-list=mlname-$d action=return comment=\"$C allow $d (dns)\""
+            done
+        fi
+        if [ "$hard" = 1 ]; then   # direct connections the admin allowed (P2P, relays): only that network and port
+            for w in $(printf '%s\n' "${wnets[@]}" | sort -u | tr ' ' '|'); do
+                IFS='|' read -r wn wpr wpt <<<"$w"
+                echo "add chain=wfp-$p dst-address=$wn protocol=$wpr dst-port=$wpt action=return comment=\"$C allow $wpr/$wpt\""
             done
         fi
         sed "s/^add chain=forward src-address-list=$L /add chain=wfp-$p /" "$pbody"

@@ -316,6 +316,7 @@ Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein
 | Traffic graphs (interface / user / group / department) | Traffic graphs | khud chalta hai: interfaces router report se (auto-sync), users accounting se (har 5 min) |
 | Site kyun band hai? (kaun si list / policy rule, abhi active?) | Blocking → Why blocked? | `radius-admin why facebook.com ali` |
 | Website / app ka sirf naam likho, baqi (fonts, CDN, tasveerein) khud — poori site (sitemap, 150 pages, JS) background mein | Blocking → policy → Websites / Apps always open · Blocking → Allowed websites & apps → Read the whole site | `radius-admin webscan list` · `webscan deep SITE` |
+| App ke ports: kaun se ports use karti hai, aur seedhe IP:port jo band hue (P2P / relay) — Allow par sirf wahi network + port | Blocking → Allowed websites & apps → card: Ports it uses / Direct connections it tried | `radius-admin webscan allow ao-hikconnect "NET/24 udp PORT"` |
 | Sirf kuch apps (WhatsApp + Hik-Connect …), apni app profile, app seekhna | Blocking → policy (ONLY the apps I choose) · Blocking → App profiles | `radius-admin allowonly list` · `allowonly learn IP 15` |
 | Policy mein ek site band / hamesha khuli | Blocking → policy → Edit (Single websites / Always open) | policy file: `block-site x.com` · `allow-site y.com` |
 | Unblock darkhwast + arzi ijazat (1 ghanta / aaj / hamesha) | Blocking → Requests | `radius-admin unblock list` · `unblock approve ID 1h` |

@@ -1128,9 +1128,14 @@ Policy → Edit → **Websites always open** mein sirf `minascollection.com` lik
   policy wala device naam poochne ke 20 second ke andar jo aur naam poochta hai aur band hain — jane pehchane helpers (fonts, CDNs) khud khul jate hain, baqi **Blocking → Allowed websites & apps** mein **Allow / Ignore**.
   App profile ki `host` lines se company pata chalti hai: `host g.whatsapp.net` ho to koi bhi `*.whatsapp.net` khud khul jata hai (lekin `deny-sni facebook` wale nahi).
   App ke liye "same company" khud nahi kholta (Instagram ki list mein ek facebook.com naam hai — poora Facebook na khul jaye), sirf poochta hai.
+- **Ports bhi seekhta hai**: har website / app / profile ke card par **"Ports it uses"** — traffic collector ne us ke naamon par jo ports dekhe (maslan Hik-Connect: UDP 6000, TCP 443, TCP 6800; WhatsApp: UDP 3478, TCP 5222).
+  Aur **"Direct connections it tried"**: app kholne ke 20 second ke andar device ne baghair naam ke seedhe IP par jo connection kiya aur policy ne band kiya (router ka `WF-allowonly` / `WF-noinet` log) — P2P, relay, camera servers.
+  Ye `/24 network + protocol + port` mein jama ho kar **Allow / Ignore** ke liye aate hain (maslan `47.91.12.0/24 · UDP 6000`, 3 addresses). Allow par router sirf **wahi network aur wahi port** kholta hai (`webscan/KEY.nets`), poora internet nahi.
+  Jis address ka naam DNS mein mil gaya, LAN address, aur `/24` se bara network — ye nahi pooche jate / mane nahi jate. Khud kuch nahi khulta: IP ke liye hamesha aap ki marzi.
+  CLI: `radius-admin webscan allow ao-hikconnect "47.91.12.0/24 udp 6000"`.
 - Apps: app catalog ke saare domains + seekhe hue (`webscan/app-NAME.txt`) — catalog mein na ho to **App profiles → Learn an app**.
 - CLI: `radius-admin webscan list | scan SITE [--deep] | deep SITE | show KEY | allow KEY NAME | ignore KEY NAME | auto` (KEY: site, `app-instagram`, `ao-hikconnect`).
-- Server sirf **public** addresses parhta hai (LAN / localhost nahi). Tests: `tests/test-webscan.sh` (48, API ke saath), `tests/test-whyblocked.py`.
+- Server sirf **public** addresses parhta hai (LAN / localhost nahi). Tests: `tests/test-webscan.sh` (61, API ke saath), `tests/test-whyblocked.py`.
 
 ## 7t. Sirf kuch apps (maslan WhatsApp + Hik-Connect)
 

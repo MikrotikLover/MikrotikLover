@@ -117,7 +117,7 @@ ok("phone: editor fits the screen", !(await p.evaluate(() => document.documentEl
 if (process.env.SHOTS) await p.screenshot({ path: `${process.env.SHOTS}/116-policy-times-phone.png`, fullPage: false });
 await p.keyboard.press("Escape");
 admin("policy", "del", "ui-times");
-try { execFileSync("rm", ["-f", "/var/lib/mikrotiklover/webscan/linkedin.com.json", "/var/lib/mikrotiklover/webscan/linkedin.com.txt"]); } catch { /* not there */ }
+try { execFileSync("rm", ["-f", "/var/lib/mikrotiklover/webscan/linkedin.com.json", "/var/lib/mikrotiklover/webscan/linkedin.com.txt", "/var/lib/mikrotiklover/webscan/linkedin.com.nets"]); } catch { /* not there */ }
 ok("no console / CSP errors", errs.length === 0, errs.join(" | "));
 await b.close();
 console.log(fails ? `${fails} FAILED` : "all policy editor tests passed");
