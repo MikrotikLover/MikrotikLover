@@ -378,7 +378,11 @@ for pf in $(policy_files); do
         if [ "$hard" = 1 ] && [ ${#allows[@]} -gt 0 ]; then
             # no internet / allow-only refuse the connection before the site name is sent: allow by address too
             echo "/ip firewall address-list"
-            for d in "${allows[@]}"; do echo "add list=wfallow-$p address=$d comment=\"$C allow $d\""; done
+            for d in "${allows[@]}"; do
+                echo "add list=wfallow-$p address=$d comment=\"$C allow $d\""
+                # www.NAME often has other addresses than NAME (CDN): the first packet needs both
+                [[ $d == www.* ]] || echo "add list=wfallow-$p address=www.$d comment=\"$C allow $d\""
+            done
             echo "/ip firewall filter"
             echo "add chain=wfp-$p dst-address-list=wfallow-$p action=return comment=\"$C allow (addresses)\""
         fi

@@ -15,7 +15,7 @@ for line in open(RSC):
 
 # filled by the server's router sync on a real router; a sample entry here
 lists.setdefault("vpn-servers", []).append("203.0.113.50")
-FAKE_DNS = {"moe.gov.pk": "203.0.113.77", "g.whatsapp.net": "57.144.110.32", "connectivitycheck.gstatic.com": "142.250.181.3"}
+FAKE_DNS = {"moe.gov.pk": "203.0.113.77", "www.moe.gov.pk": "198.51.100.88", "g.whatsapp.net": "57.144.110.32", "connectivitycheck.gstatic.com": "142.250.181.3"}
 
 def in_list(ip, name):
     for a in lists.get(name, []):
@@ -80,6 +80,7 @@ CASES = [
     ("guests: example-bet.com (other policy)", F("policy-guests", "example-bet.com"), "allow"),
     ("no-internet: moe.gov.pk by name (allow-site)", F("policy-no-internet", "www.moe.gov.pk"), "allow"),
     ("no-internet: first packet to moe.gov.pk (address)", F("policy-no-internet", None, "tcp", 443, dst="203.0.113.77"), "allow"),
+    ("no-internet: first packet to www.moe.gov.pk (other address)", F("policy-no-internet", None, "tcp", 443, dst="198.51.100.88"), "allow"),
     ("no-internet: first packet elsewhere", F("policy-no-internet", None, "tcp", 443, dst="198.51.100.9"), "reject"),
     ("guests: facebook",                   F("policy-guests", "www.facebook.com"),          "allow"),
     ("guests: thepiratebay",               F("policy-guests", "thepiratebay.org"),          "reject"),

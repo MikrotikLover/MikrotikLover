@@ -127,3 +127,4 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 21:22 | Policy editor: own time per category / VPN / app / site / internet-off (Always, Office hours, Custom); untouched times kept verbatim; unknown lines kept as 'other rules' | ok |
 | 21:22 | Round trip of all 14 server policies through the editor: identical rules (found: old editor put one time on every rule; day-order only diff fixed by keeping file text) | ok — tests/ui-policy-editor.mjs 22 checks; UI suite ok |
 | 21:24 | UI suite: old single-'When' step updated to per-rule time pickers (was failing after the editor change; fixed in the next commit) | ok — all UI checks passed |
+| 21:26 | User test: one user only minaacollection.com — policy block-all + allow-site works (finder + router rules); found: first packet only allowed the bare name's address, www.NAME added | fixed — simulator 80 cases |

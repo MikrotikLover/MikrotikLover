@@ -543,6 +543,7 @@ add chain=wfp-no-internet protocol=tcp tls-host="moe.gov.pk" action=return comme
 add chain=wfp-no-internet protocol=tcp tls-host="*.moe.gov.pk" action=return comment="wfpolicy:no-internet allow moe.gov.pk"
 /ip firewall address-list
 add list=wfallow-no-internet address=moe.gov.pk comment="wfpolicy:no-internet allow moe.gov.pk"
+add list=wfallow-no-internet address=www.moe.gov.pk comment="wfpolicy:no-internet allow moe.gov.pk"
 /ip firewall filter
 add chain=wfp-no-internet dst-address-list=wfallow-no-internet action=return comment="wfpolicy:no-internet allow (addresses)"
 add chain=wfp-no-internet connection-state=new action=log log-prefix="WF-noinet" limit=20/1m,10:packet comment="wfpolicy:no-internet no internet (log)"
