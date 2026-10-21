@@ -1143,7 +1143,15 @@ block social
 allow-site linkedin.com          # exception: social band, LinkedIn khula (subdomains bhi)
 block-site example-bet.com       # sirf yeh site band (time= bhi chalta hai)
 ```
-- Router par har policy ab apni chain `wfp-NAAM` mein chalti hai: pehle `allow-site` (return), phir blocks. "No internet" / "WhatsApp only" policies mein allow-site address se bhi kaam karta hai (pehla packet).
+- Router par har policy ab apni chain `wfp-NAAM` mein chalti hai: pehle `allow-site` (return), phir blocks. "No internet" / "Only apps" policies mein pehla packet naam nahi dikhata, is liye allow-site **router ki DNS** se bhi chalta hai: naam aur us ke **har subdomain** ke IP list `mlname-NAAM` mein aate hain (RouterOS 7.15+) — maslan `allow-site cdninstagram.com` se `scontent-…cdninstagram.com` ki tasveerein bhi.
+- Misal (sirf ek website, us ke fonts aur Instagram tasveeron ke sath):
+  ```
+  block-all
+  allow-site minascollection.com
+  allow-site fonts.googleapis.com
+  allow-site fonts.gstatic.com
+  allow-site cdninstagram.com
+  ```
 - Router-wide DNS lists (webfilter-*.rsc import) par allow-site asar nahi karta — woh sab ke liye hain.
 
 **Unblock ki darkhwast** (block page ke saath):

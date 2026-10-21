@@ -25,7 +25,8 @@ t "bad directive refused" "$(printf 'open everything\n' | radius-admin allowonly
 printf '# test\nallow-only whatsapp\nallow-only ao-cams\n' | radius-admin policy set ao-test >/dev/null
 t "policy: both apps, then the rest refused" "$(grep -c 'chain=wfp-ao-test action=jump jump-target=ao-ao-cams' $S)$(grep -c 'chain=wfp-ao-test action=jump jump-target=ao-whatsapp' $S)$(grep -c 'chain=wfp-ao-test protocol=tcp action=reject reject-with=tcp-reset comment="wfpolicy:ao-test allow-only: block rest"' $S)" "111"
 t "app chains return (do not refuse) inside a policy" "$(grep -c 'add chain=ao-ao-cams action=return' $S)" "1"
-t "domain line: router DNS fills the list (every subdomain)" "$(grep -c 'name=hik-connect.com match-subdomain=yes type=FWD forward-to=$up address-list=ao-cams-servers' $S)" "1"
+t "domain line: one router DNS entry per name fills mlname-NAME (every subdomain)" "$(grep -c 'add name=hik-connect.com match-subdomain=yes type=FWD forward-to=$up address-list=mlname-hik-connect.com' $S)" "1"
+t "  ... and the app chain lets that list through" "$(grep -c 'add chain=ao-ao-cams dst-address-list=mlname-hik-connect.com action=accept' $S)" "1"
 t "@lan, net and host in the list" "$(grep -c 'list=ao-cams-servers address=192.168.0.0/16' $S)$(grep -c 'list=ao-cams-servers address=203.0.113.25' $S)$(grep -c 'list=ao-cams-servers address=shopnvr.ddns.net' $S)" "111"
 t "sync.rsc passes the RouterOS lint" "$(python3 "$HERE/lint-rsc.py" $S | head -1)" "ok   sync.rsc"
 t "used profile cannot be deleted" "$(radius-admin allowonly del ao-cams 2>&1 | grep -c 'used by policy')" "1"

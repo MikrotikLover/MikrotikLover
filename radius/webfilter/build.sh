@@ -162,7 +162,9 @@ ao_lists() { # ao_lists PROFILE COMMENT -> address lists the profile allows
     echo "remove [find comment~\"^$C\"]"
     for n in "${nets[@]}"; do echo "add list=$p-servers address=$n comment=\"$C\""; done
     for h in "${hosts[@]}"; do echo "add list=$p-servers address=$h comment=\"$C\""; done
-    if [ ${#domains[@]} -gt 0 ]; then
+    if [ ${#domains[@]} -gt 0 ] && [[ $C == wfchain:* ]]; then
+        dnsnames+=("${domains[@]}")       # one DNS entry per name for all policies (end of the policies file)
+    elif [ ${#domains[@]} -gt 0 ]; then
         # every name under these domains: the router's DNS adds the addresses it answers to the list
         echo "/ip dns static"
         echo "remove [find comment=\"$C dns\"]"
@@ -193,6 +195,9 @@ ao_rules() { # ao_rules PROFILE CHAIN MATCH COMMENT [return] -> filter rules (MA
     done
     [ "$quic" = 0 ] || echo "add chain=$ch$M dst-address-list=$p-servers protocol=udp dst-port=443 action=drop comment=\"$C block QUIC\""
     echo "add chain=$ch$M dst-address-list=$p-servers action=accept comment=\"$C allow\""
+    if [ "$last" = return ]; then
+        for w in "${domains[@]}"; do echo "add chain=$ch$M dst-address-list=mlname-$w action=accept comment=\"$C allow $w\""; done
+    fi
     echo "add chain=$ch$M dst-address-list=allowonly-checks protocol=tcp dst-port=80 action=accept comment=\"$C connectivity check\""
     echo "add chain=$ch$M dst-address-list=allowonly-gpush protocol=tcp dst-port=5228-5230 action=accept comment=\"$C Android push\""
     echo "add chain=$ch$M dst-address=17.0.0.0/8 protocol=tcp dst-port=5223 action=accept comment=\"$C Apple push\""
@@ -296,6 +301,7 @@ used_cats=() used_apps=() used_ao=()
 pol_out=$(mktemp)
 policy_files() { for f in "$POLICY_DIR"/*.txt; do [ -f "$f" ] && [ "$(basename "$f")" != README.txt ] && echo "$f"; done; }
 app_slug() { local s=${1,,}; s=${s//[^a-z0-9]/-}; while [[ $s == *--* ]]; do s=${s//--/-}; done; s=${s#-}; echo "${s%-}"; }
+dnsnames=()
 for pf in $(policy_files); do
     p=$(basename "$pf" .txt)
     [[ $p =~ ^[a-z0-9-]{1,40}$ ]] || { echo "build.sh: bad policy name $p" >&2; exit 1; }
@@ -416,6 +422,11 @@ for pf in $(policy_files); do
             done
             echo "/ip firewall filter"
             echo "add chain=wfp-$p dst-address-list=wfallow-$p action=return comment=\"$C allow (addresses)\""
+            # every name under it (CDN subdomains …): the router's DNS fills mlname-NAME (RouterOS 7.15+)
+            for d in "${allows[@]}"; do
+                dnsnames+=("$d")
+                echo "add chain=wfp-$p dst-address-list=mlname-$d action=return comment=\"$C allow $d (dns)\""
+            done
         fi
         sed "s/^add chain=forward src-address-list=$L /add chain=wfp-$p /" "$pbody"
     } >> "$pol_out"
@@ -447,6 +458,7 @@ sni_rules() { # sni_rules CHAIN PREFIX < patterns
     echo "remove [find comment~\"^wfpolicy:\"]"
     echo "/ip dns static"
     echo "remove [find comment~\"^wfchain:\"]"
+    echo "remove [find comment~\"^wfpolicy:\"]"
     echo "/ip firewall filter"
     echo "remove [find comment~\"^wfpolicy:\"]"
     echo "remove [find comment~\"^wfchain:\"]"
@@ -504,6 +516,20 @@ sni_rules() { # sni_rules CHAIN PREFIX < patterns
     echo "# ---- policies"
     cat "$pol_out"
     echo
+    if [ ${#dnsnames[@]} -gt 0 ]; then
+        echo
+        echo "# Names allowed with every subdomain (allow-site in no-internet / allow-only policies, app profiles):"
+        echo "# the router's DNS puts the addresses it answers into address list mlname-NAME (RouterOS 7.15+)."
+        echo "/ip dns static"
+        echo ":do {"
+        echo "  :local up [:tostr [:pick [/ip dns get servers] 0]]"
+        echo "  :if ([:len \$up] = 0) do={ :set up [:tostr [:pick [/ip dns get dynamic-servers] 0]] }"
+        echo "  :if ([:len \$up] = 0) do={ :set up \"1.1.1.1\" }"
+        for d in $(printf '%s\n' "${dnsnames[@]}" | sort -u); do
+            echo "  :do { /ip dns static add name=$d match-subdomain=yes type=FWD forward-to=\$up address-list=mlname-$d address-list-timeout=1d comment=\"wfpolicy:dns $d\" } on-error={ :log warning \"web filter: DNS name $d not added (RouterOS 7.15+ needed)\" }"
+        done
+        echo "}"
+    fi
     echo "# Policy rules above every other forward rule; DNS rules above the base DNS redirect."
     echo "/ip firewall filter"
     echo "move [find comment~\"^wfpolicy:\"] destination=0"

@@ -14,6 +14,7 @@
 remove [find comment~"^wfpolicy:"]
 /ip dns static
 remove [find comment~"^wfchain:"]
+remove [find comment~"^wfpolicy:"]
 /ip firewall filter
 remove [find comment~"^wfpolicy:"]
 remove [find comment~"^wfchain:"]
@@ -26,16 +27,6 @@ remove [find comment~"^wfchain:ao-hikconnect"]
 add list=hikconnect-servers address=10.0.0.0/8 comment="wfchain:ao-hikconnect"
 add list=hikconnect-servers address=172.16.0.0/12 comment="wfchain:ao-hikconnect"
 add list=hikconnect-servers address=192.168.0.0/16 comment="wfchain:ao-hikconnect"
-/ip dns static
-remove [find comment="wfchain:ao-hikconnect dns"]
-:do {
-  :local up [:tostr [:pick [/ip dns get servers] 0]]
-  :if ([:len $up] = 0) do={ :set up [:tostr [:pick [/ip dns get dynamic-servers] 0]] }
-  :if ([:len $up] = 0) do={ :set up "1.1.1.1" }
-  /ip dns static add name=hik-connect.com match-subdomain=yes type=FWD forward-to=$up address-list=hikconnect-servers address-list-timeout=1d comment="wfchain:ao-hikconnect dns"
-  /ip dns static add name=hikvision.com match-subdomain=yes type=FWD forward-to=$up address-list=hikconnect-servers address-list-timeout=1d comment="wfchain:ao-hikconnect dns"
-} on-error={ :log warning "allow-only hikconnect: DNS names not added (RouterOS 7.15+ needed)" }
-/ip firewall address-list
 # Phone/PC support: Wi-Fi "internet available" checks (HTTP only) and push notifications
 remove [find comment="allowonly:support"]
 add list=allowonly-checks address=connectivitycheck.gstatic.com comment="allowonly:support"
@@ -515,6 +506,8 @@ add chain=wf-app-tiktok protocol=tcp tls-host="*.ttwstatic.com" action=reject re
 add chain=wf-app-tiktok action=return comment="wfchain:wf-app-tiktok"
 # allow-only profile hikconnect
 add chain=ao-hikconnect dst-address-list=hikconnect-servers action=accept comment="wfchain:ao-hikconnect allow"
+add chain=ao-hikconnect dst-address-list=mlname-hik-connect.com action=accept comment="wfchain:ao-hikconnect allow hik-connect.com"
+add chain=ao-hikconnect dst-address-list=mlname-hikvision.com action=accept comment="wfchain:ao-hikconnect allow hikvision.com"
 add chain=ao-hikconnect dst-address-list=allowonly-checks protocol=tcp dst-port=80 action=accept comment="wfchain:ao-hikconnect connectivity check"
 add chain=ao-hikconnect dst-address-list=allowonly-gpush protocol=tcp dst-port=5228-5230 action=accept comment="wfchain:ao-hikconnect Android push"
 add chain=ao-hikconnect dst-address=17.0.0.0/8 protocol=tcp dst-port=5223 action=accept comment="wfchain:ao-hikconnect Apple push"
@@ -585,6 +578,7 @@ add list=wfallow-no-internet address=moe.gov.pk comment="wfpolicy:no-internet al
 add list=wfallow-no-internet address=www.moe.gov.pk comment="wfpolicy:no-internet allow moe.gov.pk"
 /ip firewall filter
 add chain=wfp-no-internet dst-address-list=wfallow-no-internet action=return comment="wfpolicy:no-internet allow (addresses)"
+add chain=wfp-no-internet dst-address-list=mlname-moe.gov.pk action=return comment="wfpolicy:no-internet allow moe.gov.pk (dns)"
 add chain=wfp-no-internet connection-state=new action=log log-prefix="WF-noinet" limit=20/1m,10:packet comment="wfpolicy:no-internet no internet (log)"
 add chain=wfp-no-internet protocol=tcp action=reject reject-with=tcp-reset comment="wfpolicy:no-internet no internet"
 add chain=wfp-no-internet action=reject reject-with=icmp-admin-prohibited comment="wfpolicy:no-internet no internet"
@@ -645,6 +639,18 @@ add chain=wfp-whatsapp-only connection-state=new action=log log-prefix="WF-allow
 add chain=wfp-whatsapp-only protocol=tcp action=reject reject-with=tcp-reset comment="wfpolicy:whatsapp-only allow-only: block rest"
 add chain=wfp-whatsapp-only action=reject reject-with=icmp-admin-prohibited comment="wfpolicy:whatsapp-only allow-only: block rest"
 
+
+# Names allowed with every subdomain (allow-site in no-internet / allow-only policies, app profiles):
+# the router's DNS puts the addresses it answers into address list mlname-NAME (RouterOS 7.15+).
+/ip dns static
+:do {
+  :local up [:tostr [:pick [/ip dns get servers] 0]]
+  :if ([:len $up] = 0) do={ :set up [:tostr [:pick [/ip dns get dynamic-servers] 0]] }
+  :if ([:len $up] = 0) do={ :set up "1.1.1.1" }
+  :do { /ip dns static add name=hik-connect.com match-subdomain=yes type=FWD forward-to=$up address-list=mlname-hik-connect.com address-list-timeout=1d comment="wfpolicy:dns hik-connect.com" } on-error={ :log warning "web filter: DNS name hik-connect.com not added (RouterOS 7.15+ needed)" }
+  :do { /ip dns static add name=hikvision.com match-subdomain=yes type=FWD forward-to=$up address-list=mlname-hikvision.com address-list-timeout=1d comment="wfpolicy:dns hikvision.com" } on-error={ :log warning "web filter: DNS name hikvision.com not added (RouterOS 7.15+ needed)" }
+  :do { /ip dns static add name=moe.gov.pk match-subdomain=yes type=FWD forward-to=$up address-list=mlname-moe.gov.pk address-list-timeout=1d comment="wfpolicy:dns moe.gov.pk" } on-error={ :log warning "web filter: DNS name moe.gov.pk not added (RouterOS 7.15+ needed)" }
+}
 # Policy rules above every other forward rule; DNS rules above the base DNS redirect.
 /ip firewall filter
 move [find comment~"^wfpolicy:"] destination=0

@@ -16,7 +16,9 @@ for line in open(RSC):
 # filled by the server's router sync on a real router; a sample entry here
 lists.setdefault("vpn-servers", []).append("203.0.113.50")
 # the router's DNS adds what it answers for "domain hik-connect.com" (a sample cloud server here)
-lists.setdefault("hikconnect-servers", []).append("203.0.113.90")
+lists.setdefault("mlname-hik-connect.com", []).append("203.0.113.90")
+# "allow-site moe.gov.pk" in a no-internet policy: a CDN subdomain the router's DNS answered
+lists.setdefault("mlname-moe.gov.pk", []).append("198.51.100.120")
 FAKE_DNS = {"moe.gov.pk": "203.0.113.77", "www.moe.gov.pk": "198.51.100.88", "g.whatsapp.net": "57.144.110.32", "connectivitycheck.gstatic.com": "142.250.181.3"}
 
 def in_list(ip, name):
@@ -83,6 +85,7 @@ CASES = [
     ("no-internet: moe.gov.pk by name (allow-site)", F("policy-no-internet", "www.moe.gov.pk"), "allow"),
     ("no-internet: first packet to moe.gov.pk (address)", F("policy-no-internet", None, "tcp", 443, dst="203.0.113.77"), "allow"),
     ("no-internet: first packet to www.moe.gov.pk (other address)", F("policy-no-internet", None, "tcp", 443, dst="198.51.100.88"), "allow"),
+    ("no-internet: first packet to a subdomain (DNS list)", F("policy-no-internet", None, "tcp", 443, dst="198.51.100.120"), "allow"),
     ("no-internet: first packet elsewhere", F("policy-no-internet", None, "tcp", 443, dst="198.51.100.9"), "reject"),
     ("whatsapp+hik: whatsapp chat", F("policy-whatsapp-hikconnect", None, "tcp", 5222, dst="157.240.1.53"), "accept"),
     ("whatsapp+hik: Hik-Connect cloud", F("policy-whatsapp-hikconnect", "api.hik-connect.com", "tcp", 443, dst="203.0.113.90"), "accept"),
