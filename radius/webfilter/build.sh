@@ -319,7 +319,7 @@ pol_out=$(mktemp)
 # a policy turned off (radius-admin policy off NAME: its name in POLICY_DIR/.off) gets no router rules; its
 # users stay in it and get every rule back when it is turned on again
 policy_off() { [ -f "$POLICY_DIR/.off" ] && grep -qx "$1" "$POLICY_DIR/.off"; }
-policy_files() { for f in "$POLICY_DIR"/*.txt; do [ -f "$f" ] && [ "$(basename "$f")" != README.txt ] && ! policy_off "$(basename "$f" .txt)" && echo "$f"; done; }
+policy_files() { [ "${PAUSED:-0}" = 1 ] && return 0; for f in "$POLICY_DIR"/*.txt; do [ -f "$f" ] && [ "$(basename "$f")" != README.txt ] && ! policy_off "$(basename "$f" .txt)" && echo "$f"; done; }
 app_slug() { local s=${1,,}; s=${s//[^a-z0-9]/-}; while [[ $s == *--* ]]; do s=${s//--/-}; done; s=${s#-}; echo "${s%-}"; }
 dnsnames=()
 for pf in $(policy_files); do
@@ -535,7 +535,7 @@ sni_rules() { # sni_rules CHAIN PREFIX < patterns
     echo "/ip firewall filter"
     echo
     echo "# ---- category chains (shared by all policies)"
-    [ "${WINUPDATE:-on}" = on ] || used_cats+=(windows-update)
+    [ "${WINUPDATE:-on}" = on ] || [ "${PAUSED:-0}" = 1 ] || used_cats+=(windows-update)
     for c in $(printf '%s\n' "${used_cats[@]}" | sort -u); do
         if [ "$c" = vpn-all ]; then
             vpn_chain
@@ -578,7 +578,9 @@ sni_rules() { # sni_rules CHAIN PREFIX < patterns
     echo
     echo "# ---- policies"
     case ${WINUPDATE:-on} in on|off|office) ;; *) echo "build.sh: WINUPDATE must be on, off or office" >&2; exit 1 ;; esac
-    if [ "${WINUPDATE:-on}" != on ]; then
+    if [ "${PAUSED:-0}" = 1 ]; then
+        echo "# ALL BLOCKING PAUSED (radius-admin policy resume)"
+    elif [ "${WINUPDATE:-on}" != on ]; then
         # Windows Update off for everyone (radius-admin winupdate off|office): first, before every policy
         wt=""; [ "$WINUPDATE" = office ] && wt=" time=9h-17h,mon,tue,wed,thu,fri,sat"
         echo "add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 action=jump jump-target=wf-windows-update$wt comment=\"wfpolicy:global windows-update\""

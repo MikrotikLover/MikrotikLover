@@ -51,6 +51,7 @@ const ICONS = {
   print: "M6 9V3h12v6M6 18H4v-7h16v7h-2M7 14h10v7H7z",
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14m10 3-5.2-5.2",
   block: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M5.6 5.6l12.8 12.8",
+  flag: "M5 21V4m0 0h11l-2 4 2 4H5",
   mail: "M3 6h18v12H3zM3 7l9 6 9-6",
   wall: "M3 5h18v14H3zM3 9.7h18M3 14.3h18M9 5v4.7M15 9.7v4.6M9 14.3V19",
   shield: "M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6zM12 8v5m0 3h.01",
@@ -221,7 +222,7 @@ const legend = () => h("div", { class: "legend" }, h("span", {}, h("i", { class:
 
 // ------------------------------------------------------------------ shell + router
 const NAV = [
-  ["dashboard", "Dashboard", "home"], ["users", "Users", "users"], ["groups", "Groups & policies", "groups"], ["departments", "Departments", "team"],
+  ["dashboard", "Dashboard", "home"], ["golive", "Setup steps", "flag"], ["users", "Users", "users"], ["groups", "Groups & policies", "groups"], ["departments", "Departments", "team"],
   ["macs", "MAC devices", "mac"], ["ipbind", "IP binding", "pin"], ["routers", "Routers", "router"], ["setup", "Router setup", "term"], "-",
   ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], ["speed", "Speed schedule", "clock"], ["hotspot", "Hotspot page", "brush"], ["social", "Social WiFi", "phone"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["insights", "Insights (samajh)", "bulb"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
@@ -1337,10 +1338,14 @@ ROUTES.ipbind = async () => {
 };
 
 // ------------------------------------------------------------------ router setup: one line for the MikroTik terminal
-ROUTES.setup = async () => {
+const SETUP_PRESETS = {
+  blocking: { webfilter: 1, logging: 1, dnslog: 1, autosync: 1 },
+  hotspot: { hotspot: 1, base_done: 1 }, usage: { traffic: 1, base_done: 1 }, security: { security: 1, languard: 1, base_done: 1 },
+};
+ROUTES.setup = async (preset = "blocking") => {
   if (!isAdmin()) return shell("Router setup", card(null, null, h("div", { class: "empty" }, "Only an admin can make router scripts.")));
   const d = await api("GET", "/api/router-setup");
-  const DEF = { hotspot: 1, logging: 1, dnslog: 1, traffic: 1, autosync: 1, security: 1, languard: 1 };
+  const DEF = { ...(SETUP_PRESETS[preset] || SETUP_PRESETS.blocking) };
   const HELP = {
     hotspot: "Login page with vouchers / social WiFi on the LAN",
     wpa_ros7: "Staff log in with their own username + password (RouterOS 7 routers: hAP ax, cAP ax …)",
@@ -1366,7 +1371,7 @@ ROUTES.setup = async () => {
   extra.pppoe = h("div", { class: "form cols sub-opts" }, fld("Customer side port", "pppoe_if", { placeholder: "ether2" }, "interface, bridge or VLAN"));
   extra.macauth = h("div", { class: "form cols sub-opts" }, fld("Devices Wi-Fi name", "devices_ssid", { placeholder: "Devices-WiFi", maxlength: 32 }),
     fld("Devices Wi-Fi password", "devices_key", { placeholder: "8 letters or more", maxlength: 63, autocomplete: "off" }));
-  extra.webfilter = h("div", { class: "form cols sub-opts" }, h("label", { class: "check full" }, h("input", { type: "checkbox", name: "base_done" }),
+  extra.webfilter = h("div", { class: "form cols sub-opts" }, h("label", { class: "check full" }, h("input", { type: "checkbox", name: "base_done", checked: !!DEF.base_done }),
     h("div", {}, h("b", {}, "Already on this router"), h("span", {}, "Tick when adding a part later, so the base is not added twice."))));
   const parts = d.modules.map((m) => {
     const box = h("input", { type: "checkbox", name: m.key, checked: !!DEF[m.key] });
@@ -2079,16 +2084,26 @@ function givePolicyDialog(meta, users, preset) {
   const userIn = h("input", { list: "bl-users", placeholder: "User name", autocomplete: "off", name: "user" });
   const groupSel = h("select", { name: "group" }, h("option", { value: "" }, "— choose a group —"));
   api("GET", "/api/groups").then((g) => g.groups.forEach((x) => groupSel.append(h("option", { value: x.name }, x.name)))).catch(() => {});
-  const polSel = h("select", { id: "bl-pol", name: "policy" }, meta.policies.map((p) => h("option", { value: p.name, selected: p.name === preset }, `${p.name} — ${p.description}`)));
+  const polSel = h("select", { id: "bl-pol", name: "policy" }, meta.policies.map((p) => h("option", { value: p.name, selected: p.name === (preset && preset.policy || preset) }, `${p.name} — ${p.description}`)));
   const userField = h("label", { class: "field" }, "User", userIn, h("datalist", { id: "bl-users" }, users.map((u) => h("option", { value: u.username }))));
   const groupField = h("label", { class: "field", hidden: true }, "Group", groupSel, h("span", { class: "help" }, "every user of the group gets it, unless the user has an own policy"));
-  const draw = () => { seg.replaceChildren(...[["user", "One user"], ["group", "A whole group"]].map(([k, l]) => h("button", { type: "button", class: k === who ? "on" : "", onclick: () => { who = k; draw(); } }, l)));
-    userField.hidden = who !== "user"; groupField.hidden = who !== "group"; };
+  const netIn = h("input", { name: "target", placeholder: "192.168.88.0/24  or  192.168.88.100-192.168.88.150  or  192.168.88.23", autocomplete: "off" });
+  const netNote = h("input", { name: "comment", placeholder: "e.g. Office LAN, Guest Wi-Fi, Ahmed's PC", maxlength: 100 });
+  const netField = h("div", { hidden: true, class: "stack" }, h("label", { class: "field" }, "Network, IP range or one IP", netIn,
+    h("span", { class: "help" }, "No login needed: every device with such an address gets the policy (the whole LAN, a VLAN, a range, one PC). A logged-in user's own policy comes on top.")),
+    h("label", { class: "field" }, "Name (optional)", netNote));
+  const note = h("div", { class: "muted small" });
+  const draw = () => { seg.replaceChildren(...[["user", "One user"], ["group", "A whole group"], ["net", "Network / IP"]].map(([k, l]) => h("button", { type: "button", class: k === who ? "on" : "", onclick: () => { who = k; draw(); } }, l)));
+    userField.hidden = who !== "user"; groupField.hidden = who !== "group"; netField.hidden = who !== "net";
+    note.textContent = who === "net" ? "Routers get it within 15 minutes." : "A user who is online is disconnected once and gets the policy at the next login."; };
+  if (preset && preset.who) who = preset.who;
   draw();
-  const form = h("form", { class: "form", onsubmit: (e) => e.preventDefault() }, seg, userField, groupField, h("label", { class: "field" }, "Policy", polSel),
-    h("div", { class: "muted small" }, "A user who is online is disconnected once and gets the policy at the next login."));
+  const form = h("form", { class: "form", onsubmit: (e) => e.preventDefault() }, seg, userField, groupField, netField, h("label", { class: "field" }, "Policy", polSel), note);
   dialog("Give a policy", form, [{ label: "Cancel" }, { label: "Apply", class: "primary", action: async () => {
-    if (who === "user") {
+    if (who === "net") {
+      if (!netIn.value.trim()) { toast("Type a network, range or IP", true); return false; }
+      if (!await act(api("POST", "/api/policies/net", { policy: polSel.value, target: netIn.value.trim(), comment: netNote.value.trim() }))) return false;
+    } else if (who === "user") {
       if (!userIn.value.trim()) { toast("Type a user name", true); return false; }
       if (!await act(api("POST", `/api/users/${encodeURIComponent(userIn.value.trim())}/policy`, { policy: polSel.value }))) return false;
     } else {
@@ -2131,10 +2146,16 @@ async function blockingOverview() {
   if (sum.reading) item(sum.reading, "info", "Website being read", "The server reads the whole site in the background", "#/blocking/web");
   if (!sum.router.version) item("!", "", "Router rules not built yet", "Press Rebuild now below, then import the script on the router", "#/blocking/overview");
   const topBlocked = (logs.summary || []).slice(0, 6);
+  const pauseBtn = (on) => h("button", { class: on ? "small danger" : "primary", onclick: async () => {
+    if (on && !(await confirmDlg("Pause all blocking", "Nothing is blocked anywhere until you resume (the routers drop every policy rule within 15 minutes). Use it when blocking causes a problem.", "Pause"))) return;
+    if (await act(api("POST", "/api/blocking/pause", { on }))) { blSummary = null; route(); } } }, on ? "Pause all blocking" : "Resume blocking");
   shell("Blocking", h("div", { class: "stack" }, blockingTabs("overview"),
+    sum.paused ? h("div", { class: "card health-hero fail" }, h("div", { class: "hh-mark" }, "!"),
+      h("div", { class: "grow" }, h("div", { class: "hh-title" }, "All blocking is PAUSED"), h("div", { class: "muted" }, "Nothing is blocked for anyone. Resume when the problem is solved.")),
+      isAdmin() ? pauseBtn(false) : null) : null,
     h("div", { class: "grid g-tiles" },
       tile("Policies", num(sum.policies), sum.off ? `${num(sum.off)} turned off` : "ready-made + your own"),
-      tile("Users with a policy", num(sum.users), `${num(sum.groups)} group(s) too`),
+      tile("Users with a policy", num(sum.users), `${num(sum.groups)} group(s), ${num(sum.nets || 0)} network(s)`),
       tile("Requests waiting", num(sum.requests), sum.exceptions ? `${num(sum.exceptions)} site(s) open for a while` : "from the block page"),
       tile("Blocked today", num((logs.rows || []).length), (logs.rows || []).length >= 300 ? "300 or more" : "tries the router logged")),
     h("div", { class: "grid g-2" },
@@ -2145,7 +2166,9 @@ async function blockingOverview() {
         isAdmin() ? h("a", { href: "#/blocking/policies/give" }, icon("users"), h("span", {}, "Give a policy", h("small", {}, "to a user or a group"))) : null,
         h("a", { href: "#/blocking/parental" }, icon("clock"), h("span", {}, "Parental controls", h("small", {}, "homework, bedtime, games"))),
         h("a", { href: "#/blocking/why" }, icon("search"), h("span", {}, "Why is it blocked?", h("small", {}, "a site + a user, or a block code"))),
-        h("a", { href: "#/blocking/guide" }, icon("info"), h("span", {}, "Guide", h("small", {}, "which policy does what, how to apply")))))),
+        h("a", { href: "#/blocking/guide" }, icon("info"), h("span", {}, "Guide", h("small", {}, "which policy does what, how to apply"))),
+        h("a", { href: "#/golive" }, icon("flag"), h("span", {}, "Setup steps", h("small", {}, "turn things on one at a time")))),
+        isAdmin() && !sum.paused ? h("div", { class: "toolbar quick-pause" }, pauseBtn(true), h("span", { class: "muted small" }, "emergency: no blocking at all")) : null)),
     winUpdateCard(sum),
     card("Blocked today", topBlocked.length ? "most often" : null, table([{ label: "User", render: (r) => r.user !== "-" ? h("a", { href: `#/users/${encodeURIComponent(r.user)}` }, r.user) : h("span", { class: "muted" }, "(no login)") },
       { label: "Policy", render: (r) => badge(r.policy, "info") }, { label: "Blocked by", render: (r) => badge(r.reason, "bad") }, { label: "Times", key: "count", num: true }],
@@ -2300,7 +2323,7 @@ async function blockingPolicies(action, which) {
   const show = h("select", {}, [["all", "All policies"], ["used", "In use"], ["unused", "Not used"], ["off", "Turned off"]].map(([v, l]) => h("option", { value: v }, l)));
   const MAXR = 5;
   const usedBy = (p) => {
-    const all = [...p.users, ...p.groups.map((g) => `${g} (group)`)];
+    const all = [...p.users, ...p.groups.map((g) => `${g} (group)`), ...(p.nets || []).map((n) => `${n.target}${n.comment ? " " + n.comment : ""} (network)`)];
     if (!all.length) return h("span", { class: "muted" }, "not used");
     return h("div", { class: "pol-used", title: all.join(", ") }, all.slice(0, 3).join(", "), all.length > 3 ? h("span", { class: "muted" }, ` +${all.length - 3} more`) : null);
   };
@@ -2309,7 +2332,7 @@ async function blockingPolicies(action, which) {
     const txt = h("span", {}, p.enabled !== false ? "On" : "Off");
     cb.addEventListener("change", async () => {
       const on = cb.checked;
-      if (!on && (p.users.length || p.groups.length) && !(await confirmDlg("Turn policy off", `Turn "${p.name}" off? Its ${p.users.length + p.groups.length} user(s) / group(s) keep it, but nothing of it is blocked until you turn it on again.`, "Turn off"))) { cb.checked = true; return; }
+      if (!on && (p.users.length || p.groups.length || (p.nets || []).length) && !(await confirmDlg("Turn policy off", `Turn "${p.name}" off? Its ${p.users.length + p.groups.length} user(s) / group(s) keep it, but nothing of it is blocked until you turn it on again.`, "Turn off"))) { cb.checked = true; return; }
       cb.disabled = true;
       if (await act(api("POST", `/api/policies/${encodeURIComponent(p.name)}/${on ? "on" : "off"}`, {}))) { blSummary = null; route(); }
       else { cb.checked = !on; cb.disabled = false; }
@@ -2328,7 +2351,7 @@ async function blockingPolicies(action, which) {
         h("button", { class: "small", title: "give this policy to a user or a group", onclick: () => givePolicyDialog(meta, ul.users, p.name) }, "Give"),
         h("button", { class: "small", title: "delete", onclick: async () => { if (await confirmDlg("Delete policy", `Delete policy "${p.name}"?`)) { await act(api("DELETE", `/api/policies/${encodeURIComponent(p.name)}`)); blSummary = null; route(); } } }, "Delete")) : null));
     tr._text = [p.name, p.description, ...p.users, ...p.groups, ...p.rules.map((r) => `${r.kind} ${r.value}`)].join(" ").toLowerCase();
-    tr._used = p.users.length + p.groups.length > 0;
+    tr._used = p.users.length + p.groups.length + (p.nets || []).length > 0;
     tr._off = p.enabled === false;
     return tr;
   });
@@ -2344,13 +2367,15 @@ async function blockingPolicies(action, which) {
     h("div", { class: "page-head" }, search, show, h("span", { class: "grow" }),
       isAdmin() ? h("button", { onclick: () => givePolicyDialog(meta, ul.users) }, icon("users"), "Give a policy") : null,
       isAdmin() ? h("button", { class: "primary", onclick: () => openPolicyEditor(meta, null) }, "+ New policy") : null),
-    h("div", { class: "card" }, h("h2", {}, h("span", {}, "Policies"), h("span", { class: "sub" }, `${meta.policies.length} · ${meta.policies.filter((p) => p.users.length || p.groups.length).length} in use${meta.policies.some((p) => p.enabled === false) ? ` · ${meta.policies.filter((p) => p.enabled === false).length} off` : ""}`)),
+    h("div", { class: "card" }, h("h2", {}, h("span", {}, "Policies"), h("span", { class: "sub" }, `${meta.policies.length} · ${meta.policies.filter((p) => p.users.length || p.groups.length || (p.nets || []).length).length} in use${meta.policies.some((p) => p.enabled === false) ? ` · ${meta.policies.filter((p) => p.enabled === false).length} off` : ""}`)),
       h("div", { class: "table-wrap" }, h("table", { class: "pol-table" },
         h("thead", {}, h("tr", {}, h("th", {}, ""), h("th", {}, "Policy"), h("th", {}, "Rules"), h("th", {}, "Used by"), h("th", {}, ""))),
         h("tbody", {}, rows))), empty),
-    hint("A policy is a set of rules. Give it to users or groups; one user has one policy (own, else the group's).")));
+    netPolicyCard(meta),
+    hint("A policy is a set of rules. Give it to users or groups — or to a network / IP range (no login needed). One user has one policy (own, else the group's).")));
   if (action === "new" && isAdmin()) { history.replaceState(null, "", "#/blocking/policies"); openPolicyEditor(meta, null); }
   if (action === "give" && isAdmin()) { history.replaceState(null, "", "#/blocking/policies"); givePolicyDialog(meta, ul.users); }
+  if (action === "givenet" && isAdmin()) { history.replaceState(null, "", "#/blocking/policies"); givePolicyDialog(meta, ul.users, { who: "net", policy: which }); }
   const target = meta.policies.find((p) => p.name === which);
   if (action === "edit" && target && isAdmin()) { history.replaceState(null, "", "#/blocking/policies"); openPolicyEditor(meta, target); }
 }
@@ -3643,4 +3668,66 @@ ROUTES.mail = async () => {
       h("li", {}, "Blacklist checks through public DNS are often refused by Spamhaus — then it says 'unknown'; your own DNS server fixes that."),
       h("li", {}, "Port 25 must stay open to everyone: other mail servers deliver your mail there.")))));
   document.querySelectorAll(".content table").forEach((t) => t.classList.add("rw-table"));
+};
+
+// networks / IP ranges / IPs that have a policy without logging in
+function netPolicyCard(meta) {
+  const nets = meta.policies.flatMap((p) => (p.nets || []).map((n) => ({ ...n, enabled: p.enabled !== false })));
+  return card("Networks and IPs with a policy", "no login needed", table([
+    { label: "Network / IP", render: (n) => h("code", {}, n.target) }, { label: "Name", render: (n) => n.comment || h("span", { class: "muted" }, "—") },
+    { label: "Policy", render: (n) => h("span", {}, badge(n.policy, "info"), n.enabled ? null : h("span", { class: "muted small" }, " (policy off)")) },
+    { label: "Note", render: (n) => n.overlaps.length ? h("span", { class: "small" }, badge("overlaps", "warn"), ` also in ${n.overlaps.join(", ")} — both policies apply there`) : h("span", { class: "muted" }, "—"), wrap: true },
+    { label: "", render: (n) => isAdmin() ? h("button", { class: "small danger", onclick: async () => {
+      if (await confirmDlg("Remove", `Remove policy ${n.policy} from ${n.target}?`, "Remove") && await act(api("POST", `/api/policies/net/${n.id}/del`, {}))) { blSummary = null; route(); } } }, "Remove") : null }],
+    nets, "None — e.g. give 'staff' to the whole office LAN: Give a policy → Network / IP."));
+}
+
+// ------------------------------------------------------------------ step-by-step setup: one part at a time, each checked
+ROUTES.golive = async () => {
+  const d = await api("GET", "/api/golive");
+  const mark = (c) => h("span", { class: "health-mark" }, c.ok ? "✔" : "!");
+  const line = (c) => h("div", { class: `health-row ${c.ok ? "ok" : c.text.endsWith("(optional)") ? "" : "warn"}` }, mark(c),
+    h("div", { class: "grow" }, h("b", {}, c.text), c.how ? h("div", { class: "health-fix" }, "→ ", c.how) : null));
+  const DO = {
+    blocking: [["Make the router script for this step", "#/setup/blocking", "only: blocking base, router logs, DNS logger, auto-sync — no hotspot, no security yet"],
+      ["Choose a policy (or make one)", "#/blocking/policies", "e.g. staff: social & video off in office hours"],
+      ["Give it to the office network", "#/blocking/policies/givenet/staff", "Network / IP: 192.168.88.0/24 (no login needed)"],
+      ["Test it", "#/blocking/why", "open a blocked site from a PC; Why blocked? shows the rule"]],
+    hotspot: [["Make a plan or turn on Social WiFi", "#/plans", "vouchers / plans, or phone-number login (Social WiFi)"],
+      ["Make the router script for this step", "#/setup/hotspot", "only: the hotspot (the blocking base is already there)"],
+      ["Design the login page (optional)", "#/hotspot", "logo, colours"], ["Test with one phone", "#/online", "it must show up in Online now"]],
+    usage: [["Make the router script for this step", "#/setup/usage", "only: traffic flow to this server"], ["Look at it after 10 minutes", "#/data", "Data usage, Traffic graphs"]],
+    security: [["Make the router script for this step", "#/setup/security", "only: security rules + LAN guard"], ["Watch it for a day", "#/security", "Security → All alerts"]],
+    advanced: [["Firewall: start with Quick start", "#/firewall", "one policy at a time"], ["IPS in copy mode first", "#/security/ips", "Install → Turn on; inline only later, at a quiet time"],
+      ["Mail server protection", "#/mail", "your MDaemon's LAN address"]],
+  };
+  const cards = d.steps.map((s) => {
+    const state = s.done ? badge(`done ${s.done.slice(5)}`, "ok") : s.n === d.current ? badge("NOW", "info") : s.n < d.current ? badge("skipped", "") : badge("later", "");
+    const open = s.n === d.current;
+    const body = h("div", { class: "stack" },
+      h("div", { class: "grid g-2" },
+        h("div", { class: "stack" }, h("h3", { class: "gl-h" }, "Before you start"), ...s.before.map(line)),
+        h("div", { class: "stack" }, h("h3", { class: "gl-h" }, "Do it"), h("ol", { class: "gl-do" }, (DO[s.key] || []).map(([t, href, sub]) =>
+          h("li", {}, h("a", { href }, t), h("div", { class: "muted small" }, sub)))))),
+      h("h3", { class: "gl-h" }, "Check it works"), ...s.check.map(line),
+      h("details", {}, h("summary", {}, "If something goes wrong"), h("div", { class: "stack" }, h("div", {}, s.undo),
+        s.key === "blocking" && isAdmin() ? h("div", { class: "toolbar" }, h("button", { class: d.paused ? "primary" : "small danger", onclick: async () => {
+          if (await act(api("POST", "/api/blocking/pause", { on: !d.paused }))) route(); } }, d.paused ? "Resume blocking" : "Pause all blocking")) : null,
+        s.router_undo ? h("div", {}, h("div", { class: "muted small" }, "Router Terminal (removes only this step's part):"), h("pre", { class: "code-box" }, s.router_undo)) : null)),
+      isAdmin() ? h("div", { class: "toolbar" }, s.done
+        ? h("button", { class: "small", onclick: async () => { if (await act(api("POST", "/api/golive/done", { step: s.key, done: false }))) route(); } }, "Open this step again")
+        : h("button", { class: s.works ? "primary" : "", onclick: async () => {
+            if (!s.works && !(await confirmDlg("Not all checks pass", "Mark it done anyway? Better: fix the checks first — one working step at a time.", "Mark done", false))) return;
+            if (await act(api("POST", "/api/golive/done", { step: s.key, done: true }))) route(); } }, s.works ? "✔ Works — mark done, next step" : "Mark done"),
+        h("span", { class: "muted small" }, s.works ? "all checks pass" : "some checks do not pass yet")) : null);
+    return h("details", { class: "card gl-step" + (s.done ? " done" : ""), open },
+      h("summary", {}, h("span", { class: "gl-n" }, s.n), h("b", {}, s.title), state), body);
+  });
+  shell("Setup steps", h("div", { class: "stack" },
+    d.paused ? h("div", { class: "card health-hero fail" }, h("div", { class: "hh-mark" }, "!"), h("div", { class: "grow" }, h("div", { class: "hh-title" }, "All blocking is PAUSED"),
+      h("div", { class: "muted" }, "Nothing is blocked. Step 1 → If something goes wrong → Resume blocking."))) : null,
+    hint("One part at a time", h("ul", { class: "g-list" }, h("li", {}, "Turn on one step, check it, use it for a day or two, then the next. If something breaks you know what it was."),
+      h("li", {}, "Every step has its own small router script (only that part) and a way back."),
+      h("li", {}, "Best time for router changes: when few people work (evening)."))),
+    ...cards));
 };

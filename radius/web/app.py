@@ -1973,6 +1973,7 @@ def blocking():
     import cdnmap
     users, groups = policy_members()
     off = policies_off()
+    nets = policy_nets()
     pols = []
     for f in sorted(os.listdir(POLICY_DIR)) if os.path.isdir(POLICY_DIR) else []:
         if not f.endswith(".txt") or f == "README.txt":
@@ -1980,7 +1981,8 @@ def blocking():
         text = open(os.path.join(POLICY_DIR, f), encoding="utf-8", errors="replace").read()
         name = f[:-4]
         pols.append({"name": name, "text": text, **parse_policy(text), "users": sorted(users.get(name, [])),
-                     "groups": sorted(groups.get(name, [])), "enabled": name not in off})
+                     "groups": sorted(groups.get(name, [])), "enabled": name not in off,
+                     "nets": [n for n in nets if n["policy"] == name]})
     cats = []
     for c, d in CATEGORY_INFO.items():
         if c == "keywords" or os.path.exists(os.path.join(WF_DIR, "categories", c + ".txt")):
@@ -1988,7 +1990,64 @@ def blocking():
     apps = sorted(({"app": a["app"], "category": a["category"] or "other", "discovered": bool(a.get("discovered"))}
                    for a in cdnmap.catalog().apps().values()), key=lambda a: (a["category"], a["app"].lower()))
     allow_only = ao_profiles()
-    return jsonify(policies=pols, categories=cats, apps=apps, allow_only=allow_only, router=router_info())
+    return jsonify(policies=pols, categories=cats, apps=apps, allow_only=allow_only, router=router_info(), paused=blocking_paused())
+
+
+def blocking_paused():
+    return (q1("SELECT v FROM ml_setting WHERE k='blocking_pause'") or {}).get("v") == "1"
+
+
+def _span(t):
+    a, _, b = t.partition("-")
+    if b:
+        return int(ipaddress.IPv4Address(a)), int(ipaddress.IPv4Address(b))
+    n = ipaddress.IPv4Network(t, strict=False)
+    return int(n.network_address), int(n.broadcast_address)
+
+
+def policy_nets():
+    """Networks / ranges / IPs with a policy (no login), each with the others it overlaps (both policies apply there)."""
+    rows = q("SELECT id, policy, target, comment, created FROM ml_policy_net ORDER BY policy, id")
+    for r in rows:
+        r["created"] = str(r["created"])
+        try:
+            lo, hi = _span(r["target"])
+        except ValueError:
+            r["overlaps"] = []
+            continue
+        r["overlaps"] = []
+        for o in rows:
+            if o is r or o["policy"] == r["policy"]:
+                continue
+            try:
+                lo2, hi2 = _span(o["target"])
+            except ValueError:
+                continue
+            if lo <= hi2 and lo2 <= hi:
+                r["overlaps"].append(f"{o['target']} ({o['policy']})")
+    return rows
+
+
+@app.post("/api/policies/net")
+@login_required("admin")
+def policy_net_add():
+    data = body()
+    pol = field(data, "policy", POLICY_RE, required=True)
+    target = field(data, "target", re.compile(r"^[0-9./-]{7,40}$"), required=True)
+    comment = field(data, "comment", re.compile(r'^[^"\\$]{0,100}$'))
+    return result(*radius_admin(["policy", "net", "add", pol, target] + ([comment] if comment else []), timeout=300))
+
+
+@app.post("/api/policies/net/<int:nid>/del")
+@login_required("admin")
+def policy_net_del(nid):
+    return result(*radius_admin(["policy", "net", "del", str(nid)], timeout=300))
+
+
+@app.post("/api/blocking/pause")
+@login_required("admin")
+def blocking_pause():
+    return result(*radius_admin(["policy", "pause" if body().get("on") else "resume"], timeout=300))
 
 
 @app.get("/api/blocking/summary")
@@ -2009,7 +2068,8 @@ def blocking_summary():
             reading += 1 if sc and time.time() - sc.get("since", 0) < 900 else 0
     except Exception:                                     # noqa: BLE001 — the overview still shows the rest
         pass
-    return jsonify(policies=npol, off=len(policies_off()), users=len({u for v in users.values() for u in v}),
+    return jsonify(paused=blocking_paused(), nets=int((q1("SELECT COUNT(*) AS n FROM ml_policy_net") or {}).get("n", 0) or 0),
+                   policies=npol, off=len(policies_off()), users=len({u for v in users.values() for u in v}),
                    groups=len({g for v in groups.values() for g in v}), requests=int(pending.get("n", 0) or 0),
                    exceptions=int(open_now.get("n", 0) or 0), suggestions=sugg, reading=reading, router=router_info(),
                    winupdate=winupdate_mode(), windows_devices=int((q1("SELECT COUNT(*) AS n FROM ml_device WHERE os='windows' "
@@ -3299,6 +3359,133 @@ def ips_action(action):
         reason = field(data, "reason", re.compile(r"^[\x20-\x7e]{0,120}$")) or f"by {session.get('user', 'admin')} (dashboard)"
         return result(*radius_admin(["ips", action, ip] + ([reason] if action in ("block", "allow") else [])))
     abort(404)
+
+
+# ------------------------------------------------------------------ step-by-step setup: one part at a time, each checked
+GOLIVE_STEPS = [
+    ("blocking", "Website & app blocking", ["webfilter", "logging", "dnslog", "autosync"]),
+    ("hotspot", "Hotspot / Social WiFi", ["hotspot"]),
+    ("usage", "Data usage & reports", ["traffic"]),
+    ("security", "Security on the routers", ["security", "languard"]),
+    ("advanced", "Firewall, IPS, mail server", []),
+]
+
+
+def _age_min(path):
+    try:
+        return (time.time() - os.path.getmtime(path)) / 60
+    except OSError:
+        return None
+
+
+@app.get("/api/golive")
+@login_required()
+def golive():
+    try:
+        done = json.loads((q1("SELECT v FROM ml_setting WHERE k='golive'") or {}).get("v") or "{}")
+    except ValueError:
+        done = {}
+    try:
+        health = {c["id"]: c for c in json.load(open("/var/lib/mikrotiklover/health.json")).get("checks", [])}
+    except (OSError, ValueError):
+        health = {}
+    sett = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k IN ('server_ip','social_on','ips_on','mail_ip','blocking_pause','hs_push')")}
+    nas = q("SELECT nasname, shortname FROM nas ORDER BY nasname")
+    fetch = q("SELECT router_ip, MAX(at) AS last FROM ml_router_fetch GROUP BY router_ip")
+    fresh = [f for f in fetch if f["last"] and (datetime.now() - f["last"]).total_seconds() < 1800]
+    users, groups = policy_members()
+    nets = q1("SELECT COUNT(*) AS n FROM ml_policy_net") or {}
+    given = len({u for v in users.values() for u in v}) + len({g for v in groups.values() for g in v}) + int(nets.get("n", 0) or 0)
+    npol = len([f for f in os.listdir(POLICY_DIR) if f.endswith(".txt") and f != "README.txt"]) if os.path.isdir(POLICY_DIR) else 0
+    dns_age = _age_min(mlreport.DNS_LOG)
+    wf_age = _age_min(mlreport.WF_LOG)
+    logins = q1("SELECT COUNT(*) AS n, MAX(acctstarttime) AS last FROM radacct WHERE acctstarttime >= NOW() - INTERVAL 1 DAY") or {}
+    plans = q1("SELECT (SELECT COUNT(*) FROM ml_plan) AS p") or {}
+    traffic_last = q1("SELECT MAX(bucket) AS b FROM traffic_port") or {}
+    t_age = (datetime.now() - traffic_last["b"]).total_seconds() / 60 if traffic_last.get("b") else None
+    sec = q1("SELECT COUNT(*) AS n FROM ml_security_event WHERE source IN ('log','flow') AND last_seen >= NOW() - INTERVAL 7 DAY") or {}
+    fw = q1("SELECT COUNT(*) AS n FROM ml_fw_rule WHERE enabled=1") or {}
+    ok = lambda cond, yes, no, how="": {"ok": bool(cond), "text": yes if cond else no, "how": "" if cond else how}  # noqa: E731
+    hc = lambda cid: (health.get(cid) or {}).get("status")  # noqa: E731
+    steps = {
+        "blocking": {
+            "before": [ok(nas, f"router added ({', '.join(n['shortname'] or n['nasname'] for n in nas)})", "no router added yet", "Routers → Add"),
+                       ok(sett.get("server_ip"), f"server IP {sett.get('server_ip')}", "the server's IP is not set", "Security → Protection & lists → server IP"),
+                       ok(npol, f"{npol} policies ready", "no policy yet", "Blocking → Policies → New policy")],
+            "check": [ok(fresh, f"router took the rules ({', '.join(f['router_ip'] for f in fresh)})", "no router took the rules in the last 30 minutes",
+                         "Paste the step-1 router script; then on the router: /system script run ml-sync"),
+                      ok(dns_age is not None and dns_age < 15, "site names arriving (DNS log)", "no site names in the last 15 minutes",
+                         "The router's DNS logging part; devices must use the router as DNS"),
+                      ok(given, f"policy given to {given} user(s) / group(s) / network(s)", "no one has a policy yet — nothing is blocked",
+                         "Blocking → Policies → Give (choose 'Network / IP' for the whole LAN)"),
+                      ok(wf_age is not None and wf_age < 1440, "blocks seen in the last day (Blocking → Logs)", "no block seen yet",
+                         "Open a blocked site from a device with the policy, then look at Blocking → Logs / Why blocked?"),
+                      ok(sett.get("blocking_pause") != "1", "blocking is on", "blocking is PAUSED", "Blocking → Overview → Resume")],
+            "undo": "Pause all blocking (button) — routers drop every policy rule within 15 minutes; nothing else changes.",
+            "router_undo": '/ip firewall filter remove [find comment~"^wfpolicy:"]\n/ip firewall address-list remove [find comment~"^mlnet:"]',
+        },
+        "hotspot": {
+            "before": [ok(done.get("blocking") or fresh, "step 1 working", "step 1 not checked yet", "Finish step 1 first (one change at a time)"),
+                       ok(hc("freeradius") in (None, "ok"), "RADIUS server answering", "RADIUS server not answering", "Health check → FreeRADIUS"),
+                       ok(int(plans.get("p") or 0) or sett.get("social_on") == "1", "plans / social WiFi ready", "no plan and social WiFi off",
+                          "Plans → New plan, or Social WiFi → on")],
+            "check": [ok(int(logins.get("n") or 0), f"{logins.get('n')} login(s) in the last day (last {str(logins.get('last') or '')[:16]})",
+                         "nobody logged in through the hotspot yet", "Connect a phone to the Wi-Fi: the login page must open; log in with a voucher / phone number"),
+                      ok(hc("routers") in (None, "ok"), "routers report fine", "a router has a problem", "Health check → Routers")],
+            "undo": "On the router: turn the hotspot off — everyone gets the internet without logging in again.",
+            "router_undo": '/ip hotspot disable [find]',
+        },
+        "usage": {
+            "before": [ok(done.get("hotspot") or int(logins.get("n") or 0), "step 2 working", "step 2 not checked yet", "Or skip it if you do not use the hotspot")],
+            "check": [ok(t_age is not None and t_age < 15, "data usage arriving (traffic flow)", "no traffic data in the last 15 minutes",
+                         "Paste the step-3 router script; the server's UDP 2055 must be reachable; Health check → Traffic collector")],
+            "undo": "On the router: stop sending traffic data (nothing is blocked by this step).",
+            "router_undo": '/ip traffic-flow set enabled=no',
+        },
+        "security": {
+            "before": [ok(t_age is not None and t_age < 60 or done.get("usage"), "step 3 working", "step 3 not checked yet", "Data usage helps the DDoS detective")],
+            "check": [ok(int(sec.get("n") or 0) or done.get("security"), "security events arriving" if int(sec.get("n") or 0) else "marked done",
+                         "no security event yet (normal on a quiet network)", "Security → All alerts — scans from the internet usually show within a day"),
+                      ok(hc("syslog") in (None, "ok"), "router logs arriving", "router logs not arriving", "Health check → Router logs")],
+            "undo": "On the router: switch the security rules and the LAN guard off.",
+            "router_undo": '/ip firewall filter disable [find comment~"^mlsec:"]\n/ip firewall raw disable [find comment~"^mlsec:"]\n/system scheduler disable [find name="ml-arp-watch"]',
+        },
+        "advanced": {
+            "before": [ok(done.get("security") or int(sec.get("n") or 0), "step 4 working", "step 4 not checked yet", "One at a time: firewall policies, then IPS (copy), then mail, then inline")],
+            "check": [ok(int(fw.get("n") or 0), f"{fw.get('n')} firewall policies on", "no firewall policy yet (optional)", "Firewall → Quick start"),
+                      ok(sett.get("ips_on") == "1", "IPS on" + (f" ({hc('ips')})" if hc("ips") else ""), "IPS off (optional)", "Security → Intrusion prevention → Install / Turn on"),
+                      ok(sett.get("mail_ip"), "mail server protected", "mail server not set (optional)", "Mail server → your server's LAN address")],
+            "undo": "Each one has its own off switch: Firewall policy switch, IPS Turn off, Mail server protection off, Inline → Back to copy mode.",
+            "router_undo": "",
+        },
+    }
+    out = []
+    for i, (key, title, mods) in enumerate(GOLIVE_STEPS, 1):
+        st = steps[key]
+        works = all(c["ok"] for c in st["check"] if not c["text"].endswith("(optional)"))
+        out.append({"n": i, "key": key, "title": title, "modules": mods, "done": done.get(key, ""), "works": works, **st})
+    current = next((s["n"] for s in out if not s["done"]), len(out))
+    return jsonify(steps=out, current=current, paused=sett.get("blocking_pause") == "1")
+
+
+@app.post("/api/golive/done")
+@login_required("admin")
+def golive_done():
+    data = body()
+    key = str(data.get("step", ""))
+    if key not in [k for k, _, _ in GOLIVE_STEPS]:
+        abort(400, "unknown step")
+    try:
+        done = json.loads((q1("SELECT v FROM ml_setting WHERE k='golive'") or {}).get("v") or "{}")
+    except ValueError:
+        done = {}
+    if data.get("done"):
+        done[key] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    else:
+        done.pop(key, None)
+    q("REPLACE INTO ml_setting (k, v) VALUES ('golive', %s)", (json.dumps(done),))
+    audit(f"setup step {key} {'done' if data.get('done') else 'not done'}", "ok")
+    return result(True, f"step {'done' if data.get('done') else 'opened again'}")
 
 
 # ------------------------------------------------------------------ firewall (FortiGate / Untangle style): tools/firewall.py

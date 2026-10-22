@@ -304,6 +304,16 @@ Users ko connect karne ka tareeqa batane ke liye unhein `https://SERVER:8443/con
 
 ---
 
+## 6a. Pehli dafa: qadam ba qadam (sab ek saath nahi)
+
+Dashboard → **Setup steps**. Har qadam ka apna chhota router script, apne checks aur wapsi ka rasta:
+
+1. **Website aur apps block** — Router setup sirf blocking base + logs + DNS logger + auto-sync ke saath. Policy ko **Give a policy → Network / IP** se poore office LAN (`192.168.88.0/24`) ko dein — login ki zaroorat nahi. Masla ho to **Pause all blocking** (`sudo radius-admin policy pause`, wapas `policy resume`).
+2. **Hotspot ya Social WiFi** — sirf hotspot ka script (blocking base dobara nahi). Ek phone se test, phir Mark done.
+3. Data usage → 4. Security rules → 5. Firewall / IPS / mail server, ek waqt mein ek.
+
+Har qadam ko ek do din chalayein, "Check it works" sab ✔ ho to agla. Tafseel: README section 5h2.
+
 ## 6b. Baqi features chalu karna — checklist
 
 Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein (dashboard se ya CLI se):
@@ -324,6 +334,8 @@ Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein
 | IPS block ~1 second mein (MikroTik API, api-ssl) | Security → Intrusion prevention → Instant blocks → + Add a router | `radius-admin ips api add 192.168.88.1` · `ips api test 192.168.88.1` · `ips api list` |
 | Inline IPS (pehla packet ruke) + khud bypass agar Suricata band / atke | Security → Intrusion prevention → Mode → Inline | `radius-admin ips inline on eth1 eth2` · `ips inline drop` · `ips bypass on|off` · `ips inline off` |
 | Mail server (MDaemon) ki hifazat: safe ports, password guessing band, spam bots, DNS / blacklist / certificate checks | Mail server | `radius-admin mail set ip 192.168.88.30 domain example.com` · `mail doors` · `mail status` |
+| Policy poore network / IP range / ek PC ko (login ke baghair) | Blocking → Policies → Give a policy → Network / IP | `radius-admin policy net add staff 192.168.88.0/24 "Office LAN"` · `policy net list` · `policy net del ID` |
+| Sab blocking ek dam band / wapas (masla ho to) | Setup steps → 1 → If something goes wrong · Dashboard banner | `radius-admin policy pause` · `policy resume` |
 | Ye connection kaun si policy le gi? | Firewall → Policy lookup | `radius-admin firewall lookup router 1.2.3.4 203.0.113.1 tcp 8291` |
 | Bahar se kya andar aa raha hai: khule darwaze (port forward, UPnP, router services), kis IP ne kis andar ke IP:port ko chhua | Security → From outside → Who? | naya auto-sync script import + traffic collector |
 | Microsoft Windows Update band / sirf office hours mein band / on | Blocking → Overview → Windows Update | `radius-admin winupdate off` · `winupdate office` · `winupdate on` |

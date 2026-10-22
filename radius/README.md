@@ -686,6 +686,43 @@ sudo radius-admin vpn -u ali --days 30
 > - Jo VPN apna server naam chhupaye aur naye IPs par port 443 par chale (Psiphon jaisi), woh pehli dafa pakri nahi jati. Jaise hi us ka koi naam ya IP list mein aata hai, woh bhi rukti hai. Aise users ke liye `whatsapp-only` jaisa allow-only profile sab se pakka hai.
 > - Asal MikroTik par auto-sync script abhi test nahi hui. Pehle ek router par chala kar `/log print where message~"ml-sync"` dekhein.
 
+## 5h2. Qadam ba qadam chalu karna (step by step) — sab ek saath nahi
+
+Dashboard → **Setup steps** (Dashboard par "Setup steps" button bhi). Har feature alag qadam hai. Ek qadam on karein, check karein, ek do din chalayein, phir agla. Kuch kharab ho to pata hota hai kis qadam se hua.
+
+| # | Qadam | Router script mein sirf | Wapas kaise |
+|---|---|---|---|
+| 1 | **Website aur apps block** | blocking base, router logs, DNS logger, auto-sync (koi hotspot / security nahi) | **Pause all blocking** (ek click, sab blocking band, policies mehfooz) |
+| 2 | **Hotspot ya Social WiFi** (office) | sirf hotspot (blocking base dobara nahi) | `/ip hotspot disable [find]` |
+| 3 | Data usage / traffic | sirf traffic-flow | `/ip traffic-flow set enabled=no` |
+| 4 | Security rules + LAN guard | sirf mlsec rules + ARP watch | `mlsec:` rules disable |
+| 5 | Firewall, IPS, mail server | dashboard se, ek waqt mein ek | har page par Off switch |
+
+Har qadam ke card mein: **Before you start** (pehle kya chahiye), **Do it** (links), **Check it works** (server khud check karta hai: router ne rules liye, site names aa rahe hain, network ko policy mili, blocking pause to nahi), **If something goes wrong** (pause + router Terminal ki undo lines), **Mark done**.
+
+**Qadam 1 — sirf website / apps block (login ke baghair):**
+1. Setup steps → 1 → *Make the router script for this step* (Router setup sirf blocking hisse ke saath khulta hai) → script router par chalayein.
+2. Policy chunein (maslan `staff`: social / video office hours mein band).
+3. **Give a policy → Network / IP** → `192.168.88.0/24` (poora office LAN), ya range `192.168.88.100-192.168.88.150`, ya ek PC `192.168.88.23`. Koi login nahi chahiye — us address wala har device policy le leta hai. Login wale user ki apni policy upar se lagti hai.
+4. Ek PC se band site kholein → **Blocking → Why blocked?** rule dikhata hai.
+
+```bash
+sudo radius-admin policy net add staff 192.168.88.0/24 "Office LAN"
+sudo radius-admin policy net add guests 192.168.88.100-192.168.88.150 "Guest range"
+sudo radius-admin policy net list
+sudo radius-admin policy net del ID
+sudo radius-admin policy pause      # sab blocking band (15 min mein routers par; policies, networks mehfooz)
+sudo radius-admin policy resume     # wapas
+```
+
+- Router par network `policy-NAME` address list mein jata hai (comment `mlnet:`); har sync pehle purani entries hatata hai.
+- Do networks ek doosre ke andar hon (range LAN ke andar) to Policies page par **overlaps** dikhta hai — wahan dono policies lagti hain.
+- Pause ke waqt Dashboard aur Setup steps par laal "All blocking is PAUSED" banner.
+
+**Qadam 2 — hotspot ya Social WiFi:** pehle plan / vouchers ya Social WiFi on karein → Setup steps → 2 → router script (sirf hotspot) → aik phone se test → Online now mein nazar aaye → Mark done.
+
+Tests: `tests/test-golive.sh` (network / range / IP, ghalat inputs, overlap, pause / resume router file mein, steps API, har qadam ka router script), UI suite (Setup steps page, Give → Network / IP → Remove).
+
 ## 5f. PPPoE users (ISP style)
 
 Ghar/dukaan ke router PPPoE se username/password par chalte hain — wohi RADIUS, wohi plans, wohi dashboard.

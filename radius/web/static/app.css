@@ -450,3 +450,13 @@ details.card > summary { font-weight: 700; }
 .mail-group { display: grid; gap: 8px; }
 .ips-mode { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; display: grid; gap: 4px; }
 .ips-mode.on { border-color: var(--accent); background: var(--accent-soft); }
+/* setup steps */
+.gl-step > summary { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 15px; }
+.gl-step > summary .badge { margin-left: auto; }
+.gl-step.done { opacity: .85; }
+.gl-n { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; font-size: 13px; flex: none; }
+.gl-step.done .gl-n { background: var(--ok); }
+.gl-h { margin: 6px 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.gl-do { margin: 0; padding-left: 20px; display: grid; gap: 8px; }
+.gl-step .health-row:not(.ok):not(.warn) { border-left-color: var(--border); }
+.quick-pause { margin-top: 10px; }

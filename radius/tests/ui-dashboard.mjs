@@ -348,6 +348,26 @@ try {
   await page.locator(".card h2", { hasText: /Your mail server|Checks/ }).first().waitFor({ timeout: 30000 });
   ok("mail server page (set-up form or checks)");
 
+  // step by step: the steps page, then give a policy to a network (no login) and remove it again
+  await go(page, "#/golive", "Setup steps");
+  await page.locator("details.gl-step").first().waitFor({ timeout: 15000 });
+  if (await page.locator("details.gl-step").count() !== 5) throw new Error("setup steps: expected 5 steps");
+  await page.locator("details.gl-step[open] h3", { hasText: "Check it works" }).first().waitFor();
+  await shot(page, "45-golive");
+  await go(page, "#/blocking/policies/givenet/guests", "Blocking");
+  const gd = page.locator("dialog[open]");
+  await gd.locator("input[name=target]").waitFor();
+  await gd.locator("input[name=target]").fill("10.124.3.0/24");
+  await gd.locator("input[name=comment]").fill("ui-net-test");
+  await clickToast(page, dlgButton(page, "Apply"));
+  const nrow = page.locator("tr", { hasText: "10.124.3.0/24" });
+  await nrow.waitFor({ timeout: 15000 });
+  await nrow.getByRole("button", { name: "Remove" }).click();
+  await clickToast(page, dlgButton(page, "Remove"));
+  await page.waitForTimeout(800);
+  if (await page.locator("tr", { hasText: "10.124.3.0/24" }).count()) throw new Error("network policy not removed");
+  ok("setup steps page (5 steps, checks) + policy for a network: given in the dialog, removed");
+
   // firewall: a policy made in the dialog (country source picked by search), seen in the router order, looked up, deleted
   await go(page, "#/firewall", "Firewall");
   await page.locator(".health-hero").waitFor({ timeout: 15000 });

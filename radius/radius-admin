@@ -2141,9 +2141,59 @@ cmd_winupdate() { # Windows Update for everyone: on (allowed) | off | office (of
 
 policy_is_off() { [ -f "$POLICY_DIR/.off" ] && grep -qx "$1" "$POLICY_DIR/.off"; }
 
+policy_net_rsc() { # router part of sync.rsc: networks / IP ranges / IPs that have a policy without logging in
+    echo "# Policies for networks and IPs (Blocking → Give a policy → Network / IP)"
+    echo "/ip firewall address-list"
+    echo 'remove [find comment~"^mlnet:"]'
+    echo "SELECT policy, target, comment FROM ml_policy_net ORDER BY id" | db 2>/dev/null \
+        | awk -F'\t' '$1 ~ /^[a-z0-9-]+$/ && $2 ~ /^[0-9.\/-]+$/ { c = $3; gsub(/["\\$]/, "", c); printf "add list=policy-%s address=%s comment=\"mlnet: %s\"\n", $1, $2, substr(c, 1, 60) }'
+}
+
+valid_target() { # an IP, a network (a.b.c.d/nn) or a range (a-b) -> normalised, or die
+    python3 -c '
+import ipaddress, sys
+t = sys.argv[1]
+try:
+    if "-" in t:
+        a, b = (ipaddress.IPv4Address(x) for x in t.split("-"))
+        assert a <= b
+        print(f"{a}-{b}")
+    else:
+        print(ipaddress.IPv4Network(t, strict=False) if "/" in t else ipaddress.IPv4Address(t))
+except Exception:
+    sys.exit(1)' "$1" 2>/dev/null || die "'$1' is not an IP, a network (192.168.88.0/24) or a range (192.168.88.100-192.168.88.150)"
+}
+
 cmd_policy() {
     local sub=${1:-list}; shift || true
     case $sub in
+    net|nets)
+        local act=${1:-list}; shift || true
+        case $act in
+            list) [ "$(echo "SELECT COUNT(*) FROM ml_policy_net" | db)" = 0 ] && { echo "No network has a policy. Add one: radius-admin policy net add staff 192.168.88.0/24 \"Office LAN\""; return 0; }
+                  echo "SELECT id, policy, target, comment, DATE_FORMAT(created, '%Y-%m-%d') AS since FROM ml_policy_net ORDER BY policy, id" | dbt ;;
+            add)
+                local p=${1:-} tg=${2:-}; [ -n "$p" ] && [ -n "$tg" ] || die "usage: radius-admin policy net add POLICY 192.168.88.0/24|192.168.88.100-192.168.88.150|192.168.88.23 [comment]"
+                [[ $p =~ ^[a-z0-9-]{1,40}$ ]] && [ -f "$POLICY_DIR/$p.txt" ] || die "No policy '$p' (radius-admin policy list)"
+                tg=$(valid_target "$tg"); shift 2; local c="$*"
+                [ ${#c} -le 100 ] && [[ ! $c =~ [\"\\\$] ]] || die "comment: 100 characters at most, no \" \\ \$"
+                echo "INSERT INTO ml_policy_net (policy, target, comment, created) VALUES ($(q "$p"), $(q "$tg"), $(q "$c"), NOW())
+                      ON DUPLICATE KEY UPDATE comment=VALUES(comment)" | db
+                cmd_policy build >/dev/null || die "router rules not built"
+                ok "Policy '$p' for $tg (no login needed) — routers within 15 minutes" ;;
+            del)
+                [[ ${1:-} =~ ^[0-9]+$ ]] || die "usage: radius-admin policy net del ID   (radius-admin policy net list)"
+                [ "$(echo "SELECT COUNT(*) FROM ml_policy_net WHERE id=$1" | db)" = 1 ] || die "No network policy #$1"
+                echo "DELETE FROM ml_policy_net WHERE id=$1" | db
+                cmd_policy build >/dev/null || die "router rules not built"
+                ok "Network policy #$1 removed — routers within 15 minutes" ;;
+            *) die "usage: radius-admin policy net list|add|del" ;;
+        esac ;;
+    pause|resume)
+        setting_set blocking_pause "$([ "$sub" = pause ] && echo 1 || echo 0)"
+        cmd_policy build >/dev/null || die "router rules not built"
+        if [ "$sub" = pause ]; then ok "ALL blocking PAUSED: the routers drop every policy rule within 15 minutes (re-run ml-sync on a router for at once). radius-admin policy resume"
+        else ok "Blocking back on (routers within 15 minutes)"; fi ;;
     list|ls)
         local f n groups
         for f in "$POLICY_DIR"/*.txt; do
@@ -2202,6 +2252,7 @@ cmd_policy() {
         ao_ensure
         if ! WF_OUT="$lists" POLICY_DIR="$POLICY_DIR" AO_DIR="$AO_DIR" WEBSCAN_DIR="$WEBSCAN_DIR" VPN_DOMAINS="$lists/vpn-domains.txt" CDNMAP=/usr/local/lib/mikrotiklover/cdnmap.py \
                QUARANTINE_SERVER="$(setting_get server_ip)" WINUPDATE="$(v=$(setting_get winupdate 2>/dev/null || true); echo "${v:-on}")" \
+               PAUSED="$([ "$(setting_get blocking_pause 2>/dev/null)" = 1 ] && echo 1 || echo 0)" \
                bash "$WF_DIR/build.sh" 2>"$lists/build.log"; then
             cat "$lists/build.log" >&2; rm -rf "${lists:?}"; die "router rules not built"
         fi
@@ -2291,6 +2342,8 @@ RSC
             blockpage_rsc
             echo
             live_rsc
+            echo
+            policy_net_rsc
             echo
             fw_rsc
             echo
@@ -3398,6 +3451,8 @@ Blocking policies + router auto-sync (dashboard → Blocking)
   policy set NAME < file                create / change a policy (directives: webfilter/policies/README.txt)
   policy del NAME                       delete an unused policy
   winupdate on|off|office|status        Windows Update for everyone: allowed / blocked / blocked in office hours (per policy: block windows-update)
+  policy net add POLICY NET|RANGE|IP [comment] · policy net list|del ID   a policy without logging in (whole LAN, VLAN, IP range)
+  policy pause | resume                  emergency: no blocking at all (routers within 15 minutes)
   firewall list                          policies in order (first match wins), port forwards, objects
   firewall rule add NAME --dir out|in|wan|router|lan --src OBJ,geo:CN --dst all --service RDP,SMB
                     [--schedule office-hours] --action deny|reject|allow [--log] [--top]

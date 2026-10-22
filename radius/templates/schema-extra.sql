@@ -617,3 +617,13 @@ CREATE TABLE IF NOT EXISTS ml_ips_allow (
   comment VARCHAR(255) NOT NULL DEFAULT '',
   created DATETIME NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- A policy for a whole network / IP range / one IP, no login needed (Blocking → Give a policy → Network)
+CREATE TABLE IF NOT EXISTS ml_policy_net (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  policy VARCHAR(40) NOT NULL,
+  target VARCHAR(64) NOT NULL,
+  comment VARCHAR(100) NOT NULL DEFAULT '',
+  created DATETIME NOT NULL,
+  UNIQUE KEY (policy, target)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
