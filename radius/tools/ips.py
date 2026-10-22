@@ -285,10 +285,11 @@ def read_new(path=EVE, state_path=STATE, start_at_end=True):
         cut = data.rfind(b"\n") + 1               # a half-written last line waits for the next run
         lines = data[:cut].decode("utf-8", "replace").splitlines()
         off += cut
-    os.makedirs(os.path.dirname(state_path), exist_ok=True)
-    with open(state_path + ".tmp", "w") as f:
-        json.dump({"ino": st.st_ino, "off": off}, f)
-    os.replace(state_path + ".tmp", state_path)
+    if state != {"ino": st.st_ino, "off": off}:     # only when something changed (the watcher asks 4 times a second)
+        os.makedirs(os.path.dirname(state_path), exist_ok=True)
+        with open(state_path + ".tmp", "w") as f:
+            json.dump({"ino": st.st_ino, "off": off}, f)
+        os.replace(state_path + ".tmp", state_path)
     return lines
 
 

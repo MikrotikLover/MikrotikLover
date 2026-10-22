@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Offline tests for the IPS parts: TZSP decoding, alert reading, plain words, who gets blocked, Suricata config."""
-import json, os, sys, tempfile
+import json, os, sys, tempfile, time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ips, tzsp2tap  # noqa: E402
@@ -65,6 +65,10 @@ open(eve, "w").write("")
 open(eve, "a").write(lines[1] + "\n")
 check("truncated file read from the start", ips.read_new(eve, state) == [lines[1]])
 
+m0 = os.stat(state).st_mtime_ns
+time.sleep(0.05)
+ips.read_new(eve, state); ips.read_new(eve, state)
+check("nothing new: the state file is not written again (the watcher asks 4x a second; backups must not see it change)", os.stat(state).st_mtime_ns == m0)
 y = ips.suricata_yaml(["192.168.0.0/16", "10.0.0.0/8"], "mltap0", rule_dir=d, log_dir=d)
 check("Suricata config: home networks, tap, alerts only, partial copy settings", 'HOME_NET: "[192.168.0.0/16,10.0.0.0/8]"' in y and "- interface: mltap0" in y
       and "- alert:" in y and "midstream: true" in y and "checksum-validation: no" in y and "http:\n" in y)

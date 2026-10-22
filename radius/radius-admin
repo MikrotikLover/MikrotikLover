@@ -2423,7 +2423,10 @@ cmd_backup() {
     local p list=()
     for p in "${BACKUP_PATHS[@]}"; do [ -e "$p" ] && list+=("${p#/}"); done
     [ "$logs" = 0 ] || { [ -d /var/log/mikrotik ] && list+=(var/log/mikrotik); }
-    tar -C / -czf "$stage/files.tar.gz" "${list[@]}" 2>"$stage/err" || { cat "$stage/err" >&2; rm -rf "${stage:?}"; die "file backup failed"; }
+    # exit 1 = a file changed while it was read (logs, live state): the backup is still good; 2 = real error
+    local trc=0
+    tar -C / --exclude=var/lib/mikrotiklover/ips.state --warning=no-file-changed -czf "$stage/files.tar.gz" "${list[@]}" 2>"$stage/err" || trc=$?
+    [ "$trc" -le 1 ] || { cat "$stage/err" >&2; rm -rf "${stage:?}"; die "file backup failed"; }
     {
         echo "MIKROTIKLOVER_BACKUP=1"
         echo "created=$(date '+%Y-%m-%d %H:%M:%S %z')"
