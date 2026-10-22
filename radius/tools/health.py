@@ -425,8 +425,23 @@ class Checks:
         else:
             self.add("ips", g, "Intrusion prevention", "ok", f"running, {st['rules']} signatures, copy from {', '.join(cp.get('routers', []))}")
 
+    def mail(self):
+        """The mail server's hourly checks (mailsec.py): each problem its own line, so alerts say exactly what changed."""
+        try:
+            res = json.load(open("/var/lib/mikrotiklover/mail.json"))
+        except (OSError, ValueError):
+            return
+        if not res.get("configured"):
+            return
+        g = "Mail server"
+        bad = [c for c in res.get("checks", []) if c.get("status") != "ok" and c.get("id") != "checklist"]
+        for c in bad:
+            self.add(f"mail:{c['id']}", g, c["name"], c["status"], c["detail"], c.get("fix", ""))
+        if not bad:
+            self.add("mail", g, "Mail server", "ok", f"{len(res.get('checks', []))} checks fine ({res.get('at', '')})")
+
     def run(self):
-        for f in (self.services, self.jobs, self.system, self.routers, self.blocking, self.firewall, self.ips):
+        for f in (self.services, self.jobs, self.system, self.routers, self.blocking, self.firewall, self.ips, self.mail):
             try:
                 f()
             except Exception as e:  # noqa: BLE001 — one broken check must not hide the others

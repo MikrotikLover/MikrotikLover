@@ -51,6 +51,7 @@ const ICONS = {
   print: "M6 9V3h12v6M6 18H4v-7h16v7h-2M7 14h10v7H7z",
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14m10 3-5.2-5.2",
   block: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M5.6 5.6l12.8 12.8",
+  mail: "M3 6h18v12H3zM3 7l9 6 9-6",
   wall: "M3 5h18v14H3zM3 9.7h18M3 14.3h18M9 5v4.7M15 9.7v4.6M9 14.3V19",
   shield: "M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6zM12 8v5m0 3h.01",
   pulse: "M3 12h4l2-6 4 12 2-6h6",
@@ -225,7 +226,7 @@ const NAV = [
   ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], ["speed", "Speed schedule", "clock"], ["hotspot", "Hotspot page", "brush"], ["social", "Social WiFi", "phone"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["insights", "Insights (samajh)", "bulb"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
   ["traffic", "Traffic graphs", "graph"], ["data", "Data usage", "data"], ["apps", "Apps on network", "apps"], ["ports", "Ports & protocols", "ports"], "-",
-  ["firewall", "Firewall", "wall"], ["blocking", "Blocking", "block"], ["vpn", "VPN & proxy watch", "vpn"], ["security", "Security", "shield"], ["domains", "Website names", "globe"], "-", ["health", "Health check", "pulse"], ["settings", "Settings", "settings"],
+  ["firewall", "Firewall", "wall"], ["mail", "Mail server", "mail"], ["blocking", "Blocking", "block"], ["vpn", "VPN & proxy watch", "vpn"], ["security", "Security", "shield"], ["domains", "Website names", "globe"], "-", ["health", "Health check", "pulse"], ["settings", "Settings", "settings"],
 ];
 
 function shell(title, content, actions) {
@@ -3515,3 +3516,76 @@ async function ipsPage(tabs) {
     card(null, null, h("div", { class: "toolbar" }, days)), holder));
   await load();
 }
+
+// ------------------------------------------------------------------ mail server on the LAN (MDaemon …): checks + protection
+ROUTES.mail = async () => {
+  const d = await api("GET", "/api/mail?days=7");
+  const se = d.settings, res = d.result || { checks: [] };
+  const doIt = async (action, data) => { if (await act(api("POST", `/api/mail/${action}`, data || {}))) route(); };
+  const settingsForm = () => {
+    const f = (name, label, value, ph, help) => h("label", { class: "field" }, label, h("input", { name, value: value || "", placeholder: ph }), help ? h("small", { class: "muted" }, help) : null);
+    const form = h("form", { class: "form mail-form", onsubmit: async (e) => { e.preventDefault(); const b = e.target.querySelector("button[type=submit]"); b.disabled = true; b.textContent = "Saving and checking…";
+      if (await act(api("POST", "/api/mail/settings", formValues(form)))) route(); else { b.disabled = false; b.textContent = "Save and check"; } } },
+      h("div", { class: "grid g-2" }, f("ip", "Mail server's LAN address", se.ip, "192.168.88.30", "the MDaemon machine inside your network"),
+        f("domain", "Your mail domain", se.domain, "example.com"), f("host", "Mail server name (MX)", se.host, "mail.example.com", "empty = mail.DOMAIN"),
+        f("public", "Public IP (optional)", se.public_ip, "found from DNS", "the internet address your mail comes from"),
+        f("dkim", "DKIM selector", se.dkim, "MDaemon", "MDaemon: Security → Sender Authentication → DKIM"),
+        f("webmail", "Webmail port inside", String(se.webmail || 3000), "3000", "MDaemon Webmail (WorldClient) default 3000")),
+      h("div", { class: "toolbar" }, h("button", { class: "primary", type: "submit", disabled: !isAdmin() }, "Save and check")));
+    return form;
+  };
+  if (!se.ip || !se.domain) {
+    shell("Mail server", h("div", { class: "stack" }, card("Your mail server", "MDaemon, Exchange, Zimbra … on the LAN behind the MikroTik", settingsForm(),
+      hint("What you get", h("ul", { class: "g-list" }, h("li", {}, "Safe doors: only the mail ports open (25, 587, 465, 993, 995, webmail over HTTPS); never the admin port 1000."),
+        h("li", {}, "Password guessing stopped on the routers; only the mail server may send mail out (spam bots on PCs cannot)."),
+        h("li", {}, "Every hour: MX, SPF, DMARC, DKIM, reverse DNS, 8 blacklists, certificates, unusual outgoing mail — with what to do."))))));
+    return;
+  }
+  const checks = res.checks || [], bad = checks.filter((c) => c.status === "fail"), warn = checks.filter((c) => c.status === "warn");
+  const state = bad.length ? "fail" : warn.length ? "warn" : "ok";
+  const groups = [...new Set(checks.map((c) => c.group))];
+  const mark = (s) => h("span", { class: "health-mark" }, s === "ok" ? "✔" : s === "warn" ? "!" : "✘");
+  const sw = (label, help, on, action) => h("label", { class: "check" + (on ? " on" : "") }, h("input", { type: "checkbox", checked: on, disabled: !isAdmin(),
+    onchange: (e) => doIt(action, { on: e.target.checked }) }), h("div", {}, h("b", {}, label), h("span", {}, help)));
+  const rate = h("select", { disabled: !isAdmin(), onchange: (e) => doIt("rate", { rate: e.target.value }) }, [10, 20, 30, 60, 120].map((v) => h("option", { value: v, selected: v === se.rate }, `${v} a minute`)));
+  const trusted = h("select", { disabled: !isAdmin(), onchange: (e) => doIt("trusted", { name: e.target.value }) }, h("option", { value: "" }, "none"),
+    d.addrs.map((n) => h("option", { value: n, selected: n === se.trusted }, n)));
+  shell("Mail server", h("div", { class: "stack" },
+    h("div", { class: `card health-hero ${state}` }, h("div", { class: "hh-mark" }, state === "ok" ? "✔" : "!"),
+      h("div", { class: "grow" }, h("div", { class: "hh-title" }, bad.length ? `${bad.length} problem(s) to fix` : warn.length ? `${warn.length} thing(s) to look at` : "Mail server looks safe"),
+        h("div", { class: "muted" }, `${se.host} (${se.ip}) · public ${res.public_ip || "?"} · checked ${res.at || "never"} — checks run every hour`)),
+      isAdmin() ? h("div", { class: "toolbar" }, h("button", { class: "small", onclick: (e) => { e.target.disabled = true; e.target.textContent = "Checking…"; doIt("check"); } }, "Check now")) : null),
+    (() => {
+      const row = (c) => h("div", { class: `health-row ${c.status}` }, mark(c.status),
+        h("div", { class: "grow" }, h("b", {}, c.name, h("span", { class: "muted small" }, ` · ${c.group}`)), h("div", { class: "muted small" }, c.detail), c.fix ? h("div", { class: "health-fix" }, "→ ", c.fix) : null));
+      const todo = [...bad, ...warn], fine = checks.filter((c) => c.status === "ok");
+      if (!checks.length) return card("Checks", null, h("div", { class: "empty" }, "Not checked yet — press Check now."));
+      return card("Checks", "problems first — every hour by itself", h("div", { class: "stack" },
+        todo.length ? h("div", { class: "mail-group" }, todo.map(row)) : h("div", { class: "empty" }, "Nothing to fix."),
+        fine.length ? h("details", {}, h("summary", {}, `${fine.length} checks fine`), h("div", { class: "stack" }, groups.map((g) => fine.some((c) => c.group === g)
+          ? h("div", { class: "mail-group" }, h("h3", {}, g), fine.filter((c) => c.group === g).map(row)) : null))) : null));
+    })(),
+    h("div", { class: "stack" },
+      card("Doors to the mail server", "port forwards from the internet", h("div", { class: "stack" },
+        table([{ label: "Port", render: (p) => h("b", {}, p.port) }, { label: "Service", key: "name" },
+          { label: "Internet", render: (p) => (res.open_ports || []).includes(p.port) ? badge(p.open ? "open" : "OPEN — close it", p.open ? "ok" : "bad") : h("span", { class: "muted" }, p.open ? "closed" : "closed (good)") },
+          { label: "Why", render: (p) => h("span", { class: "small muted" }, p.why), wrap: true }], d.ports),
+        isAdmin() ? h("div", { class: "toolbar" }, h("button", { class: "primary", onclick: () => doIt("doors", { webmail: true }) }, "Set up the doors"),
+          h("span", { class: "muted small" }, "opens 25, 587, 465, 993, 995 and webmail 443 (Firewall → Port forwards)")) : null)),
+      card("Protection on the routers", null, h("div", { class: "checks" },
+        sw("Stop password guessing", "Too many new logins a minute from one address (IMAP, POP3, SMTP AUTH, webmail) → that address is blocked for 1 hour on every router.", se.guard, "guard"),
+        sw("Only the mail server sends mail out", "Port 25 out is refused for every other device: a virus on a PC cannot send spam and get your IP blacklisted.", se.smtp_out, "smtp-out")),
+        h("div", { class: "toolbar ips-opts" }, h("label", { class: "field" }, "Block above", rate), h("label", { class: "field" }, "Never block (address object)", trusted)))),
+    h("div", { class: "grid g-2" },
+      card("Password guessers blocked", "last 7 days", table([{ label: "Address", render: (x) => h("span", {}, h("code", {}, x.ip), x.cc ? h("span", { class: "muted small" }, ` ${x.cc}`) : null) },
+        { label: "Times", key: "count", num: true }, { label: "Last", render: (x) => x.last.slice(5, 16) }], d.brute, "None.")),
+      card("Devices that tried to send mail directly", "spam bots? — refused", table([{ label: "Device", render: (x) => h("span", {}, h("code", {}, x.ip), x.user ? h("div", { class: "muted small" }, x.user) : null) },
+        { label: "Times", key: "count", num: true }, { label: "Last", render: (x) => x.last.slice(5, 16) }], d.bots, "None — good."))),
+    card("MDaemon checklist", "settings only you can change in MDaemon — tick when done", h("div", { class: "checks" }, d.checklist.map((c) => h("label", { class: "check" + (c.done ? " on" : "") },
+      h("input", { type: "checkbox", checked: c.done, disabled: !isAdmin(), onchange: (e) => doIt("checklist", { key: c.key, done: e.target.checked }) }), h("div", {}, h("span", {}, c.text)))))),
+    h("details", { class: "card" }, h("summary", {}, "Mail server settings"), settingsForm()),
+    hint("Good to know", h("ul", { class: "g-list" }, h("li", {}, "The IPS (Security → Intrusion prevention) also watches mail: password guessing, MDaemon admin port probes, devices sending spam."),
+      h("li", {}, "Blacklist checks through public DNS are often refused by Spamhaus — then it says 'unknown'; your own DNS server fixes that."),
+      h("li", {}, "Port 25 must stay open to everyone: other mail servers deliver your mail there.")))));
+  document.querySelectorAll(".content table").forEach((t) => t.classList.add("rw-table"));
+};

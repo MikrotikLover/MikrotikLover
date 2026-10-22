@@ -3107,6 +3107,78 @@ def inbound_detail():
     return jsonify(rows=jsonable(rows))
 
 
+# ------------------------------------------------------------------ mail server on the LAN (MDaemon …): tools/mailsec.py
+@app.get("/api/mail")
+@login_required()
+def mail_get():
+    import mailsec
+    sett = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k LIKE 'mail\\_%%'")}
+    c = mailsec.conf_of(sett)
+    try:
+        res = json.load(open("/var/lib/mikrotiklover/mail.json"))
+    except (OSError, ValueError):
+        res = {"configured": False, "checks": []}
+    days = int(max(report_args().days, 1))
+    logs = mailsec.parse_logs(mlreport.read_lines(mlreport.WF_LOG, time.time() - days * 86400), time.time() - days * 86400)
+    who = {r["ip"]: r["username"] for r in q("""SELECT framedipaddress AS ip, username FROM radacct WHERE acctstoptime IS NULL
+                                               AND framedipaddress <> '' AND acctupdatetime >= NOW() - INTERVAL 1 DAY""")}
+    brute, bots = {}, {}
+    for r in logs:
+        d = brute if r["kind"] == "mailbrute" else bots
+        x = d.setdefault(r["src"], {"ip": r["src"], "count": 0, "last": r["time"], "user": who.get(r["src"], ""), "dst": r["dst"]})
+        x["count"] += 1
+        x["last"] = max(x["last"], r["time"])
+    import firewall as fwmod
+    for x in brute.values():
+        try:
+            x["cc"] = fwmod.lookup(x["ip"])
+        except ValueError:
+            x["cc"] = ""
+    return jsonify(settings={k: v for k, v in c.items()}, result=res, checklist=[{"key": k, "text": t, "done": bool(c["checklist"].get(k))} for k, t in mailsec.CHECKLIST],
+                   brute=sorted(brute.values(), key=lambda x: -x["count"])[:100], bots=sorted(bots.values(), key=lambda x: -x["count"])[:100],
+                   addrs=[r["name"] for r in q("SELECT name FROM ml_fw_addr ORDER BY name")], ports=[{"port": p, "name": n, "open": o, "why": w}
+                                                                                                    for p, n, _, o, w in mailsec.PORTS], days=days)
+
+
+@app.post("/api/mail/<action>")
+@login_required("admin")
+def mail_action(action):
+    if action not in ("settings", "check", "doors", "guard", "smtp-out", "rate", "trusted", "checklist", "remove"):
+        abort(404)
+    data = body()
+    ipre, dom = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$"), re.compile(r"^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$")
+    if action == "settings":
+        args = ["mail", "set", "ip", field(data, "ip", ipre, required=True), "domain", field(data, "domain", dom, required=True)]
+        for k, rx in (("host", dom), ("public", ipre), ("dkim", re.compile(r"^[A-Za-z0-9._-]{1,63}$")), ("webmail", re.compile(r"^\d{1,5}$"))):
+            v = field(data, k, rx)
+            if v:
+                args += [k, v]
+        ok, msg = radius_admin(args, timeout=300)
+        if ok:
+            radius_admin(["mail", "check"], timeout=300, log=False)
+        return result(ok, msg)
+    if action == "check":
+        return result(*radius_admin(["mail", "check"], timeout=300))
+    if action == "doors":
+        return result(*radius_admin(["mail", "doors"] + ([] if data.get("webmail", True) else ["--no-webmail"]), timeout=300))
+    if action in ("guard", "smtp-out"):
+        return result(*radius_admin(["mail", action, "on" if data.get("on") else "off"], timeout=300))
+    if action == "rate":
+        return result(*radius_admin(["mail", "rate", field(data, "rate", re.compile(r"^\d{1,4}$"), required=True)], timeout=300))
+    if action == "trusted":
+        return result(*radius_admin(["mail", "trusted", field(data, "name", re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")) or "none"], timeout=300))
+    if action == "checklist":
+        import mailsec
+        k = field(data, "key", re.compile(r"^[a-z_]{2,30}$"), required=True)
+        if k not in dict(mailsec.CHECKLIST):
+            abort(400, "unknown item")
+        ok, msg = radius_admin(["mail", "checklist", k, "on" if data.get("done") else "off"])
+        if ok:
+            radius_admin(["mail", "check"], timeout=300, log=False)
+        return result(ok, msg)
+    return result(*radius_admin(["mail", "remove"], timeout=300))
+
+
 # ------------------------------------------------------------------ intrusion prevention (Suricata): tools/ips.py
 @app.get("/api/ips")
 @login_required()

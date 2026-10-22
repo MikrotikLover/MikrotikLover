@@ -1761,6 +1761,79 @@ router_key_perms() {
     chgrp "$(id -gn mlweb 2>/dev/null || echo root)" "$ROUTER_DIR/key" 2>/dev/null || true
 }
 
+MAILPY=/usr/local/lib/mikrotiklover/mailsec.py
+mail_py() { python3 -I "$MAILPY" --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@"; }
+
+mail_rsc() { # router part of sync.rsc: protect the mail server on the LAN (password guessing, spam bots)
+    local ip rate web trusted tl=""
+    ip=$(setting_get mail_ip 2>/dev/null || true)
+    echo "/ip firewall filter"
+    echo 'remove [find comment~"^mlmail:"]'
+    [[ $ip =~ ^[0-9]+(\.[0-9]+){3}$ ]] || { echo "# mail server not set (radius-admin mail set)"; return 0; }
+    rate=$(setting_get mail_rate 2>/dev/null || true); rate=${rate:-30}
+    web=$(setting_get mail_webmail_port 2>/dev/null || true); web=${web:-3000}
+    trusted=$(setting_get mail_trusted 2>/dev/null || true)
+    [ -z "$trusted" ] || tl=" src-address-list=!mlfw-$trusted"
+    echo "# Mail server $ip (radius-admin mail): password guessing and spam bots"
+    if [ "$(setting_get mail_guard 2>/dev/null)" != 0 ]; then
+        echo "add chain=forward src-address-list=ml-mail-brute dst-address=$ip action=drop comment=\"mlmail: blocked password guesser\""
+        echo "add chain=forward in-interface-list=!LAN dst-address=$ip protocol=tcp dst-port=110,143,443,465,587,993,995,$web connection-state=new$tl action=jump jump-target=mlmail comment=\"mlmail: logins to the mail server\""
+        echo "add chain=mlmail dst-limit=$rate/1m,$((rate * 2)),src-address/1m action=return comment=\"mlmail: normal use\""
+        echo "add chain=mlmail action=add-src-to-address-list address-list=ml-mail-brute address-list-timeout=1h log=yes log-prefix=\"WF-mailbrute\" comment=\"mlmail: too many logins, blocked 1 hour\""
+        echo "add chain=mlmail action=drop comment=\"mlmail: too many logins\""
+    fi
+    if [ "$(setting_get mail_smtp_out 2>/dev/null)" != 0 ]; then
+        echo "add chain=forward in-interface-list=LAN out-interface-list=!LAN protocol=tcp dst-port=25 src-address=!$ip connection-state=new action=reject reject-with=tcp-reset log=yes log-prefix=\"WF-spambot\" comment=\"mlmail: only the mail server sends mail directly\""
+    fi
+    echo 'move [find chain=forward comment~"^mlmail:"] destination=0'
+}
+
+cmd_mail() { # the mail server on the LAN (MDaemon …): settings, checks, safe doors, protection (tools/mailsec.py)
+    local sub=${1:-status}; shift || true
+    case $sub in
+        set)
+            [ $# -ge 2 ] || die "usage: radius-admin mail set ip 192.168.88.30 domain example.com [host mail.example.com] [public 1.2.3.4] [dkim MDaemon] [webmail 3000]"
+            while [ $# -ge 2 ]; do
+                case $1 in
+                    ip|public) valid_ip "$2"; setting_set "mail_$([ "$1" = ip ] && echo ip || echo public_ip)" "$2" ;;
+                    domain|host) [[ ${2,,} =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]] || die "bad $1 '$2'"; setting_set "mail_$1" "${2,,}" ;;
+                    dkim) [[ $2 =~ ^[A-Za-z0-9._-]{1,63}$ ]] || die "bad DKIM selector"; setting_set mail_dkim "$2" ;;
+                    webmail) valid_int "$2" port; setting_set mail_webmail_port "$2" ;;
+                    *) die "unknown setting '$1' (ip domain host public dkim webmail)" ;;
+                esac
+                shift 2
+            done
+            cmd_policy build >/dev/null || die "router rules not built"
+            ok "mail server saved; checking it now: radius-admin mail status" ;;
+        remove) for k in ip domain host public_ip dkim webmail_port; do echo "DELETE FROM ml_setting WHERE k='mail_$k'" | db; done
+                cmd_policy build >/dev/null; ok "mail server settings removed (port forwards stay: Firewall → Port forwards)" ;;
+        status|check) if [ "$sub" = check ]; then mail_py check --save "$@" >/dev/null; else mail_py check --save "$@"; fi ;;
+        wizard|doors) local out; out=$(mail_py wizard "$@" 2>&1) || die "$out"; cmd_policy build >/dev/null || die "router rules not built"
+               echo "$out"; ok "mail doors made (Firewall → Port forwards); routers within 15 minutes" ;;
+        guard|smtp-out)
+            [[ ${1:-} =~ ^(on|off)$ ]] || die "usage: radius-admin mail $sub on|off"
+            setting_set "mail_$([ "$sub" = guard ] && echo guard || echo smtp_out)" "$([ "$1" = on ] && echo 1 || echo 0)"
+            cmd_policy build >/dev/null || die "router rules not built"; ok "mail $sub $1 (routers within 15 minutes)" ;;
+        rate) valid_int "${1:-}" rate; [ "$1" -ge 5 ] && [ "$1" -le 1000 ] || die "5-1000 new connections a minute"
+              setting_set mail_rate "$1"; cmd_policy build >/dev/null; ok "an address with more than $1 new mail logins a minute is blocked for 1 hour" ;;
+        trusted)
+            if [ "${1:-none}" = none ]; then setting_set mail_trusted ""
+            else [ "$(echo "SELECT COUNT(*) FROM ml_fw_addr WHERE name=$(q "$1")" | db)" = 1 ] || die "no address object '$1' (Firewall → Addresses)"; setting_set mail_trusted "$1"; fi
+            cmd_policy build >/dev/null; ok "trusted addresses for the mail server: ${1:-none}" ;;
+        checklist)
+            local k=${1:-} v=${2:-}; [[ $k =~ ^[a-z_]{2,30}$ ]] && [[ $v =~ ^(on|off)$ ]] || die "usage: radius-admin mail checklist KEY on|off"
+            local cur; cur=$(setting_get mail_checklist 2>/dev/null || true)
+            setting_set mail_checklist "$(python3 -c 'import json, sys; d = json.loads(sys.argv[1] or "{}"); d[sys.argv[2]] = sys.argv[3] == "on"; print(json.dumps(d))' "${cur:-}" "$k" "$v")"
+            ok "checklist $k $v" ;;
+        logs) local days=1; [ "${1:-}" = --days ] && { days=${2:-1}; valid_int "$days" days; }
+              mail_py logs --days "$days" | python3 -c '
+import json, sys
+for r in json.load(sys.stdin)[-100:]:
+    print(f"{r["time"]}  {"password guessing (blocked 1 h)" if r["kind"] == "mailbrute" else "tried to send mail directly":32} {r["src"]:15} -> {r["dst"]}:{r["port"]}")' ;;
+        *) die "usage: radius-admin mail set|status|doors|guard|smtp-out|rate|trusted|checklist|logs|remove" ;;
+    esac
+}
+
 IPSPY=/usr/local/lib/mikrotiklover/ips.py
 ips_py() { python3 -I "$IPSPY" --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@"; }
 
@@ -2112,6 +2185,8 @@ RSC
             fw_rsc
             echo
             ips_rsc
+            echo
+            mail_rsc
         } > "$lists/sync.rsc"
         install -m 644 "$lists/webfilter-policies.rsc" "$lists/vpn-servers.rsc" "$lists/sync.rsc" "$ROUTER_DIR/"
         sha256sum "$ROUTER_DIR/sync.rsc" | cut -c1-16 > "$ROUTER_DIR/version.tmp"
@@ -2383,6 +2458,7 @@ cmd_hourly() { # cron, every hour: one run at a time; each job's result is shown
        || grep -q missing "$ROUTER_DIR/geo.version" 2>/dev/null; then
         run_update "Weekly: country lists (firewall)" cmd_firewall geo update
     fi
+    [ -z "$(setting_get mail_ip)" ] || run_update "Hourly: mail server checks" cmd_mail check
     [ "$(setting_get ips_on)" != 1 ] || [ "$(date +%H)" != 03 ] || run_update "Daily: IPS signatures" cmd_ips update
     run_update "Hourly: router rules" cmd_policy build
     # last: the self-check of everything (saved for the dashboard; alerts.py tells about new problems)
@@ -3221,6 +3297,8 @@ Blocking policies + router auto-sync (dashboard → Blocking)
   ips install|on|off|status            intrusion prevention (Suricata on a copy of the routers' internet traffic)
   ips alerts [--days N] · ips update · ips rule on|off SID · ips autoblock on|off · ips level high|medium
   ips hours N · ips mirror first|all · ips block|unblock|allow|disallow IP
+  mail set ip IP domain DOMAIN [host H] [public IP] [dkim SEL] [webmail PORT]   the mail server on the LAN (MDaemon …)
+  mail status · mail doors · mail guard|smtp-out on|off · mail rate N · mail trusted OBJECT|none · mail logs · mail checklist KEY on|off
   policy on|off NAME                    turn a policy off (kept, users stay in it, no router rules) or on again
   policy build                          rebuild the router rules (+ VPN server list); cron does it every hour
   policy sync                           URL + key for the router auto-sync script (dashboard → Blocking)
@@ -3457,6 +3535,7 @@ case ${1:-help} in
     winupdate) shift; cmd_winupdate "$@" ;;
     firewall|fw) shift; cmd_firewall "$@" ;;
     ips) shift; cmd_ips "$@" ;;
+    mail) shift; cmd_mail "$@" ;;
     doctor|health) shift; python3 -I /usr/local/lib/mikrotiklover/health.py --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@" ;;
     backups) cmd_backups ;;
     restore) shift; cmd_restore "$@" ;;

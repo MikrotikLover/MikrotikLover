@@ -444,3 +444,7 @@ details.card > summary { font-weight: 700; }
 .table-wrap + .fw-implicit { margin: 18px -18px -18px; }
 .ips-opts { margin-top: 12px; align-items: flex-end; }
 .ips-opts .field { flex: 1 1 180px; }
+/* mail server */
+.mail-group h3 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.mail-form .grid { gap: 12px; }
+.mail-group { display: grid; gap: 8px; }
