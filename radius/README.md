@@ -1023,6 +1023,46 @@ Dashboard → **Security → Ransomware** (CLI: `radius-admin security ransomwar
 - **Kya nahi dikhta:** PC ke andar ki cheezein. Ek hi switch par do PCs (ya PC + NAS) router se guzre baghair baat karte hain — un ke liye NAS ko alag VLAN / subnet mein rakhein, ya bridge par `use-ip-firewall`. Upload ke checks ke liye traffic collector zaroori. Ye antivirus ki jagah nahi — antivirus aur **unplugged / off-site backup** zaroor rakhein.
 - Tests: `tests/test-sentinel.py` (+13), `tests/test-ransomware.sh` (DNS → scan → database → risk → auto cut-off → API), `tests/test-alerts.py` (+3), `tests/test-secreport.py`.
 
+## 7h0. Firewall (FortiGate / Untangle jaisa) — policies, objects, port forwards, countries
+
+Dashboard → **Firewall**. Sab kuch dashboard se; routers 15 minute mein khud le lete hain (auto-sync). MikroTik API istemal nahi hoti.
+
+| Tab | Kya hai |
+|---|---|
+| **Overview** | ek jawab (sab theek / kya dekhna hai), policies on, hits, aaj kitna block hua, port forwards, countries; **Quick start** (RDP/SMB band, router login sirf LAN se, office time mein torrent band, sirf router ka DNS, spam bots); busiest policies; aakhri blocks |
+| **Policies** | FortiGate jaisi list — **upar se neeche, jo pehle fit ho wohi faisla karta hai**. Har policy: direction, source, destination, service, schedule, action (**Allow / Deny / Reject**), log, on/off switch, **hits** (router se), ↑ ↓ order, search, direction filter |
+| **Addresses** | naam wale groups: IP, network (10.0.0.0/24), range (a-b), website naam (router khud dhoondta hai), country (`geo:PK`) |
+| **Services** | 30 built-in (HTTP, HTTPS, DNS, RDP, SMB, WINBOX, SIP, DVR, TORRENT, OPENVPN, WIREGUARD, IPSEC …) + apni (`tcp/8080,8443 udp/5000-5100`) |
+| **Schedules** | always, office-hours, after-hours, weekdays, weekend, night + apni (din + waqt, aadhi raat ke paar bhi) |
+| **Port forwards** | bahar ka port → andar ka device; **Allowed from** (sirf kuch addresses / countries); RDP / SMB / Winbox sab ke liye khula ho to laal warning |
+| **Countries** | Geo-IP: paanch regional registries (ARIN, RIPE, APNIC, LACNIC, AFRINIC) ki official lists, har hafte khud update. "Block FROM these countries" (internet → LAN + router) aur "Block TO these countries" (LAN → un mulkon ki sites) |
+| **Policy lookup** | "Ye connection kaun si policy le gi?" — direction, source IP, destination IP, protocol, port → har policy kyun fit / nahi, aur country |
+| **Logs** | jin policies par "Log every hit" ho: waqt, policy, kahan se (country ke saath), kahan, port, router; policy ke hisaab se aur top sources |
+
+Directions: **LAN → Internet**, **Internet → LAN** (port forwards ke baad), **Internet → LAN + router**, **→ router khud** (Winbox / SSH / DNS …), **LAN ↔ LAN** (do subnets / VLANs ke beech).
+
+**Kaise kaam karta hai:** policies router par apni chains `mlfw-fwd` (forward) aur `mlfw-in` (input) mein bante hain, sirf **naye connections** par (purane chalte rahte hain, router par bojh kam). **Allow** = baqi firewall policies na dekho (web filter, security aur router ke apne rules phir bhi lagte hain). **Deny** chup chaap drop, **Reject** app ko foran batata hai. Koi policy fit na ho → router ke apne rules (aam taur par allowed). Countries alag file (`geo.rsc`) mein — router sirf tab download karta hai jab badle, aur sirf woh mulk jo istemal hon.
+
+CLI (sab kuch dashboard jaisa):
+```
+sudo radius-admin firewall list
+sudo radius-admin firewall addr set office 192.168.88.0/24 10.0.0.5-10.0.0.9 vpn.example.com
+sudo radius-admin firewall rule add "Router login only office" --dir router --src office --service WINBOX,SSH --action allow
+sudo radius-admin firewall rule add "Router login others" --dir wan --service WINBOX,SSH --action reject --log
+sudo radius-admin firewall rule add "No China/Russia" --dir wan --src geo:CN,geo:RU --action deny --log --top
+sudo radius-admin firewall rule move 7 up        # up | down | top | bottom | number
+sudo radius-admin firewall vip add DVR 37777 192.168.88.20 --proto both --src office,geo:PK
+sudo radius-admin firewall geo update            # country lists (khud: har hafte)
+sudo radius-admin firewall lookup router 1.0.2.5 203.0.113.1 tcp 8291
+sudo radius-admin firewall logs
+```
+
+- **Hits:** naya auto-sync script import karein (ml-stats ab har policy aur port forward ke counters bhi bhejta hai). Counters router par rules dobara bannay se zero hote hain ("since the routers last took new rules").
+- **Health check** mein "Firewall": country list missing ya khatarnak port sab ke liye khula → warning aur kya karna hai.
+- Blocking logs mein firewall ke blocks "firewall / firewall policy #N" ke naam se.
+- **Hadein:** ek policy max 200 router rules (zyada addresses × services ho to address object banayein). Bara mulk (US, CN) hazaron networks — router pehli dafa ek minute leta hai. Website naam wale address router khud resolve karta hai (Policy lookup mein check nahi hote). SSL inspection / antivirus MikroTik par mumkin nahi — un ki jagah web filter (HTTPS naam se), threat lists aur security detective.
+- Tests: `tests/test-firewall.py` (rules, countries, lookup, logs — bina database), `tests/test-firewall.sh` (CLI, router files + lint, country file, hits, logs, API), UI suite.
+
 ## 7h3. Bahar se network mein kya aa raha hai (From outside)
 
 Dashboard → **Security → From outside**. Teen sawaal, teen jawab:

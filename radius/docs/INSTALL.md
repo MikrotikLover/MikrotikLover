@@ -317,6 +317,10 @@ Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein
 | Site kyun band hai? (kaun si list / policy rule, abhi active?) | Blocking → Why blocked? | `radius-admin why facebook.com ali` |
 | Website / app ka sirf naam likho, baqi (fonts, CDN, tasveerein) khud — poori site (sitemap, 150 pages, JS) background mein | Blocking → policy → Websites / Apps always open · Blocking → Allowed websites & apps → Read the whole site | `radius-admin webscan list` · `webscan deep SITE` |
 | Ransomware: kis PC par nishaniyan, risk 0–100, cut off | Security → Ransomware | `radius-admin security ransomware` · `security ransomware-auto on` |
+| Firewall (FortiGate jaisa): policies order mein, Allow / Deny / Reject, addresses, services, schedules, hits | Firewall → Policies | `radius-admin firewall list` · `firewall rule add NAME --dir wan --service RDP --action deny` |
+| Port forward sirf kuch addresses / countries ke liye | Firewall → Port forwards | `radius-admin firewall vip add DVR 37777 192.168.88.20 --src office,geo:PK` |
+| Mulk band karna (Geo-IP), andar aate ya bahar jaate | Firewall → Countries | `radius-admin firewall geo update` · `firewall rule add X --dir wan --src geo:CN --action deny` |
+| Ye connection kaun si policy le gi? | Firewall → Policy lookup | `radius-admin firewall lookup router 1.2.3.4 203.0.113.1 tcp 8291` |
 | Bahar se kya andar aa raha hai: khule darwaze (port forward, UPnP, router services), kis IP ne kis andar ke IP:port ko chhua | Security → From outside → Who? | naya auto-sync script import + traffic collector |
 | Microsoft Windows Update band / sirf office hours mein band / on | Blocking → Overview → Windows Update | `radius-admin winupdate off` · `winupdate office` · `winupdate on` |
 | Sab theek hai? (har ghante khud, kharabi par alert) | Health check → ek jawab + Your to-do + Copy report | `sudo radius-admin doctor` |
