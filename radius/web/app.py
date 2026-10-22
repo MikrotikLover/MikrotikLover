@@ -1080,6 +1080,15 @@ def why_blocked():
                      "for an IP range or a DHCP lease are not known here.")
     quar = q1("""SELECT reason, since FROM ml_quarantine WHERE released_at IS NULL AND
                  ((%s <> '' AND username=%s) OR (%s <> '' AND ip=%s)) ORDER BY since DESC LIMIT 1""", (user, user, ip, ip))
+    wu = winupdate_mode()
+    if wu != "on" and lst != "web-filter-exempt" and any(h.get("kind") == "category" and h.get("name") == "windows-update" for h in res.get("lists", [])):
+        office = wu == "office"
+        now_in = datetime.now().weekday() < 6 and 9 <= datetime.now().hour < 17
+        if res["verdict"] != "blocked":
+            res["verdict"] = "blocked" if (not office or now_in) else "blocked-other-times"
+            res["summary"] = ("Windows Update is OFF for everyone" + (" 9:00-17:00 Mon-Sat" if office else "")
+                              + " (Blocking → Overview → Windows Update).")
+        notes.insert(0, "Windows Update switch: " + ("off 9:00-17:00 Mon-Sat" if office else "off for everyone") + ".")
     if policy and policy_is_off(policy):
         res["verdict"] = "allowed"
         res["summary"] = f"Policy '{policy}' is turned OFF — nothing is blocked by it until it is turned on again."
@@ -1895,6 +1904,7 @@ CATEGORY_INFO = {
     "torrent-piracy": "Torrent sites and trackers",
     "keywords": "Adult words in site names (sex, xxx, porn ...)",
     "vpn-proxy": "VPN / proxy websites only (use \"Block VPN\" for apps, servers and protocols too)",
+    "windows-update": "Windows Update (service, downloads, peer downloads) — Office, Outlook, Teams, Store keep working",
     "custom": "Your own list (webfilter/categories/custom.txt)",
 }
 
@@ -2001,7 +2011,23 @@ def blocking_summary():
         pass
     return jsonify(policies=npol, off=len(policies_off()), users=len({u for v in users.values() for u in v}),
                    groups=len({g for v in groups.values() for g in v}), requests=int(pending.get("n", 0) or 0),
-                   exceptions=int(open_now.get("n", 0) or 0), suggestions=sugg, reading=reading, router=router_info())
+                   exceptions=int(open_now.get("n", 0) or 0), suggestions=sugg, reading=reading, router=router_info(),
+                   winupdate=winupdate_mode(), windows_devices=int((q1("SELECT COUNT(*) AS n FROM ml_device WHERE os='windows' "
+                                                                       "AND last_seen >= NOW() - INTERVAL 7 DAY") or {}).get("n", 0) or 0))
+
+
+def winupdate_mode():
+    v = (q1("SELECT v FROM ml_setting WHERE k='winupdate'") or {}).get("v") or "on"
+    return v if v in ("on", "off", "office") else "on"
+
+
+@app.post("/api/winupdate")
+@login_required("admin")
+def winupdate_set():
+    mode = str(body().get("mode", ""))
+    if mode not in ("on", "off", "office"):
+        abort(400, "mode: on | off | office")
+    return result(*radius_admin(["winupdate", mode], timeout=300))
 
 
 @app.post("/api/policies")
@@ -2669,10 +2695,11 @@ def router_report():
             old = []
     routerstat.rates(d["interfaces"], old, prev["age"] if prev else 0)
     q("""REPLACE INTO ml_router_status (router_ip, identity, board, version, uptime, cpu, mem_free, mem_total, hdd_free, hdd_total,
-                                        users_hotspot, users_ppp, dhcp_leases, interfaces, links, last_seen)
-         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())""",
+                                        users_hotspot, users_ppp, dhcp_leases, interfaces, links, exposed, last_seen)
+         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())""",
       (ip, d["identity"], d["board"], d["version"], d["uptime"], d["cpu"], d["mem_free"], d["mem_total"], d["hdd_free"], d["hdd_total"],
-       d["hotspot"], d["ppp"], d["dhcp"], json.dumps(d["interfaces"]), json.dumps(d["links"])))
+       d["hotspot"], d["ppp"], d["dhcp"], json.dumps(d["interfaces"]), json.dumps(d["links"]),
+       json.dumps({"nat": d.get("nat", []), "services": d.get("services", [])})))
     if prev and 0 < (prev["age"] or 0) < 600:
         traffic_ifaces(ip, d["identity"], d["interfaces"], old)
     rx, tx = routerstat.busiest(d["interfaces"])
@@ -2965,6 +2992,98 @@ def security():
         r["quarantined"] = r["ip"] in qset or (r["user"] and r["user"] in qset)
     return jsonify(events=jsonable(events), counts={c["category"]: jsonable([c])[0] for c in counts}, types=jsonable(types),
                    devices=jsonable(devices), lists=lists, quarantine=jsonable(quarantine), risk=risk)
+
+
+# ------------------------------------------------------------------ from outside: what the internet can reach, and who did
+RISKY_PORTS = {3389: ("RDP (remote desktop)", "ransomware and hackers try it all day — use a VPN instead"),
+               445: ("SMB (Windows files)", "never open to the internet (WannaCry)"), 139: ("NetBIOS", "never open to the internet"),
+               135: ("Windows RPC", "never open to the internet"), 23: ("Telnet", "no password protection worth the name — close it"),
+               21: ("FTP", "passwords go unencrypted"), 5900: ("VNC", "remote screen — use a VPN"), 3306: ("MySQL", "a database should not be open"),
+               1433: ("MS-SQL", "a database should not be open"), 8291: ("Winbox (router admin)", "allow only your own addresses"),
+               8728: ("MikroTik API", "allow only your own addresses"), 8729: ("MikroTik API-SSL", "allow only your own addresses"),
+               22: ("SSH", "allow only your own addresses, use keys"), 80: ("HTTP (web admin?)", "if it is an admin page: close it or use a VPN"),
+               8080: ("HTTP-alt (web admin?)", "if it is an admin page: close it or use a VPN"), 554: ("RTSP (camera video)", "cameras: use the camera cloud app or a VPN"),
+               37777: ("Dahua DVR", "DVR / NVR: use the cloud app or a VPN"), 8000: ("Hikvision DVR", "DVR / NVR: use Hik-Connect or a VPN"),
+               7547: ("TR-069", "router management — close it")}
+
+
+def _port_set(spec):
+    out = set()
+    for part in str(spec or "").split(","):
+        a, _, b = part.strip().partition("-")
+        if a.isdigit():
+            lo, hi = int(a), int(b) if b.isdigit() else int(a)
+            if hi - lo <= 1000:
+                out.update(range(lo, hi + 1))
+    return out
+
+
+@app.get("/api/inbound")
+@login_required()
+def inbound():
+    """Doors the routers open to the internet (port forwards, UPnP, their own services) and who came in."""
+    import ports as portnames
+    import sentinel
+    days = int(max(report_args().days, 1))
+    doors, services = [], []
+    for r in q("SELECT router_ip, identity, exposed, last_seen FROM ml_router_status ORDER BY identity"):
+        try:
+            ex = json.loads(r["exposed"] or "{}")
+        except ValueError:
+            ex = {}
+        for n in ex.get("nat", []):
+            ps = sorted(_port_set(n.get("port")) | _port_set(n.get("to_port")))
+            risk = next((RISKY_PORTS[p] for p in ps if p in RISKY_PORTS), None)
+            doors.append({**n, "router": r["identity"], "router_ip": r["router_ip"], "open_to": n.get("src") or "everyone",
+                          "risk": risk[0] if risk else "", "advice": risk[1] if risk else ""})
+        for sv in ex.get("services", []):
+            risky = not sv.get("address")
+            services.append({**sv, "router": r["identity"], "router_ip": r["router_ip"],
+                             "open_to": sv.get("address") or "every address (unless the router's firewall stops it)",
+                             "advice": "allow only your own addresses: /ip service set " + sv["name"] + " address=YOUR-NETS" if risky else ""})
+    rows = q("""SELECT lan_ip, MAX(NULLIF(username,'')) AS username, proto, port, COUNT(DISTINCT remote_ip) AS outside,
+                       SUM(flows) AS flows, SUM(bytes_in) AS bytes_in, SUM(bytes_out) AS bytes_out, MIN(bucket) AS first, MAX(bucket) AS last
+                FROM ml_inbound WHERE bucket >= NOW() - INTERVAL %s DAY GROUP BY lan_ip, proto, port ORDER BY outside DESC, flows DESC LIMIT 300""", (days,))
+    remotes = q("""SELECT remote_ip, COUNT(DISTINCT CONCAT(lan_ip, ':', port)) AS targets, SUM(flows) AS flows, MAX(bucket) AS last
+                   FROM ml_inbound WHERE bucket >= NOW() - INTERVAL %s DAY GROUP BY remote_ip ORDER BY flows DESC LIMIT 300""", (days,))
+    attackers = {r["src_ip"] for r in q("""SELECT DISTINCT src_ip FROM ml_security_event WHERE category IN ('attack','ddos')
+                                           AND last_seen >= NOW() - INTERVAL %s DAY AND src_ip <> ''""", (days,))}
+    th = sentinel.Threats()
+    for r in remotes:
+        r["threat"] = th.ip(r["remote_ip"]) or ("seen attacking (Security)" if r["remote_ip"] in attackers else "")
+    bad = {r["remote_ip"] for r in remotes if r["threat"]}
+    fwd = {(d["to"], int(d["to_port"]) if str(d["to_port"]).isdigit() else 0) for d in doors if not d.get("disabled")}
+    for r in rows:
+        r["proto"] = {6: "tcp", 17: "udp"}.get(int(r["proto"]), str(r["proto"]))
+        r["service"] = portnames.name(6 if r["proto"] == "tcp" else 17, int(r["port"]))
+        risk = RISKY_PORTS.get(int(r["port"]))
+        r["risk"], r["advice"] = (risk[0], risk[1]) if risk else ("", "")
+        r["via"] = "port forward" if (r["lan_ip"], int(r["port"])) in fwd else ""
+    bad_rows = q("""SELECT lan_ip, port, COUNT(DISTINCT remote_ip) AS n FROM ml_inbound WHERE bucket >= NOW() - INTERVAL %s DAY
+                    AND remote_ip IN %s GROUP BY lan_ip, port""", (days, tuple(bad) or ("-",)))
+    badmap = {(b["lan_ip"], int(b["port"])): int(b["n"]) for b in bad_rows}
+    for r in rows:
+        r["bad_outside"] = badmap.get((r["lan_ip"], int(r["port"])), 0)
+    return jsonify(doors=jsonable(doors), services=services, rows=jsonable(rows), remotes=jsonable(remotes), days=days,
+                   reported=bool(q1("SELECT 1 AS x FROM ml_router_status WHERE exposed IS NOT NULL LIMIT 1")))
+
+
+@app.get("/api/inbound/detail")
+@login_required()
+def inbound_detail():
+    """Every outside address that reached one inside address + port."""
+    import sentinel
+    lan = request.args.get("lan", "")
+    if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", lan) or not request.args.get("port", "").isdigit():
+        abort(400, "lan + port needed")
+    days = int(max(report_args().days, 1))
+    rows = q("""SELECT remote_ip, SUM(flows) AS flows, SUM(bytes_in) AS bytes_in, SUM(bytes_out) AS bytes_out, MIN(bucket) AS first, MAX(bucket) AS last
+                FROM ml_inbound WHERE lan_ip=%s AND port=%s AND bucket >= NOW() - INTERVAL %s DAY GROUP BY remote_ip ORDER BY flows DESC LIMIT 500""",
+             (lan, int(request.args["port"]), days))
+    th = sentinel.Threats()
+    for r in rows:
+        r["threat"] = th.ip(r["remote_ip"]) or ""
+    return jsonify(rows=jsonable(rows))
 
 
 @app.post("/api/security/<action>")

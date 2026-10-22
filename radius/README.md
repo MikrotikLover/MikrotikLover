@@ -1023,6 +1023,39 @@ Dashboard → **Security → Ransomware** (CLI: `radius-admin security ransomwar
 - **Kya nahi dikhta:** PC ke andar ki cheezein. Ek hi switch par do PCs (ya PC + NAS) router se guzre baghair baat karte hain — un ke liye NAS ko alag VLAN / subnet mein rakhein, ya bridge par `use-ip-firewall`. Upload ke checks ke liye traffic collector zaroori. Ye antivirus ki jagah nahi — antivirus aur **unplugged / off-site backup** zaroor rakhein.
 - Tests: `tests/test-sentinel.py` (+13), `tests/test-ransomware.sh` (DNS → scan → database → risk → auto cut-off → API), `tests/test-alerts.py` (+3), `tests/test-secreport.py`.
 
+## 7h3. Bahar se network mein kya aa raha hai (From outside)
+
+Dashboard → **Security → From outside**. Teen sawaal, teen jawab:
+
+1. **Kaun se darwaze khule hain?** (Open doors on the routers) — har router apni **port forwards** (`/ip firewall nat` dst-nat / netmap) aur apni **services** (winbox, ssh, api, www …) har minute report mein bhejta hai. Har line: bahar ka port → andar ka IP:port, **kis ke liye khula** (everyone / sirf ek network), aur khatarnak port par laal nishan + mashwara: RDP 3389 ("ransomware ka pehla darwaza — VPN use karein"), SMB 445, Telnet, FTP, VNC, databases, Winbox / API, DVR (37777, 8000), RTSP 554 …
+   - **UPnP** se device ne khud jo darwaza khola (games, cameras) alag nishan ke saath; band (disabled) rules bhi dikhte hain.
+   - Router ki service jo **har address** ke liye khuli hai: seedha command, maslan `/ip service set winbox address=YOUR-NETS`.
+2. **Bahar se kaun andar aaya?** (Who came in from outside) — traffic collector har connection dekhta hai jo bahar se andar ke kisi device ki service par aaya: **andar ka IP : port**, service ka naam, kitne bahar ke address, connections, in / out data, aur kya ye port forward se aaya. **Who?** dabayein: har bahar ka IP, kitni dafa, kitna data, pehli / aakhri dafa.
+3. **Bahar ke address** (Outside addresses) — sab se zyada connections wale pehle; jo threat lists mein hain ya Security mein hamla karte dekhe gaye un par laal nishan ("1 bad" bhi andar wali line par).
+
+Neeche "How to close a door": NAT rule band karna, Src. Address sirf apna, UPnP off, router services sirf apne networks ke liye.
+
+- **Zaroori:** naya auto-sync script ek dafa router par import karein (is mein `nat=` aur `svc=` lines hain — sirf parhta hai, kuch nahi badalta), aur "kaun andar aaya" ke liye traffic collector (Traffic flow) chalu ho.
+- Data 30 din (`TRAFFIC_DAYS`) tak, table `ml_inbound`.
+- **Kya nahi dikhta:** router par khud aane wale connections (Winbox / SSH login koshishein) traffic flow mein nahi aate — un ke liye router ki services wali table aur Security → Hacker attacks. Jo darwaza router ke firewall se band hai wo yahan nahi aata (koi connection hi nahi hota).
+- Test: `tests/test-inbound-winupdate.sh` (router report, collector writer, API, Who? list).
+
+## 7h4. Microsoft Windows Update on / off
+
+Dashboard → **Blocking → Overview → Windows Update** — teen button:
+
+| Button | Kya hota hai | CLI |
+|---|---|---|
+| **Allowed** | Windows PCs aam tarah update | `radius-admin winupdate on` |
+| **Off in office hours** | 9:00–17:00 Mon–Sat update band (internet tez), shaam aur Sunday ko update | `radius-admin winupdate office` |
+| **Off always** | sab ke liye band (jo `web-filter-exempt` list mein hain un ke paas chalta hai) | `radius-admin winupdate off` |
+
+- Sirf update service band hoti hai (windowsupdate.com, update.microsoft.com, delivery.mp.microsoft.com, Delivery Optimization …) — **Office, Outlook, Teams, OneDrive, Store** chalte rehte hain. List: `webfilter/categories/windows-update.txt`.
+- Router par ek rule, sab policies se pehle (`wfpolicy:global windows-update`, HTTPS site name se band). Routers 15 minute mein le lete hain.
+- **Sirf kuch users ke liye:** Blocking → policy → Edit → Categories → **windows-update** (apne waqt ke saath), ya policy file mein `block windows-update time=8h-18h`.
+- "Why blocked?" bhi batata hai: "Windows Update is OFF for everyone …". `radius-admin winupdate status`.
+- **Yaad rakhein:** bilkul band rakhne se PCs purane aur ghair-mehfooz ho jaate hain (ransomware ka khatra) — "Off in office hours" behtar hai.
+
 ## 7i. Reports aur samajh (Insights)
 
 Dashboard → **Insights (samajh)**: numbers ke bajaye seedhi baatein —

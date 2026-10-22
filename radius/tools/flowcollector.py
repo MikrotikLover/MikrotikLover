@@ -333,6 +333,20 @@ class Store:
             self.db = None
             raise
 
+    def write_inbound(self, rows, keep_days):
+        """rows: (bucket, remote, lan ip, user, proto, port, flows, bytes in, bytes out) — from outside into the LAN."""
+        sql = ("INSERT INTO ml_inbound (bucket, remote_ip, lan_ip, username, proto, port, flows, bytes_in, bytes_out) "
+               "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE username=VALUES(username), "
+               "flows=flows+VALUES(flows), bytes_in=bytes_in+VALUES(bytes_in), bytes_out=bytes_out+VALUES(bytes_out)")
+        try:
+            with self.conn().cursor() as c:
+                c.executemany(sql, rows)
+                if int(time.time()) % 3600 < FLUSH_EVERY:
+                    c.execute("DELETE FROM ml_inbound WHERE bucket < NOW() - INTERVAL %s DAY", (keep_days,))
+        except self.pymysql.MySQLError:
+            self.db = None
+            raise
+
     def vpn_servers(self):
         """ip -> kind of every known VPN server (tools/vpn.py, earlier flows)."""
         with self.conn().cursor() as c:
@@ -408,7 +422,7 @@ def main():
     os.makedirs(os.path.dirname(NOW_FILE), exist_ok=True)
     print(f"traffic collector listening on udp/{port}, LAN {','.join(lan)}", flush=True)
 
-    agg, pagg, vagg, last_flush, rejected = {}, {}, {}, time.time(), 0
+    agg, pagg, vagg, iagg, last_flush, rejected = {}, {}, {}, {}, time.time(), 0
     try:
         vpn_servers = store.vpn_servers()
     except Exception as e:
@@ -435,6 +449,10 @@ def main():
                     pa = pagg.setdefault((client, site, int(proto or 0), int(pport), pdir), [0, 0, 0])
                     pa[0 if direction == "down" else 1] += nbytes
                     pa[2] += 1
+                    if pdir == "in":             # an outside address used a service on this inside device
+                        ia = iagg.setdefault((remote, client, int(proto or 0), int(pport)), [0, 0, 0])
+                        ia[0] += 1
+                        ia[1 if direction == "down" else 2] += nbytes
                     vk = vpn.flow_kind(proto, pdir, pport, remote, vpn_servers)
                     if vk:
                         what = f"{remote} {ports.proto_name(proto)}/{pport}" if pport else f"{remote} {ports.proto_name(proto)}"
@@ -469,6 +487,9 @@ def main():
                 if prows:
                     store.write_ports(prows, keep_days)
                 pagg = {}
+                if iagg:
+                    store.write_inbound([(bucket, r, c, users.get(c, ""), pr, po, v[0], v[1], v[2]) for (r, c, pr, po), v in iagg.items()], keep_days)
+                iagg = {}
                 if vagg:
                     store.write_vpn([(bucket, c, users.get(c, ""), w, k, r, v[0], v[1]) for (c, w, k, r), v in vagg.items()])
                 vagg = {}

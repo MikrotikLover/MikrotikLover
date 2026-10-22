@@ -1760,6 +1760,22 @@ router_key_perms() {
     chgrp "$(id -gn mlweb 2>/dev/null || echo root)" "$ROUTER_DIR/key" 2>/dev/null || true
 }
 
+cmd_winupdate() { # Windows Update for everyone: on (allowed) | off | office (off 9-17 Mon-Sat)
+    local m=${1:-status}
+    case $m in
+        on|off|office)
+            setting_set winupdate "$m"
+            cmd_policy build >/dev/null || die "router rules not built"
+            case $m in
+                on)     ok "Windows Update allowed again (routers within 15 minutes)" ;;
+                off)    ok "Windows Update OFF for everyone (users in web-filter-exempt keep it). Routers within 15 minutes" ;;
+                office) ok "Windows Update off 9:00-17:00 Mon-Sat, allowed outside office hours" ;;
+            esac ;;
+        status) local v; v=$(setting_get winupdate 2>/dev/null || true); echo "windows update: ${v:-on}  (on = allowed, off = blocked for everyone, office = blocked 9-17 Mon-Sat)" ;;
+        *) die "usage: radius-admin winupdate on|off|office|status" ;;
+    esac
+}
+
 policy_is_off() { [ -f "$POLICY_DIR/.off" ] && grep -qx "$1" "$POLICY_DIR/.off"; }
 
 cmd_policy() {
@@ -1822,7 +1838,7 @@ cmd_policy() {
         { echo "SELECT domain FROM ml_vpn_domain ORDER BY domain" | db 2>/dev/null || true; } | grep -E '^[a-z0-9.-]+$' > "$lists/vpn-domains.txt" || true
         ao_ensure
         if ! WF_OUT="$lists" POLICY_DIR="$POLICY_DIR" AO_DIR="$AO_DIR" WEBSCAN_DIR="$WEBSCAN_DIR" VPN_DOMAINS="$lists/vpn-domains.txt" CDNMAP=/usr/local/lib/mikrotiklover/cdnmap.py \
-               QUARANTINE_SERVER="$(setting_get server_ip)" \
+               QUARANTINE_SERVER="$(setting_get server_ip)" WINUPDATE="$(v=$(setting_get winupdate 2>/dev/null || true); echo "${v:-on}")" \
                bash "$WF_DIR/build.sh" 2>"$lists/build.log"; then
             cat "$lists/build.log" >&2; rm -rf "${lists:?}"; die "router rules not built"
         fi
@@ -3003,6 +3019,7 @@ Blocking policies + router auto-sync (dashboard → Blocking)
   policy list | show NAME               web-filter policies (who is in them, what they block)
   policy set NAME < file                create / change a policy (directives: webfilter/policies/README.txt)
   policy del NAME                       delete an unused policy
+  winupdate on|off|office|status        Windows Update for everyone: allowed / blocked / blocked in office hours (per policy: block windows-update)
   policy on|off NAME                    turn a policy off (kept, users stay in it, no router rules) or on again
   policy build                          rebuild the router rules (+ VPN server list); cron does it every hour
   policy sync                           URL + key for the router auto-sync script (dashboard → Blocking)
@@ -3236,6 +3253,7 @@ case ${1:-help} in
     hotspot) shift; cmd_hotspot "$@" ;;
     social)  shift; cmd_social "$@" ;;
     insights) shift; python3 -I /usr/local/lib/mikrotiklover/insights.py "${1:-report}" --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "${@:2}" ;;
+    winupdate) shift; cmd_winupdate "$@" ;;
     doctor|health) shift; python3 -I /usr/local/lib/mikrotiklover/health.py --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@" ;;
     backups) cmd_backups ;;
     restore) shift; cmd_restore "$@" ;;

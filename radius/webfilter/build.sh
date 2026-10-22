@@ -535,6 +535,7 @@ sni_rules() { # sni_rules CHAIN PREFIX < patterns
     echo "/ip firewall filter"
     echo
     echo "# ---- category chains (shared by all policies)"
+    [ "${WINUPDATE:-on}" = on ] || used_cats+=(windows-update)
     for c in $(printf '%s\n' "${used_cats[@]}" | sort -u); do
         if [ "$c" = vpn-all ]; then
             vpn_chain
@@ -576,6 +577,12 @@ sni_rules() { # sni_rules CHAIN PREFIX < patterns
     echo "add chain=forward src-address-list=ml-quarantine action=reject reject-with=icmp-admin-prohibited comment=\"wfpolicy:quarantine block\""
     echo
     echo "# ---- policies"
+    case ${WINUPDATE:-on} in on|off|office) ;; *) echo "build.sh: WINUPDATE must be on, off or office" >&2; exit 1 ;; esac
+    if [ "${WINUPDATE:-on}" != on ]; then
+        # Windows Update off for everyone (radius-admin winupdate off|office): first, before every policy
+        wt=""; [ "$WINUPDATE" = office ] && wt=" time=9h-17h,mon,tue,wed,thu,fri,sat"
+        echo "add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 action=jump jump-target=wf-windows-update$wt comment=\"wfpolicy:global windows-update\""
+    fi
     cat "$pol_out"
     echo
     if [ ${#dnsnames[@]} -gt 0 ]; then

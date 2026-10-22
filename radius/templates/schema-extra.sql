@@ -505,3 +505,23 @@ CREATE TABLE IF NOT EXISTS ml_router_fetch (
   version VARCHAR(64) NOT NULL DEFAULT '',
   PRIMARY KEY (router_ip, what)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- From outside into the network: which outside address reached which inside device and port, per hour
+-- (traffic collector, connections whose service port is on the inside device)
+CREATE TABLE IF NOT EXISTS ml_inbound (
+  bucket DATETIME NOT NULL,
+  remote_ip VARCHAR(45) NOT NULL,
+  lan_ip VARCHAR(45) NOT NULL,
+  username VARCHAR(64) NOT NULL DEFAULT '',
+  proto TINYINT UNSIGNED NOT NULL,
+  port SMALLINT UNSIGNED NOT NULL,
+  flows INT UNSIGNED NOT NULL DEFAULT 0,
+  bytes_in BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  bytes_out BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (bucket, remote_ip, lan_ip, proto, port),
+  KEY (lan_ip, port),
+  KEY (remote_ip)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- what each router opens to the internet: port forwards (dst-nat) and its own services (router report)
+ALTER TABLE ml_router_status ADD COLUMN IF NOT EXISTS exposed TEXT NULL;

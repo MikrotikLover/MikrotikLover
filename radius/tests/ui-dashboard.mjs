@@ -265,6 +265,10 @@ try {
   await go(page, "#/blocking", "Blocking");
   await page.locator(".attn, .quick").first().waitFor({ timeout: 15000 });
   ok("blocking overview: numbers, what waits, quick actions");
+  const wu = page.locator(".card", { hasText: "Windows Update" }).first();
+  await wu.waitFor({ timeout: 15000 });
+  for (const b of ["Allowed", "Off in office hours", "Off always"]) await wu.getByRole("button", { name: b, exact: true }).waitFor();
+  ok("blocking overview: Windows Update switch (allowed / office hours / always)");
   await go(page, "#/blocking/policies", "Blocking");
   await page.getByRole("button", { name: "+ New policy" }).click();
   const ed = page.locator("dialog[open]");
@@ -330,6 +334,10 @@ try {
   await page.locator(".health-hero").waitFor({ timeout: 15000 });
   for (const t of ["Devices with signs", "What to do", "Protection", "Ransomware signs"]) await page.locator(".card h2", { hasText: t }).first().waitFor({ timeout: 15000 });
   await shot(page, "42b-ransomware");
+  await go(page, "#/security/inbound", "Security");
+  for (const t of ["Open doors on the routers", "Who came in from outside", "Outside addresses"]) await page.locator(".card h2", { hasText: t }).first().waitFor({ timeout: 15000 });
+  await shot(page, "42c-from-outside");
+  ok("security: from outside (open doors, who came in, outside addresses)");
   ok("security: all alerts, virus, hacker attacks, DDoS, protection & lists");
   await go(page, "#/domains", "Website names");
   await page.locator(".tile").first().waitFor({ timeout: 15000 });

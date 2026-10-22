@@ -410,5 +410,7 @@ details.card > summary { font-weight: 700; }
 @media (max-width: 760px) {
   .rw-table thead { display: none; }
   .rw-table tr { display: block; padding: 10px 16px; border-bottom: 1px solid var(--border); }
-  .rw-table td { display: block; padding: 3px 0; border: 0; white-space: normal; }
+  .rw-table td { display: block; padding: 3px 0; border: 0; white-space: normal; text-align: left; }
+  .rw-table td[data-l]::before { content: attr(data-l) ": "; color: var(--muted); font-size: 12px; }
+  .rw-table td.num > span > div { display: inline-flex; margin-left: 6px; }
 }

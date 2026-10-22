@@ -45,6 +45,13 @@ try:
     check("report without identity refused", False)
 except ValueError:
     check("report without identity refused", True)
+rep = routerstat.parse("id=R1\nnat=tcp|3389|192.168.88.5||ether1|||false|true|rdp / pc|x\nnat=tcp|1|2\nnat=udp|1-9|a<b>|2|||1.2.3.0/24|true|false|\n"
+                       "svc=winbox|8291|\nsvc=ssh|22|10.0.0.0/8\nsvc=Bad;x|1|")
+n = rep["nat"]
+check("nat lines: fields, to-port defaults to the port, comment with | kept, short line skipped, unsafe chars removed",
+      len(n) == 2 and n[0]["to_port"] == "3389" and n[0]["dynamic"] and not n[0]["disabled"] and n[0]["comment"] == "rdp / pc / x"
+      and n[1]["to"] == "ab" and n[1]["src"] == "1.2.3.0/24" and n[1]["disabled"], n)
+check("svc lines: bad name skipped, address kept", [(x["name"], x["port"], x["address"]) for x in rep["services"]] == [("winbox", 8291, ""), ("ssh", 22, "10.0.0.0/8")], rep["services"])
 cur = [{"name": "ether1", "running": True, "rx": 1000 + 60 * 125000, "tx": 500}]
 routerstat.rates(cur, [{"name": "ether1", "rx": 1000, "tx": 900}], 60)
 check("rates: 1 Mbit/s; counter reset -> 0", cur[0]["rx_bps"] == 1000000 and cur[0]["tx_bps"] == 0, cur)

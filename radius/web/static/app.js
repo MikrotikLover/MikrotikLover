@@ -173,7 +173,7 @@ function table(cols, rows, empty = "Nothing here yet.") {
     h("thead", {}, h("tr", {}, cols.map((c) => h("th", { class: c.num ? "num" : "" }, c.label)))),
     h("tbody", {}, rows.map((r) => h("tr", {}, cols.map((c) => {
       const v = c.render ? c.render(r) : r[c.key];
-      return h("td", { class: (c.num ? "num " : "") + (c.wrap ? "wrap" : "") }, v ?? "—");
+      return h("td", { class: (c.num ? "num " : "") + (c.wrap ? "wrap" : ""), "data-l": c.label || null }, v ?? "—");
     }))))));
 }
 const card = (title, sub, ...kids) => h("div", { class: "card" }, title ? h("h2", {}, h("span", {}, title), sub ? h("span", { class: "sub" }, sub) : null) : null, ...kids);
@@ -2107,6 +2107,19 @@ const routerSyncCard = (r) => {
     h("details", { class: "small" }, h("summary", { class: "muted" }, "Technical details"), h("pre", { class: "code-box" }, `server ${r.url}\nversion ${r.version || "—"}\nbuilt ${r.built || "—"}`)));
 };
 
+// Windows Update for everyone: allowed / off in office hours / off (per policy: category windows-update)
+function winUpdateCard(sum) {
+  const mode = sum.winupdate || "on";
+  const MODES = [["on", "Allowed"], ["office", "Off in office hours"], ["off", "Off always"]];
+  const seg = h("div", { class: "seg wu-seg" }, MODES.map(([k, l]) => h("button", { type: "button", class: k === mode ? "on" : "", disabled: !isAdmin(),
+    onclick: async () => { if (k === mode) return; if (await act(api("POST", "/api/winupdate", { mode: k }))) { blSummary = null; route(); } } }, l)));
+  const text = { on: "Windows PCs update as usual.", office: "No Windows updates 9:00–17:00 Mon–Sat (internet stays fast in office hours); updates come in the evening and on Sunday.",
+    off: "No Windows updates for anyone (users in web-filter-exempt keep them). Turn it on now and then — PCs without updates get unsafe." }[mode];
+  return card("Windows Update", `${num(sum.windows_devices || 0)} Windows PC(s) seen this week`,
+    h("div", { class: "toolbar" }, seg, badge(mode === "on" ? "updates allowed" : mode === "office" ? "off 9–17" : "updates OFF", mode === "on" ? "ok" : "warn")),
+    h("div", { class: "muted small" }, text, " Only the update service is stopped — Office, Outlook, Teams, OneDrive and the Store keep working. For some users only: Policy → Edit → Categories → windows-update (with its own time)."));
+}
+
 async function blockingOverview() {
   const [sum, logs] = await Promise.all([blockingSummary(true), api("GET", "/api/blocked?days=1&n=300").catch(() => ({ summary: [], rows: [] }))]);
   const attn = [];
@@ -2131,6 +2144,7 @@ async function blockingOverview() {
         h("a", { href: "#/blocking/parental" }, icon("clock"), h("span", {}, "Parental controls", h("small", {}, "homework, bedtime, games"))),
         h("a", { href: "#/blocking/why" }, icon("search"), h("span", {}, "Why is it blocked?", h("small", {}, "a site + a user, or a block code"))),
         h("a", { href: "#/blocking/guide" }, icon("info"), h("span", {}, "Guide", h("small", {}, "which policy does what, how to apply")))))),
+    winUpdateCard(sum),
     card("Blocked today", topBlocked.length ? "most often" : null, table([{ label: "User", render: (r) => r.user !== "-" ? h("a", { href: `#/users/${encodeURIComponent(r.user)}` }, r.user) : h("span", { class: "muted" }, "(no login)") },
       { label: "Policy", render: (r) => badge(r.policy, "info") }, { label: "Blocked by", render: (r) => badge(r.reason, "bad") }, { label: "Times", key: "count", num: true }],
       topBlocked, "Nothing blocked today."), topBlocked.length ? h("div", { class: "toolbar" }, h("a", { class: "btn small", href: "#/blocking/logs" }, "All activity")) : null),
@@ -2205,6 +2219,7 @@ async function blockingGuide() {
     ["Bill nahi diya / saza: internet band", "no-internet", "Kuch nahi chalta"],
     ["Sirf VPN band, baqi sab theek", "no-vpn", "VPN ki har koshish log hoti hai"],
     ["Raat ko internet band", "night-off", "00:00–06:00"],
+    ["Windows Update band (internet slow na ho)", "", "Overview → Windows Update: Off in office hours / Off always; sirf kuch users: policy → category windows-update"],
   ];
   const ruleTable = [
     ["block social, gaming …", "Policy → Categories", "Category list ki saari sites / apps band", "HTTPS site ka naam (tls-host) dekh kar connection reset"],
@@ -2243,7 +2258,7 @@ async function blockingGuide() {
     sec("pick", "Kaun si policy kab lagayein",
       h("div", { class: "table-wrap" }, h("table", { class: "g-recipes" }, h("thead", {}, h("tr", {}, h("th", {}, "Aap chahte hain"), h("th", {}, "Policy"), h("th", {}, "Note"), h("th", {}, ""))),
         h("tbody", {}, RECIPES.map(([want, pol, note]) => h("tr", {}, h("td", { class: "wrap" }, want),
-          h("td", {}, has(pol) ? h("a", { href: `#/blocking/guide`, onclick: (e) => { e.preventDefault(); document.getElementById(`gp-${pol}`)?.scrollIntoView({ behavior: "smooth", block: "center" }); } }, h("code", {}, pol)) : h("code", {}, pol)),
+          h("td", {}, has(pol) ? h("a", { href: `#/blocking/guide`, onclick: (e) => { e.preventDefault(); document.getElementById(`gp-${pol}`)?.scrollIntoView({ behavior: "smooth", block: "center" }); } }, h("code", {}, pol)) : pol ? h("code", {}, pol) : h("a", { href: "#/blocking/overview" }, "Overview → Windows Update")),
           h("td", { class: "wrap muted small" }, note), h("td", {}, giveBtn(pol)))))))),
     sec("apply", "Policy apply kaise karein",
       h("ol", { class: "g-list" },
@@ -2742,7 +2757,8 @@ async function blockingLogs() {
 
 // ------------------------------------------------------------------ security detective: virus, hacker attacks, DDoS
 ROUTES.security = async (tab = "all") => {
-  const tabs = [["all", "All alerts"], ["ransomware", "Ransomware"], ["virus", "Virus (infected devices)"], ["attack", "Hacker attacks"], ["ddos", "DDoS attacks"], ["setup", "Protection & lists"], ["reports", "Monthly reports"]];
+  const tabs = [["all", "All alerts"], ["inbound", "From outside"], ["ransomware", "Ransomware"], ["virus", "Virus (infected devices)"], ["attack", "Hacker attacks"], ["ddos", "DDoS attacks"], ["setup", "Protection & lists"], ["reports", "Monthly reports"]];
+  if (tab === "inbound") return inboundPage(tabs);
   if (tab === "reports") {
     const { reports } = await api("GET", "/api/security/reports");
     const now = new Date(); const last = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -2829,6 +2845,62 @@ ROUTES.security = async (tab = "all") => {
     holder));
   await load();
 };
+
+// ------------------------------------------------------------------ from outside: open doors + who came in from the internet
+async function inboundPage(tabs) {
+  const days = h("select", {}, [["1", "Today"], ["7", "7 days"], ["30", "30 days"]].map(([v, l]) => h("option", { value: v, selected: v === "7" }, l)));
+  const holder = h("div", { class: "stack" });
+  const riskBadge = (r) => r.risk ? badge(r.risk, "bad") : null;
+  const showDetail = async (r) => {
+    const d = await api("GET", `/api/inbound/detail?${new URLSearchParams({ lan: r.lan_ip, port: r.port, days: days.value })}`);
+    dialog(`Outside addresses → ${r.lan_ip}:${r.port}`, table([{ label: "Outside address", render: (x) => h("span", {}, h("code", {}, x.remote_ip), x.threat ? h("div", {}, badge(x.threat, "bad")) : null) },
+      { label: "Connections", key: "flows", num: true }, { label: "In", num: true, render: (x) => bytes(x.bytes_in) }, { label: "Out", num: true, render: (x) => bytes(x.bytes_out) },
+      { label: "First / last", render: (x) => h("span", {}, String(x.first).slice(5, 13), h("div", { class: "muted" }, String(x.last).slice(5, 16))) }], d.rows, "Nobody."), [{ label: "Close" }]);
+  };
+  const load = async () => {
+    const d = await api("GET", `/api/inbound?days=${days.value}`);
+    const openDoors = d.doors.filter((x) => !x.disabled), risky = openDoors.filter((x) => x.risk).length + d.services.filter((x) => x.advice).length;
+    const badIn = d.remotes.filter((r) => r.threat).length;
+    const doorRows = openDoors.concat(d.doors.filter((x) => x.disabled));
+    holder.replaceChildren(
+      h("div", { class: `card health-hero ${risky || badIn ? (risky ? "fail" : "warn") : "ok"}` }, h("div", { class: "hh-mark" }, risky ? "!" : "✔"),
+        h("div", { class: "grow" }, h("div", { class: "hh-title" }, `${openDoors.length} door(s) open to the internet` + (risky ? ` — ${risky} risky` : "")),
+          h("div", { class: "muted" }, `${num(d.rows.length)} inside service(s) reached from outside, by ${num(d.remotes.length)} outside address(es)` + (badIn ? ` — ${badIn} of them on threat lists / seen attacking` : "") + ` (last ${d.days} day(s)).`),
+          !d.reported ? h("div", { class: "muted small" }, "The routers have not reported their port forwards yet — re-import the auto-sync script (Blocking → Overview) to get this.") : null)),
+      card("Open doors on the routers", "port forwards (incl. UPnP) and the router's own services", table([
+        { label: "Outside", render: (x) => h("span", {}, h("code", {}, `${x.proto.toUpperCase()} ${x.port || "all"}`), h("div", { class: "muted small" }, x.router)) },
+        { label: "→ Inside", render: (x) => h("code", {}, `${x.to || "?"}:${x.to_port || x.port}`) },
+        { label: "Open to", render: (x) => x.open_to === "everyone" ? badge("everyone", "warn") : h("code", {}, x.open_to) },
+        { label: "", render: (x) => h("span", { class: "chips" }, x.dynamic ? badge("UPnP (opened by a device)", "warn") : null, x.disabled ? badge("disabled") : null, riskBadge(x)) },
+        { label: "Note", render: (x) => h("span", { class: "small" }, x.comment ? h("b", {}, x.comment + " ") : null, x.advice), wrap: true }], doorRows, "No port forwards — nothing inside is opened to the internet by the routers."),
+        d.services.length ? h("div", { class: "g-after-table" }, h("b", {}, "Router services that are on"), table([{ label: "Service", render: (x) => h("span", {}, h("b", {}, x.name), h("div", { class: "muted small" }, x.router)) },
+          { label: "Port", key: "port", num: true }, { label: "Allowed from", render: (x) => x.advice ? badge("any address", "warn") : h("code", {}, x.open_to) },
+          { label: "Advice", render: (x) => h("span", { class: "small" }, x.advice || "fine"), wrap: true }], d.services)) : null),
+      card("Who came in from outside", "inside address : port ← how many outside addresses", table([
+        { label: "Inside", render: (r) => h("span", {}, h("code", {}, `${r.lan_ip}:${r.port}`), r.username ? h("div", { class: "muted small" }, r.username) : null) },
+        { label: "Service", render: (r) => h("span", {}, `${r.proto.toUpperCase()} · ${r.service || "?"}`,
+          r.via || r.risk ? h("div", { class: "chips" }, r.via ? badge(r.via, "info") : null, riskBadge(r)) : null) },
+        { label: "Outside addresses", num: true, render: (r) => h("span", {}, num(r.outside), r.bad_outside ? h("div", {}, badge(`${r.bad_outside} bad`, "bad")) : null) },
+        { label: "Connections", num: true, render: (r) => h("span", {}, num(r.flows), h("div", { class: "muted small" }, "last " + String(r.last).slice(5, 16))) },
+        { label: "In / out", num: true, render: (r) => `${bytes(r.bytes_in)} / ${bytes(r.bytes_out)}` },
+        { label: "", render: (r) => h("button", { class: "small", onclick: () => showDetail(r).catch((e) => toast(e.message, true)) }, "Who?") }],
+        d.rows, "Nothing came in from outside in this period (needs the traffic collector).")),
+      card("Outside addresses", "most connections first", table([{ label: "Address", render: (r) => h("code", {}, r.remote_ip) },
+        { label: "", render: (r) => r.threat ? badge(r.threat, "bad") : null }, { label: "Inside targets", key: "targets", num: true },
+        { label: "Connections", key: "flows", num: true }, { label: "Last", render: (r) => String(r.last).slice(5, 16) }], d.remotes, "None.")),
+      hint("How to close a door", h("ul", { class: "g-list" },
+        h("li", {}, "Port forward you do not need: router → IP → Firewall → NAT → disable / remove it (or ", h("code", {}, "/ip firewall nat disable [find dst-port=3389]"), ")."),
+        h("li", {}, "Needed only by you: set its ", h("i", {}, "Src. Address"), " to your office / home address, or reach it through a VPN."),
+        h("li", {}, "UPnP doors are opened by devices (games, cameras) by themselves: ", h("code", {}, "/ip upnp set enabled=no"), " if you do not want that."),
+        h("li", {}, "Router services: ", h("code", {}, "/ip service set winbox address=192.168.88.0/24"), ", and turn off what you do not use (telnet, ftp, api, www)."))));
+    holder.querySelectorAll("table").forEach((t) => t.classList.add("rw-table"));     // cards on a phone
+  };
+  shell("Security", h("div", { class: "stack" },
+    h("div", { class: "tabs" }, tabs.map(([k, l]) => h("a", { href: `#/security/${k}`, class: k === "inbound" ? "active" : "" }, l))),
+    card(null, null, h("div", { class: "toolbar" }, days, h("button", { class: "primary", onclick: () => load().catch((e) => toast(e.message, true)) }, "Show"))),
+    holder));
+  await load();
+}
 
 // ------------------------------------------------------------------ ransomware: risk per device, the stages it went through
 const RANSOM_STAGES = [["in", "Got in", "malware / phishing site"], ["contact", "Talks to its owner", "Tor, ransom-note site, botnet, random names"],
