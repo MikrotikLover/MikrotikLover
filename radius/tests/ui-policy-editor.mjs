@@ -6,7 +6,7 @@
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT || "playwright");
-import { readFileSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, writeFileSync } from "fs";
 import { execFileSync } from "child_process";
 const URL = process.env.URL || "https://127.0.0.1:8443";
 const POL = process.env.POLICY_DIR || "/var/lib/mikrotiklover/policies";
@@ -57,8 +57,9 @@ if (two) {
   await p.keyboard.press("Escape");
 }
 
-// 2. a new policy, one time per rule
+// 2. a new policy, one time per rule (removed again even when a step fails)
 admin("policy", "del", "ui-times");
+process.on("exit", () => { if (existsSync(`${POL}/ui-times.txt`)) admin("policy", "del", "ui-times"); });
 await openEditor(null);
 const d = p.locator("dialog[open]");
 await d.locator("input[name=name]").fill("ui-times");
@@ -124,6 +125,17 @@ if (await editLink.count()) {
 }
 await p.goto(URL + "/#/blocking/policies/give"); await p.locator("dialog[open] #bl-pol").waitFor();
 ok("give dialog: no wider than the dialog", await p.evaluate(() => { const b = document.querySelector("dialog[open] .dlg-body"); return b.scrollWidth <= b.clientWidth + 1; }));
+await p.keyboard.press("Escape");
+
+// guide: every policy explained in words, every rule known, Give opens with that policy
+await p.goto(URL + "/#/dashboard"); await p.waitForTimeout(200);
+await p.goto(URL + "/#/blocking/guide"); await p.locator(".g-pol").first().waitFor();
+const gmeta = await p.evaluate(async () => (await fetch("/api/blocking")).json());
+ok("guide: one card per policy", (await p.locator(".g-pol").count()) === gmeta.policies.length, `${await p.locator(".g-pol").count()} vs ${gmeta.policies.length}`);
+ok("guide: every rule said in words (no raw rule left)", (await p.locator(".g-rules code").count()) === 0);
+ok("guide: rule lines = rules in the files", (await p.locator(".g-rules li").count()) === gmeta.policies.reduce((n, x) => n + x.rules.length, 0));
+await p.locator("#gp-whatsapp-only").getByRole("button", { name: "Give" }).click();
+ok("guide: Give opens with that policy", (await p.locator("dialog[open] #bl-pol").inputValue()) === "whatsapp-only");
 await p.keyboard.press("Escape");
 
 // quick clicks: a page still loading must not be drawn over the page the user went to

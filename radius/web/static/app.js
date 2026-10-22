@@ -2001,6 +2001,7 @@ ROUTES.blocking = async (tab = "overview", ...rest) => {
   if (tab === "apps") return appProfiles();
   if (tab === "web") return allowedWebsites();
   if (tab === "policies") return blockingPolicies(rest[0], rest[1]);
+  if (tab === "guide") return blockingGuide();
   return blockingOverview();
 };
 
@@ -2074,7 +2075,8 @@ async function blockingOverview() {
         isAdmin() ? h("a", { href: "#/blocking/policies/new" }, icon("plus"), h("span", {}, "New policy", h("small", {}, "block categories, apps, sites"))) : null,
         isAdmin() ? h("a", { href: "#/blocking/policies/give" }, icon("users"), h("span", {}, "Give a policy", h("small", {}, "to a user or a group"))) : null,
         h("a", { href: "#/blocking/parental" }, icon("clock"), h("span", {}, "Parental controls", h("small", {}, "homework, bedtime, games"))),
-        h("a", { href: "#/blocking/why" }, icon("search"), h("span", {}, "Why is it blocked?", h("small", {}, "a site + a user, or a block code")))))),
+        h("a", { href: "#/blocking/why" }, icon("search"), h("span", {}, "Why is it blocked?", h("small", {}, "a site + a user, or a block code"))),
+        h("a", { href: "#/blocking/guide" }, icon("info"), h("span", {}, "Guide", h("small", {}, "which policy does what, how to apply")))))),
     card("Blocked today", topBlocked.length ? "most often" : null, table([{ label: "User", render: (r) => r.user !== "-" ? h("a", { href: `#/users/${encodeURIComponent(r.user)}` }, r.user) : h("span", { class: "muted" }, "(no login)") },
       { label: "Policy", render: (r) => badge(r.policy, "info") }, { label: "Blocked by", render: (r) => badge(r.reason, "bad") }, { label: "Times", key: "count", num: true }],
       topBlocked, "Nothing blocked today."), topBlocked.length ? h("div", { class: "toolbar" }, h("a", { class: "btn small", href: "#/blocking/logs" }, "All activity")) : null),
@@ -2085,6 +2087,135 @@ async function blockingOverview() {
         h("li", {}, h("b", {}, "Give it"), " to a user or a group. The user gets it at the next login."),
         h("li", {}, h("b", {}, "Router auto-sync"), " — the router gets every change by itself."),
         h("li", {}, h("b", {}, "Users see a block page"), " with a code and can ask to open the site (Requests).")))));
+}
+
+// ------------------------------------------------------------------ Blocking guide (Roman Urdu): every policy in words, how to apply
+const DAY_UR = { mon: "Pir", tue: "Mangal", wed: "Budh", thu: "Jumeraat", fri: "Jumma", sat: "Hafta", sun: "Itwaar" };
+function timeWords(spec) {
+  if (!spec) return "hamesha";
+  const [range, ...days] = spec.split(",");
+  const clock = (x) => { const m = /(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/.exec(x) || []; let hh = +(m[1] || 0), mm = +(m[2] || 0); if (m[3] && +m[3] >= 59) mm++; if (mm >= 60) { hh++; mm = 0; } return `${String(hh % 24 === 0 && hh ? 24 : hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`; };
+  const [a, b] = range.split("-");
+  const all = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+  let d = "";
+  if (days.length && days.length < 7) d = days.join(",") === "mon,tue,wed,thu,fri,sat" ? ", Pir–Hafta" : days.join(",") === "mon,tue,wed,thu,fri" ? ", Pir–Jumma" : ", " + days.filter((x) => all.includes(x)).map((x) => DAY_UR[x]).join(", ");
+  return `${clock(a)} se ${clock(b)} tak${d}`;
+}
+const DNS_UR = { family: "Cloudflare Family — gandi sites band", "adguard-family": "AdGuard Family — gandi sites + ads band, safe search", "cleanbrowsing-family": "CleanBrowsing Family — gandi sites band, safe search, VPN / proxy sites bhi",
+  "cleanbrowsing-adult": "CleanBrowsing Adult — sirf gandi sites band", router: "router ka normal DNS" };
+function ruleWords(r, meta) {
+  const when = r.time ? h("span", { class: "muted" }, ` — sirf ${timeWords(r.time)}`) : null;
+  const cat = (meta.categories.find((c) => c.name === r.value) || {}).description;
+  switch (r.kind) {
+    case "block": return r.value === "keywords" ? [h("b", {}, "Gande alfaz"), " wali sites band (naam mein sex, xxx, porn …)", when]
+      : [h("b", {}, r.value), " band", cat ? h("span", { class: "muted" }, ` (${cat})`) : null, when];
+    case "block-app": return [h("b", {}, r.value), " app band — us ke saare domains, network par seekhe hue bhi", when];
+    case "block-vpn": return [h("b", {}, "VPN band"), " — VPN apps, VPN websites, VPN servers aur protocols (koshish log hoti hai)", when];
+    case "block-site": return ["Website ", h("b", {}, r.value), " band (subdomains bhi)", when];
+    case "block-all": return [h("b", {}, "Internet bilkul band"), r.time ? when : " — hamesha (sirf 'always open' wali cheezein chalti hain)"];
+    case "allow-only": return ["Sirf ", h("b", {}, r.value), " chalega (app profile) — baqi sab band"];
+    case "allow-web": return [h("b", {}, r.value), " hamesha khuli — server site parh kar us ke fonts / CDN / tasveerein bhi kholta hai"];
+    case "allow-app": return [h("b", {}, r.value), " app hamesha khuli — catalog ke saare servers"];
+    case "allow-site": return [h("b", {}, r.value), " hamesha khuli (exception, subdomains bhi)"];
+    case "dns": return ["DNS: ", h("b", {}, DNS_UR[r.value] || r.value)];
+    case "strict-ech": return [h("b", {}, "Chhupe site naam (ECH)"), " band — browser site ka naam chhupa na sake"];
+    default: return [h("code", {}, `${r.kind} ${r.value}`)];
+  }
+}
+function policyMode(p) {
+  const k = new Set(p.rules.map((r) => r.kind));
+  if (k.has("allow-only")) return ["Sirf chuni hui apps", "warn", "Sirf neeche likhi apps chalti hain, baqi har cheez band."];
+  if (p.rules.some((r) => r.kind === "block-all" && !r.time)) return ["Internet band", "bad", "Internet band hai; sirf 'hamesha khuli' wali cheezein chalti hain."];
+  return ["Ye cheezein band", "info", "Neeche likhi cheezein band hain; baqi sab internet chalta hai."];
+}
+
+async function blockingGuide() {
+  const [meta, ul] = await Promise.all([api("GET", "/api/blocking"), api("GET", "/api/users")]);
+  const has = (n) => meta.policies.some((p) => p.name === n);
+  const giveBtn = (n) => isAdmin() && has(n) ? h("button", { class: "small", onclick: () => givePolicyDialog(meta, ul.users, n) }, "Give") : null;
+  const sec = (id, title, ...kids) => h("div", { class: "card guide-sec", id: `g-${id}` }, h("h2", {}, h("span", {}, title)), ...kids);
+  const toc = [["flow", "Kaise kaam karta hai"], ["pick", "Kaun si policy kab"], ["apply", "Apply kaise karein"], ["policies", "Har policy"], ["rules", "Har rule"], ["order", "Tarteeb"], ["limits", "Hadood"]];
+  const step = (n, title, text) => h("div", { class: "g-step" }, h("span", { class: "g-n" }, String(n)), h("div", {}, h("b", {}, title), h("div", { class: "muted small" }, text)));
+  const RECIPES = [
+    ["Bachay: padhai ke waqt social / games band, raat ko internet band", "parental-kids", "Parental controls se banayein (waqt apni marzi ke); ya tayyar 'kids'"],
+    ["Bachay: TikTok, PUBG, YouTube videos, VPN hamesha band", "kids", "Baqi internet chalta hai"],
+    ["Office staff: duty ke waqt social media / video band", "staff", "9–17 Pir–Hafta; LinkedIn hamesha khula"],
+    ["Students / school lab", "students", "Social, video, games, VPN, torrent band + family DNS"],
+    ["Mehman / cafe WiFi", "guests", "Sab chalta hai — torrent, VPN aur gandi sites ke ilawa"],
+    ["Sirf WhatsApp (calls, photos, status)", "whatsapp-only", "Baqi har app aur website band"],
+    ["Sirf WhatsApp + Hik-Connect (cameras)", "whatsapp-hikconnect", "NVR / DVR isi network mein bhi chalta hai"],
+    ["Sirf ek website (aur jo us ko chahiye)", "only-minas", "Copy karein, apni site likhein — server baqi khud dhoondta hai"],
+    ["Bill nahi diya / saza: internet band", "no-internet", "Kuch nahi chalta"],
+    ["Sirf VPN band, baqi sab theek", "no-vpn", "VPN ki har koshish log hoti hai"],
+    ["Raat ko internet band", "night-off", "00:00–06:00"],
+  ];
+  const ruleTable = [
+    ["block social, gaming …", "Policy → Categories", "Category list ki saari sites / apps band", "HTTPS site ka naam (tls-host) dekh kar connection reset"],
+    ["block-app TikTok", "Policy → Single apps", "Us app ke saare domains band (seekhe hue bhi)", "Same — app ke saare naam (tls-host)"],
+    ["block-vpn", "Policy → Block VPN", "VPN apps, sites, servers, protocols", "VPN naam + VPN server IPs + protocol ports"],
+    ["block-site example.com", "Policy → Single websites", "Ek website aur subdomains", "HTTPS naam (tls-host) se reset"],
+    ["block-all", "Policy → Internet off completely / mode 'No internet'", "Poora internet band (waqt ke saath bhi)", "Har naya connection reject"],
+    ["allow-only whatsapp", "Mode 'ONLY the apps I choose'", "Sirf ye apps; baqi sab band", "App ke servers ki address list; baqi reject"],
+    ["allow-web site.com", "Websites always open", "Site + jo us ko chahiye (fonts, CDN) — hamesha", "Pehle 'return' rule: naam + DNS address list"],
+    ["allow-app Instagram", "Apps always open", "App ke saare servers hamesha khule", "Same"],
+    ["dns family", "Advanced → DNS", "Is policy ke users ka DNS family wala", "DNS port 53 us server ki taraf"],
+    ["strict-ech", "Advanced → hidden site names", "Browser site ka naam chhupa na sake", "ECH wala connection reset"],
+    ["… time=9h-17h,mon,…", "Har rule ke saath 'When'", "Rule sirf us waqt chalta hai", "Router ka clock; raat 12 ke paar bhi theek"],
+  ];
+  const polCards = meta.policies.map((p) => {
+    const [mode, kind, modeText] = policyMode(p);
+    const used = [...p.users, ...p.groups.map((g) => `${g} (group)`)];
+    return h("div", { class: "g-pol", id: `gp-${p.name}` },
+      h("div", { class: "g-pol-head" }, h("b", {}, p.name), badge(mode, kind), h("span", { class: "grow" }),
+        isAdmin() ? h("button", { class: "small", onclick: () => givePolicyDialog(meta, ul.users, p.name) }, "Give") : null,
+        isAdmin() ? h("a", { class: "btn small", href: `#/blocking/policies/edit/${encodeURIComponent(p.name)}` }, "Edit") : null),
+      h("div", { class: "muted small" }, p.description),
+      h("div", { class: "small" }, modeText),
+      h("ul", { class: "g-rules" }, p.rules.map((r) => h("li", {}, ruleWords(r, meta)))),
+      h("div", { class: "muted small" }, used.length ? `Kis ko di hai: ${used.join(", ")}` : "Abhi kisi ko nahi di"));
+  });
+  shell("Blocking", h("div", { class: "stack" }, blockingTabs("guide"),
+    h("div", { class: "subtabs g-toc" }, toc.map(([id, t]) => h("a", { href: `#/blocking/guide`, onclick: (e) => { e.preventDefault(); document.getElementById(`g-${id}`).scrollIntoView({ behavior: "smooth", block: "start" }); } }, t))),
+    sec("flow", "Kaise kaam karta hai — 4 qadam",
+      h("div", { class: "g-steps" },
+        step(1, "Policy", "Rules ka set: kya band hai, kya hamesha khula hai, kis waqt. Tayyar policies neeche hain, ya + New policy."),
+        step(2, "User ya group ko dein", "Give a policy → user ya poora group. User agle login par policy le leta hai (online ho to ek dafa disconnect hota hai)."),
+        step(3, "Router khud le leta hai", "Router auto-sync har 15 minute mein naye rules import karta hai. Darkhwast se khuli site 1 minute mein."),
+        step(4, "User ko kya dikhta hai", "Band site nahi khulti. http:// par block page (logo, wajah, code) aur 'khulwane ki darkhwast' button."))),
+    sec("pick", "Kaun si policy kab lagayein",
+      h("div", { class: "table-wrap" }, h("table", { class: "g-recipes" }, h("thead", {}, h("tr", {}, h("th", {}, "Aap chahte hain"), h("th", {}, "Policy"), h("th", {}, "Note"), h("th", {}, ""))),
+        h("tbody", {}, RECIPES.map(([want, pol, note]) => h("tr", {}, h("td", { class: "wrap" }, want),
+          h("td", {}, has(pol) ? h("a", { href: `#/blocking/guide`, onclick: (e) => { e.preventDefault(); document.getElementById(`gp-${pol}`)?.scrollIntoView({ behavior: "smooth", block: "center" }); } }, h("code", {}, pol)) : h("code", {}, pol)),
+          h("td", { class: "wrap muted small" }, note), h("td", {}, giveBtn(pol)))))))),
+    sec("apply", "Policy apply kaise karein",
+      h("ol", { class: "g-list" },
+        h("li", {}, h("b", {}, "Blocking → Policies → Give"), " (ya Overview → Give a policy). ", h("i", {}, "One user"), " ya ", h("i", {}, "A whole group"), " chunein, policy chunein, Apply."),
+        h("li", {}, "Doosra tareeqa: ", h("b", {}, "Users → user → Own web-filter policy"), ", ya ", h("b", {}, "Groups → group → policy"), "."),
+        h("li", {}, "User online hai to ek dafa disconnect hota hai; dobara login par router use policy ki list (", h("code", {}, "policy-NAME"), ") mein daal deta hai."),
+        h("li", {}, h("b", {}, "Pehli dafa"), ": Overview → Router auto-sync → script download karke router par ek dafa import. Uske baad har tabdeeli khud pohanchti hai."),
+        h("li", {}, h("b", {}, "Check karein"), ": Activity → Why blocked? → site + user → kaun sa rule, abhi chal raha hai ya nahi. Activity → Blocked tries mein har roki gayi koshish."),
+        h("li", {}, h("b", {}, "Policy hatani ho"), ": Give dialog mein doosri policy, ya user ke page par policy khali."))),
+    sec("policies", `Har policy — aasaan alfaz mein (${meta.policies.length})`, h("div", { class: "g-pols" }, polCards)),
+    sec("rules", "Har rule kaise kaam karta hai",
+      h("div", { class: "table-wrap" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Policy file mein"), h("th", {}, "Dashboard mein"), h("th", {}, "Kya hota hai"), h("th", {}, "Router kaise rokta hai"))),
+        h("tbody", {}, ruleTable.map(([code, where, what, how]) => h("tr", {}, h("td", {}, h("code", {}, code)), h("td", { class: "wrap small" }, where), h("td", { class: "wrap" }, what), h("td", { class: "wrap muted small" }, how)))))),
+      h("div", { class: "muted small g-after-table" }, "Categories: ", meta.categories.map((c) => `${c.name} = ${c.description}`).join(" · "))),
+    sec("order", "Tarteeb — kaun pehle chalta hai",
+      h("ul", { class: "g-list" },
+        h("li", {}, h("b", {}, "Ek user, ek policy"), ". User ki apni policy group ki policy se upar hai."),
+        h("li", {}, h("b", {}, "Hamesha khuli"), " (allow-web / allow-app / allow-site) sab se pehle — 'internet band' wali policy mein bhi khuli rehti hain."),
+        h("li", {}, h("b", {}, "Darkhwast se khuli site"), " (Requests) waqt tak sab se upar; waqt khatam to khud band."),
+        h("li", {}, "Phir band rules: category, app, site, VPN, internet off — har ek apne waqt par."),
+        h("li", {}, h("b", {}, "Sirf chuni hui apps"), " (allow-only): un apps ke ilawa sab band; kai apps ek policy mein ho sakti hain."),
+        h("li", {}, "Waqt router ke clock se; 22:00–06:00 jaisa raat 12 ke paar wala waqt bhi theek chalta hai."))),
+    sec("limits", "Hadood — kya nahi ho sakta",
+      h("ul", { class: "g-list" },
+        h("li", {}, "HTTPS site par block page nahi dikh sakta (certificate ke baghair); browser apna error dikhata hai. http:// par dikhta hai."),
+        h("li", {}, "Agar device router ka DNS na le (apna DoH / private DNS), naam wali rokawat kamzor; HTTPS naam (tls-host) phir bhi kaam karta hai."),
+        h("li", {}, "Naye VPN apps pehli dafa nikal sakte hain; server unhein seekh kar list mein daal deta hai."),
+        h("li", {}, "'Sirf chuni hui apps' aur 'hamesha khuli' ke naam wali address lists ke liye RouterOS 7.15+ chahiye."),
+        h("li", {}, "Policy user name par lagti hai — device ko login (Hotspot / PPPoE / WPA-Enterprise) se aana zaroori hai."))),
+    hint("Sawal ho to: Activity → Why blocked? har site aur user ke liye bata deta hai ke kya, kyun aur kab.")));
 }
 
 async function blockingPolicies(action, which) {
@@ -2253,7 +2384,7 @@ async function parentalPage() {
 
 // Blocking: six areas, two of them with sub-pages; red numbers = something waits for the admin
 const BL_AREAS = [["overview", "Overview", ["overview"]], ["policies", "Policies", ["policies"]], ["parental", "Parental controls", ["parental"]],
-  ["requests", "Requests", ["requests"]], ["logs", "Activity", ["logs", "why"]], ["web", "Apps & websites", ["web", "apps"]]];
+  ["requests", "Requests", ["requests"]], ["logs", "Activity", ["logs", "why"]], ["web", "Apps & websites", ["web", "apps"]], ["guide", "Guide", ["guide"]]];
 const BL_SUB = { logs: [["logs", "Blocked tries"], ["why", "Why blocked?"]], web: [["web", "Allowed websites & apps"], ["apps", "App profiles"]] };
 let blSummary = null, blSummaryAt = 0;
 async function blockingSummary(fresh) {

@@ -594,6 +594,7 @@ sudo radius-admin apps update               # abhi update karein (cron har ghant
 | **Requests** | Block page se khulwane ki darkhwastein (laal number = kitni baqi) |
 | **Activity** | **Blocked tries** (logs) · **Why blocked?** |
 | **Apps & websites** | **Allowed websites & apps** (laal number = kitne jawab baqi) · **App profiles** (khulasa: "2 whole domains · this office (LAN)", lines "Show lines" mein) |
+| **Guide** | Roman Urdu mein: 4 qadam mein kaise kaam karta hai · **kaun si policy kab** (situation → policy → **Give**) · apply kaise karein · **har policy aasaan alfaz mein** (har rule, waqt ke saath, kis ko di hai, Give / Edit) · har rule router par kaise rokta hai · tarteeb (kaun pehle) · hadood |
 
 Policy editor bhi hisson mein hai: *What to block* → *Single apps and websites* → *Advanced* (DNS, ECH, doosre rules; band rehta hai) → *Always open (exceptions)* → *Policy file* (band rehta hai).
 Phone par policies cards ki tarah dikhti hain.

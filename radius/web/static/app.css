@@ -360,3 +360,23 @@ input[type=color] { width: 60px; height: 34px; padding: 2px; }
 /* a dialog form never gets wider than the dialog (long option texts in a select) */
 dialog .form:not(.cols) { grid-template-columns: minmax(0, 1fr); }
 dialog .field select { width: 100%; text-overflow: ellipsis; }
+/* Blocking guide */
+.g-toc { position: sticky; top: 0; z-index: 2; }
+.guide-sec { scroll-margin-top: 60px; }
+.g-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.g-step { display: flex; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
+.g-n { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: var(--accent-text); display: grid; place-items: center; font-weight: 700; }
+.g-list { margin: 0; padding-left: 20px; display: grid; gap: 6px; line-height: 1.55; }
+.g-pols { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+.g-pol { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; display: grid; gap: 6px; align-content: start; }
+.g-pol-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.g-pol-head .grow { flex: 1; }
+.g-rules { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: 13.5px; }
+@media (max-width: 760px) { .g-pols { grid-template-columns: 1fr; } }
+.g-after-table { margin-top: 30px; }
+@media (max-width: 760px) {
+  .g-toc { position: static; }
+  .g-recipes thead { display: none; }
+  .g-recipes tr { display: block; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+  .g-recipes td { display: block; padding: 2px 0; border: 0; white-space: normal; }
+}
