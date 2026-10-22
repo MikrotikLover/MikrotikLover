@@ -525,3 +525,56 @@ CREATE TABLE IF NOT EXISTS ml_inbound (
 
 -- what each router opens to the internet: port forwards (dst-nat) and its own services (router report)
 ALTER TABLE ml_router_status ADD COLUMN IF NOT EXISTS exposed TEXT NULL;
+
+-- Firewall (dashboard → Firewall, radius-admin firewall): policies, objects, port forwards
+CREATE TABLE IF NOT EXISTS ml_fw_rule (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  pos INT NOT NULL DEFAULT 0,
+  name VARCHAR(64) NOT NULL,
+  enabled TINYINT(1) NOT NULL DEFAULT 1,
+  dir VARCHAR(8) NOT NULL DEFAULT 'out',
+  src TEXT NULL,
+  dst TEXT NULL,
+  service TEXT NULL,
+  schedule VARCHAR(32) NOT NULL DEFAULT 'always',
+  action VARCHAR(8) NOT NULL DEFAULT 'deny',
+  log TINYINT(1) NOT NULL DEFAULT 0,
+  comment VARCHAR(255) NOT NULL DEFAULT '',
+  created DATETIME NULL,
+  updated DATETIME NULL,
+  KEY (pos)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS ml_fw_addr (
+  name VARCHAR(32) NOT NULL PRIMARY KEY,
+  entries MEDIUMTEXT NULL,
+  comment VARCHAR(255) NOT NULL DEFAULT '',
+  updated DATETIME NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS ml_fw_service (
+  name VARCHAR(32) NOT NULL PRIMARY KEY,
+  entries TEXT NULL,
+  comment VARCHAR(255) NOT NULL DEFAULT '',
+  updated DATETIME NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS ml_fw_schedule (
+  name VARCHAR(32) NOT NULL PRIMARY KEY,
+  days VARCHAR(40) NOT NULL DEFAULT '',
+  start VARCHAR(5) NOT NULL DEFAULT '',
+  end VARCHAR(5) NOT NULL DEFAULT '',
+  comment VARCHAR(255) NOT NULL DEFAULT '',
+  updated DATETIME NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS ml_fw_vip (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(32) NOT NULL UNIQUE,
+  enabled TINYINT(1) NOT NULL DEFAULT 1,
+  proto VARCHAR(4) NOT NULL DEFAULT 'tcp',
+  port VARCHAR(11) NOT NULL,
+  to_ip VARCHAR(45) NOT NULL,
+  to_port VARCHAR(11) NOT NULL,
+  src TEXT NULL,
+  wan VARCHAR(32) NOT NULL DEFAULT '',
+  comment VARCHAR(255) NOT NULL DEFAULT '',
+  created DATETIME NULL,
+  updated DATETIME NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

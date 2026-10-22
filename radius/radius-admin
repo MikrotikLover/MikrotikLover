@@ -1760,6 +1760,47 @@ router_key_perms() {
     chgrp "$(id -gn mlweb 2>/dev/null || echo root)" "$ROUTER_DIR/key" 2>/dev/null || true
 }
 
+FWPY=/usr/local/lib/mikrotiklover/firewall.py
+fw_py() { python3 -I "$FWPY" --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@"; }
+
+fw_rsc() { # router part of sync.rsc: firewall policies, address objects, port forwards (+ country lists in geo.rsc)
+    local dom gv
+    [ -s "$ROUTER_DIR/key" ] || { install -d -m 755 "$ROUTER_DIR"; gen_pass 32 > "$ROUTER_DIR/key"; router_key_perms; }
+    dom=$(setting_get radius_domain 2>/dev/null || true); dom=${dom:-${RADIUS_DOMAIN:-radius.local}}
+    if gv=$(fw_py geo-rsc --out "$ROUTER_DIR/geo.rsc.tmp" 2>/dev/null); then
+        mv "$ROUTER_DIR/geo.rsc.tmp" "$ROUTER_DIR/geo.rsc"; chmod 644 "$ROUTER_DIR/geo.rsc"; echo "$gv" > "$ROUTER_DIR/geo.version"
+    fi
+    fw_py rsc --geo-url "https://$dom:${WEB_PORT:-8443}/api/public/router/geo.rsc?key=$(cat "$ROUTER_DIR/key")" 2>/dev/null \
+        || echo "# firewall: not built (sudo radius-admin firewall list shows why)"
+}
+
+cmd_firewall() { # policies, address objects, services, schedules, port forwards, countries (tools/firewall.py)
+    local sub=${1:-list} out
+    case $sub in
+        list|json) fw_py "$sub" ;;
+        logs) shift; fw_py logs "$@" ;;
+        rsc) fw_rsc ;;
+        geo)
+            case ${2:-status} in
+                status|lookup|list) shift; fw_py geo "$@" ;;
+                update|import)
+                    shift
+                    # shellcheck disable=SC2086  # GEO_URLS (radius.conf): space separated mirrors of the RIR files
+                    if [ "$1" = update ]; then out=$(fw_py geo update ${GEO_URLS:-} 2>&1) || die "${out#ERROR: }"
+                    else out=$(fw_py geo "$@" 2>&1) || die "${out#ERROR: }"; fi
+                    cmd_policy build >/dev/null || die "router rules not built"
+                    ok "$out" ;;
+                *) die "usage: radius-admin firewall geo status|update|import FILE...|lookup IP|list" ;;
+            esac ;;
+        rule|addr|service|schedule|vip)
+            if [ "${2:-}" = list ]; then fw_py "$@"; return; fi
+            out=$(fw_py "$@" 2>&1) || die "${out#ERROR: }"
+            cmd_policy build >/dev/null || die "router rules not built"
+            ok "$out (routers within 15 minutes)" ;;
+        *) die "usage: radius-admin firewall list|rule|addr|service|schedule|vip|geo|logs  (radius-admin help)" ;;
+    esac
+}
+
 cmd_winupdate() { # Windows Update for everyone: on (allowed) | off | office (off 9-17 Mon-Sat)
     local m=${1:-status}
     case $m in
@@ -1928,6 +1969,8 @@ RSC
             blockpage_rsc
             echo
             live_rsc
+            echo
+            fw_rsc
         } > "$lists/sync.rsc"
         install -m 644 "$lists/webfilter-policies.rsc" "$lists/vpn-servers.rsc" "$lists/sync.rsc" "$ROUTER_DIR/"
         sha256sum "$ROUTER_DIR/sync.rsc" | cut -c1-16 > "$ROUTER_DIR/version.tmp"
@@ -2195,6 +2238,10 @@ cmd_hourly() { # cron, every hour: one run at a time; each job's result is shown
     run_update "Hourly: VPN & proxy scan" cmd_vpn scan
     run_update "Hourly: security scan" cmd_security scan
     run_update "Hourly: allowed websites (read again, learn helpers)" cmd_webscan auto
+    if [ -f /var/lib/mikrotiklover/geo/meta.json ] && [ -n "$(find /var/lib/mikrotiklover/geo/meta.json -mtime +6 2>/dev/null)" ] \
+       || grep -q missing "$ROUTER_DIR/geo.version" 2>/dev/null; then
+        run_update "Weekly: country lists (firewall)" cmd_firewall geo update
+    fi
     run_update "Hourly: router rules" cmd_policy build
     # last: the self-check of everything (saved for the dashboard; alerts.py tells about new problems)
     python3 -I /usr/local/lib/mikrotiklover/health.py --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" --save >/dev/null 2>&1 || true
@@ -3020,6 +3067,14 @@ Blocking policies + router auto-sync (dashboard → Blocking)
   policy set NAME < file                create / change a policy (directives: webfilter/policies/README.txt)
   policy del NAME                       delete an unused policy
   winupdate on|off|office|status        Windows Update for everyone: allowed / blocked / blocked in office hours (per policy: block windows-update)
+  firewall list                          policies in order (first match wins), port forwards, objects
+  firewall rule add NAME --dir out|in|wan|router|lan --src OBJ,geo:CN --dst all --service RDP,SMB
+                    [--schedule office-hours] --action deny|reject|allow [--log] [--top]
+  firewall rule del|on|off ID · rule move ID up|down|top|bottom|POS
+  firewall addr set NAME 10.0.0.0/24 10.0.1.5-10.0.1.9 example.com geo:PK · addr del|list
+  firewall service set NAME tcp/8080,8443 udp/5000-5100 · schedule set NAME mon,tue 09:00-17:00
+  firewall vip add NAME OUT-PORT IN-IP[:PORT] [--proto tcp|udp|both] [--src office,geo:PK] · vip del|on|off ID
+  firewall geo update|import FILE|status|lookup IP · firewall logs [--n 50]
   policy on|off NAME                    turn a policy off (kept, users stay in it, no router rules) or on again
   policy build                          rebuild the router rules (+ VPN server list); cron does it every hour
   policy sync                           URL + key for the router auto-sync script (dashboard → Blocking)
@@ -3254,6 +3309,7 @@ case ${1:-help} in
     social)  shift; cmd_social "$@" ;;
     insights) shift; python3 -I /usr/local/lib/mikrotiklover/insights.py "${1:-report}" --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "${@:2}" ;;
     winupdate) shift; cmd_winupdate "$@" ;;
+    firewall|fw) shift; cmd_firewall "$@" ;;
     doctor|health) shift; python3 -I /usr/local/lib/mikrotiklover/health.py --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@" ;;
     backups) cmd_backups ;;
     restore) shift; cmd_restore "$@" ;;
