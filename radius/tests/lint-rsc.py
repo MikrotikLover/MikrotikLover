@@ -8,7 +8,7 @@ Usage: python3 tests/lint-rsc.py [files...]
 """
 import re, sys, glob, os
 
-FW = {"chain", "in-interface-list", "out-interface-list", "in-interface", "out-interface", "src-address-list", "dst-address-list", "src-address",
+FW = {"chain", "in-interface-list", "out-interface-list", "sniff-target", "sniff-target-port", "connection-bytes", "in-interface", "out-interface", "src-address-list", "dst-address-list", "src-address",
       "dst-address", "protocol", "dst-port", "action", "to-addresses", "to-ports",
       "reject-with", "comment", "tls-host", "place-before", "disabled", "jump-target", "time",
       "log", "log-prefix", "connection-state", "limit", "tcp-flags", "psd", "connection-limit",

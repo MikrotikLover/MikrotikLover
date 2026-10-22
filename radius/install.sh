@@ -217,6 +217,8 @@ cat > /etc/cron.d/mikrotiklover <<'EOF'
 17 4 * * 2 root /usr/local/sbin/radius-admin update >/dev/null 2>&1
 # alerts: Telegram / WhatsApp / email when something needs attention (+ daily summary); nothing is sent until set up
 2-59/5 * * * * root /usr/local/sbin/radius-admin alerts check >/dev/null 2>&1
+# intrusion prevention (radius-admin ips on): Suricata alerts -> Security page, blocks -> routers (does nothing while off)
+* * * * * root /usr/local/sbin/radius-admin ips scan >/dev/null 2>&1
 # nightly complete backup (newest 14 kept in /var/backups/mikrotiklover)
 43 2 * * * root /usr/local/sbin/radius-admin backup --auto --quiet >/dev/null 2>&1
 EOF
@@ -226,7 +228,7 @@ install -d -m 755 /usr/local/lib/mikrotiklover
 install -m 644 "$SCRIPT_DIR/tools/mlreport.py" /usr/local/lib/mikrotiklover/mlreport.py
 install -m 644 "$SCRIPT_DIR/tools/flowcollector.py" /usr/local/lib/mikrotiklover/flowcollector.py
 install -m 644 "$SCRIPT_DIR/tests/lint-rsc.py" /usr/local/lib/mikrotiklover/rsclint.py   # health check: router files import cleanly
-install -m 644 "$SCRIPT_DIR/tools/cdnmap.py" "$SCRIPT_DIR/tools/cdnlearn.py" "$SCRIPT_DIR/tools/cdn-apps.json" "$SCRIPT_DIR/tools/ports.py" "$SCRIPT_DIR/tools/appinv.py" "$SCRIPT_DIR/tools/vpn.py" "$SCRIPT_DIR/tools/sentinel.py" "$SCRIPT_DIR/tools/alerts.py" "$SCRIPT_DIR/tools/health.py" "$SCRIPT_DIR/tools/insights.py" "$SCRIPT_DIR/tools/minipdf.py" "$SCRIPT_DIR/tools/secreport.py" "$SCRIPT_DIR/tools/routerstat.py" "$SCRIPT_DIR/tools/hotspotgen.py" "$SCRIPT_DIR/tools/routersetup.py" "$SCRIPT_DIR/tools/whyblocked.py" "$SCRIPT_DIR/tools/applearn.py" "$SCRIPT_DIR/tools/webscan.py" "$SCRIPT_DIR/tools/firewall.py" /usr/local/lib/mikrotiklover/
+install -m 644 "$SCRIPT_DIR/tools/cdnmap.py" "$SCRIPT_DIR/tools/cdnlearn.py" "$SCRIPT_DIR/tools/cdn-apps.json" "$SCRIPT_DIR/tools/ports.py" "$SCRIPT_DIR/tools/appinv.py" "$SCRIPT_DIR/tools/vpn.py" "$SCRIPT_DIR/tools/sentinel.py" "$SCRIPT_DIR/tools/alerts.py" "$SCRIPT_DIR/tools/health.py" "$SCRIPT_DIR/tools/insights.py" "$SCRIPT_DIR/tools/minipdf.py" "$SCRIPT_DIR/tools/secreport.py" "$SCRIPT_DIR/tools/routerstat.py" "$SCRIPT_DIR/tools/hotspotgen.py" "$SCRIPT_DIR/tools/routersetup.py" "$SCRIPT_DIR/tools/whyblocked.py" "$SCRIPT_DIR/tools/applearn.py" "$SCRIPT_DIR/tools/webscan.py" "$SCRIPT_DIR/tools/firewall.py" "$SCRIPT_DIR/tools/ips.py" "$SCRIPT_DIR/tools/tzsp2tap.py" /usr/local/lib/mikrotiklover/
 install -d -m 755 /usr/local/lib/mikrotiklover/hotspot-login
 install -m 644 "$SCRIPT_DIR"/mikrotik/hotspot-login/*.html /usr/local/lib/mikrotiklover/hotspot-login/
 install -d -m 755 /usr/local/lib/mikrotiklover/mikrotik      # router scripts for the Router setup page

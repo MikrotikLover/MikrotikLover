@@ -2174,8 +2174,29 @@ def router_live():
     """Every minute from each router (sync.rsc: ml-live): department members + temporary exceptions."""
     if not _router_key_ok():
         abort(403)
-    text = (dept_script() if q1("SELECT 1 FROM ml_department LIMIT 1") else "") + temp_script()
+    text = (dept_script() if q1("SELECT 1 FROM ml_department LIMIT 1") else "") + temp_script() + ips_script()
     return app.response_class(text, mimetype="text/plain", headers={"Cache-Control": "no-store"})
+
+
+def ips_script():
+    """RouterOS script: addresses the IPS blocked (list ml-ips, dropped by the mlips raw rules), only when the list changed."""
+    import hashlib
+    rows = q("""SELECT ip, LEFT(reason, 60) AS reason, GREATEST(TIMESTAMPDIFF(SECOND, NOW(), until), 60) AS secs FROM ml_ips_block
+                WHERE until > NOW() ORDER BY created DESC LIMIT 5000""")
+    body = []
+    for r in rows:
+        try:
+            ip = str(ipaddress.ip_address(r["ip"]))
+        except ValueError:
+            continue
+        reason = re.sub(r'[^\w .,:()/-]', "", r["reason"] or "")
+        body.append(f'/ip firewall address-list add list=ml-ips address={ip} timeout={int(r["secs"])}s comment="mlips: {reason}"')
+    sig = hashlib.sha1("\n".join(sorted(x.split(" timeout=")[0] for x in body)).encode()).hexdigest()[:16]
+    return ("\n:global mlIpsSig\n"
+            f':if ($mlIpsSig != "{sig}") do={{\n'
+            '/ip firewall address-list remove [find list=ml-ips comment~"^mlips"]\n'
+            + "".join(f":do {{ {l} }} on-error={{}}\n" for l in body)
+            + f':set mlIpsSig "{sig}"\n}}\n')
 
 
 def active_exceptions():

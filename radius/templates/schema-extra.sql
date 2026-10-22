@@ -578,3 +578,42 @@ CREATE TABLE IF NOT EXISTS ml_fw_vip (
   created DATETIME NULL,
   updated DATETIME NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Intrusion prevention (Suricata, tools/ips.py)
+ALTER TABLE ml_security_event MODIFY source ENUM('flow','dns','log','ips') NOT NULL;
+CREATE TABLE IF NOT EXISTS ml_ips_alert (
+  bucket DATETIME NOT NULL,
+  sid INT UNSIGNED NOT NULL,
+  src_ip VARCHAR(45) NOT NULL,
+  dst_ip VARCHAR(45) NOT NULL,
+  dst_port SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  proto VARCHAR(8) NOT NULL DEFAULT '',
+  signature VARCHAR(255) NOT NULL DEFAULT '',
+  category VARCHAR(100) NOT NULL DEFAULT '',
+  severity ENUM('low','medium','high') NOT NULL DEFAULT 'low',
+  kind VARCHAR(16) NOT NULL DEFAULT '',
+  direction VARCHAR(8) NOT NULL DEFAULT '',
+  hits INT UNSIGNED NOT NULL DEFAULT 0,
+  first_seen DATETIME NOT NULL,
+  last_seen DATETIME NOT NULL,
+  blocked TINYINT(1) NOT NULL DEFAULT 0,
+  PRIMARY KEY (bucket, sid, src_ip, dst_ip, dst_port),
+  KEY (last_seen),
+  KEY (src_ip),
+  KEY (sid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS ml_ips_block (
+  ip VARCHAR(45) NOT NULL PRIMARY KEY,
+  reason VARCHAR(255) NOT NULL DEFAULT '',
+  sid INT UNSIGNED NOT NULL DEFAULT 0,
+  hits INT UNSIGNED NOT NULL DEFAULT 0,
+  auto TINYINT(1) NOT NULL DEFAULT 1,
+  created DATETIME NOT NULL,
+  until DATETIME NOT NULL,
+  KEY (until)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS ml_ips_allow (
+  ip VARCHAR(45) NOT NULL PRIMARY KEY,
+  comment VARCHAR(255) NOT NULL DEFAULT '',
+  created DATETIME NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
