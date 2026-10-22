@@ -36,16 +36,16 @@ python3 "$HERE/tzspgen.py" $A2 $PC 1000 1
 new() { tail -n +$((start + 1)) $EVE 2>/dev/null; }
 for i in $(seq 1 20); do new | grep -q "\"$A2\"" && new | grep -q "\"$A1\"" && break; sleep 1; done
 t "Suricata saw both (eve.json)" "$(new | grep -c "\"src_ip\":\"185.244.25.1[12]\"")" "2"
-radius-admin ips scan >/dev/null
+for i in $(seq 1 30); do [ "$(db "SELECT COUNT(*) FROM ml_ips_alert WHERE src_ip IN ('$A1','$A2')")" = 2 ] && break; sleep 0.2; done   # the real-time watcher
 t "scan: alerts saved, high, blocked" "$(db "SELECT GROUP_CONCAT(CONCAT(sid,'/',severity,'/',blocked) ORDER BY sid) FROM ml_ips_alert WHERE src_ip IN ('$A1','$A2')")" "9100001/high/1,9100008/high/1"
 t "scan: Security page events (source ips)" "$(db "SELECT COUNT(*) FROM ml_security_event WHERE source='ips' AND category='attack' AND src_ip IN ('$A1','$A2')")" "2"
 t "routers get the block within a minute (live.rsc, with time limit)" "$(live | grep -c "list=ml-ips address=185.244.25.1[12] timeout=")" "2"
-t "nothing new: the same scan adds nothing" "$(radius-admin ips scan)" "ips: 0 alert(s), 0 address(es) blocked"
+t "every-minute scan leaves it to the real-time watcher" "$(radius-admin ips scan)" "ips: the real-time watcher is running"
 
 # a false alarm switched off
 radius-admin ips rule off 9100001 >/dev/null
 t "signature off: commented out, listed" "$(grep 'sid:9100001;' /var/lib/suricata/rules/suricata.rules | cut -c1-7) $(grep -c '^9100001' /etc/mikrotiklover-radius/ips-disable.conf)" "# alert 1"
-sleep 4; python3 "$HERE/tzspgen.py" $A3 $PC 3389 15; sleep 6; radius-admin ips scan >/dev/null
+sleep 4; python3 "$HERE/tzspgen.py" $A3 $PC 3389 15; sleep 6
 t "  ... no alert for it any more" "$(db "SELECT COUNT(*) FROM ml_ips_alert WHERE src_ip='$A3'")" "0"
 radius-admin ips rule on 9100001 >/dev/null
 
@@ -59,6 +59,29 @@ t "copy everything: no byte limit" "$(grep -c 'sniff-tzsp.*connection-bytes' $S)
 radius-admin ips mirror first >/dev/null
 t "bad values refused" "$(radius-admin ips level low 2>&1 | grep -c usage)$(radius-admin ips hours 0 2>&1 | grep -c '1-720')$(radius-admin ips rule off x 2>&1 | grep -c usage)" "111"
 
+# instant blocks through the router API: a fake RouterOS API (TLS) stands in for the router
+FS=$(mktemp) A4=185.244.25.14 A5=185.244.25.15
+radius-admin ips api del 127.0.0.1 >/dev/null 2>&1
+t "api add: script with an API-only user for this server" "$(radius-admin ips api add 127.0.0.1 --port 18731 | grep -c 'policy=api,read,write\|/ip service set api-ssl certificate=ml-api port=18731')" "2"
+PW=$(python3 -c "import json; print(json.load(open('/etc/mikrotiklover-radius/router-api.json'))['127.0.0.1']['password'])")
+python3 "$HERE/fakeros.py" 18731 mlapi "$PW" "$FS" >/dev/null 2>&1 &
+FPID=$!
+sleep 2
+t "api test: connected" "$(radius-admin ips api test 127.0.0.1 2>&1 | grep -c "connected as mlapi to 'FakeRouter'")" "1"
+radius-admin ips restart >/dev/null; sleep 12                    # the real-time watcher
+t0=$(date +%s%N); python3 "$HERE/tzspgen.py" $A4 $PC 3389 15
+for i in $(seq 1 50); do grep -q "$A4" "$FS" && break; sleep 0.1; done
+ms=$(( ($(date +%s%N) - t0) / 1000000 ))
+t "attack -> on the router in under 3 seconds (was up to 2 minutes)" "$(grep -c "\"address\": \"$A4\"" "$FS") $([ $ms -lt 3000 ] && echo fast)" "1 fast"
+echo "     (took $ms ms)"
+t "  ... with a time limit and the reason" "$(python3 -c "import json; print([(i['list'], i['timeout']) for i in json.load(open('$FS')) if i['address']=='$A4'])")" "[('ml-ips', '86400s')]"
+t "unblock: taken off the router at once" "$(radius-admin ips unblock $A4 | grep -c 'unblocked now') $(grep -c "$A4" "$FS")" "1 0"
+t "block by hand: on the router at once" "$(radius-admin ips block $A5 test | grep -c 'every router now') $(grep -c "$A5" "$FS")" "1 1"
+radius-admin ips unblock $A5 >/dev/null
+kill $FPID 2>/dev/null; sleep 1
+t "router down: the block is still saved (1-minute list), the failure shown" "$(radius-admin ips block $A5 test 2>&1 | grep -c 'within a minute') $(radius-admin ips api list | grep -c 'failed')" "1 1"
+radius-admin ips unblock $A5 >/dev/null
+
 if [ -n "${URL:-}" ]; then
     jar=$(mktemp)
     csrf=$(curl -sk -c "$jar" -H 'Content-Type: application/json' -d "{\"username\":\"$USER\",\"password\":\"$PASS\"}" "$URL/api/login" | python3 -c 'import json,sys; print(json.load(sys.stdin)["csrf"])')
@@ -69,6 +92,11 @@ if [ -n "${URL:-}" ]; then
     t "API: signature off / on" "$(api POST /api/ips/rule '{"sid":"9100008","on":false}')$(api GET '/api/ips?days=1')$(js "[t['off'] for t in d['top'] if t['sid']==9100008]")$(api POST /api/ips/rule '{"sid":"9100008","on":true}')" "200200[True]200"
     t "API: block, unblock, level, hours" "$(api POST /api/ips/block "{\"ip\":\"$A1\"}")$(api POST /api/ips/unblock "{\"ip\":\"$A1\"}")$(api POST /api/ips/level '{"level":"medium"}')$(api POST /api/ips/level '{"level":"high"}')$(api POST /api/ips/hours '{"hours":"24"}')" "200200200200200"
     t "API: bad input 400 / 404" "$(api POST /api/ips/level '{"level":"x"}')$(api POST /api/ips/block '{"ip":"a;b"}')$(api POST /api/ips/explode)" "400400404"
+    t "API: instant-block routers listed with status" "$(api GET '/api/ips?days=1')$(js "[(r['ip'], r['status'][:6]) for r in d['api_routers']]")" "200[('127.0.0.1', 'failed')]"
+    t "API: add a router -> the script to paste" "$(api POST /api/ips/api-add '{"router":"127.0.0.1"}')$(js "'/user add name=mlapi' in d['script']")" "200True"
+    t "API: test (router down) -> 400 with why; remove" "$(api POST /api/ips/api-test '{"router":"127.0.0.1"}')$(api POST /api/ips/api-del '{"router":"127.0.0.1"}')" "400200"
+    t "API: bad router address 400" "$(api POST /api/ips/api-add '{"router":"x;y"}')" "400"
     rm -f "$jar" /tmp/ipst.json
 fi
+radius-admin ips api del 127.0.0.1 >/dev/null 2>&1; rm -f "$FS"
 [ "$fails" = 0 ] && echo "all IPS server tests passed" || { echo "$fails FAILED"; exit 1; }

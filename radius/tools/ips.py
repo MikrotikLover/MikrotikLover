@@ -364,16 +364,100 @@ def never_block(db):
     return ips
 
 
-def cmd_scan(db, a):
-    lines = read_new(start_at_end=not a.from_start)
-    lan = lan_nets(read_conf())
+LOCK = os.environ.get("ML_IPS_LOCK", "/run/mikrotiklover-ips.lock")
+
+
+def push(blocks, hours):
+    """New blocks straight into the routers through the API (rosapi.py), when routers are set up for it."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import rosapi
+    except ImportError:
+        return {}
+    if not blocks or not rosapi.load():
+        return {}
+    return {ip: rosapi.push_block(ip, int(hours) * 3600, a["signature"]) for ip, a in blocks.items()}
+
+
+def process(db, lines, lan=None):
+    lan = lan or lan_nets(read_conf())
     alerts = parse(lines, lan, disabled_sids())
     blocks = decide(alerts, db.setting("ips_autoblock", "1") == "1", db.setting("ips_block_level", "high"), never_block(db), lan)
-    store(db, alerts, blocks, int(db.setting("ips_block_hours", "24") or 24))
+    if blocks:                                   # only addresses not blocked already go to the routers again
+        have = {r["ip"] for r in db.q("SELECT ip FROM ml_ips_block WHERE until > NOW() AND ip IN %s", (tuple(blocks),))}
+    else:
+        have = set()
+    hours = int(db.setting("ips_block_hours", "24") or 24)
+    store(db, alerts, blocks, hours)
+    pushed = push({ip: a for ip, a in blocks.items() if ip not in have}, hours)
+    return alerts, blocks, pushed
+
+
+def unpush(ip):
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import rosapi
+    except ImportError:
+        return {}
+    return rosapi.push_unblock(ip) if rosapi.load() else {}
+
+
+def housekeeping(db):
+    db.q("DELETE FROM ml_ips_alert WHERE bucket < NOW() - INTERVAL 90 DAY")
+    db.q("DELETE FROM ml_ips_block WHERE until < NOW() - INTERVAL 7 DAY")
+
+
+def take_lock(wait):
+    import fcntl
+    os.makedirs(os.path.dirname(LOCK), exist_ok=True)
+    fh = open(LOCK, "a")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+    except OSError:
+        fh.close()
+        return None
+    return fh
+
+
+def cmd_scan(db, a):
+    lock = take_lock(False)
+    if lock is None:                             # the real-time watcher reads the alerts; nothing to do
+        print("ips: the real-time watcher is running")
+        return
+    lines = read_new(start_at_end=not a.from_start)
+    alerts, blocks, pushed = process(db, lines)
     if int(time.time()) % 3600 < 60:
-        db.q("DELETE FROM ml_ips_alert WHERE bucket < NOW() - INTERVAL 90 DAY")
-        db.q("DELETE FROM ml_ips_block WHERE until < NOW() - INTERVAL 7 DAY")
-    print(f"ips: {len(alerts)} alert(s), {len(blocks)} address(es) blocked")
+        housekeeping(db)
+    print(f"ips: {len(alerts)} alert(s), {len(blocks)} address(es) blocked" + (f", {len(pushed)} pushed to the routers" if pushed else ""))
+
+
+def cmd_watch(db, a):
+    """Real time: new alerts are read 4 times a second; a new block reaches the routers' API at once."""
+    lock = take_lock(True)
+    lan, last_conf, last_house = lan_nets(read_conf()), time.time(), time.time()
+    print("ips watch: reading alerts in real time", flush=True)
+    while True:
+        try:
+            lines = read_new()
+            if lines:
+                alerts, blocks, pushed = process(db, lines, lan)
+                for ip, res in pushed.items():
+                    print(f"ips watch: {ip} blocked -> " + ", ".join(f"{r}: {v}" for r, v in res.items()), flush=True)
+            now = time.time()
+            if now - last_conf > 300:
+                lan, last_conf = lan_nets(read_conf()), now
+            if now - last_house > 3600:
+                housekeeping(db)
+                last_house = now
+        except Exception as e:  # noqa: BLE001 - keep watching (database restart, rotated log …)
+            print(f"ips watch: {e}", file=sys.stderr, flush=True)
+            time.sleep(5)
+            try:
+                db = DB(a.cnf, a.db)
+            except Exception:  # noqa: BLE001
+                pass
+        time.sleep(0.25)
+    lock.close()
 
 
 # ------------------------------------------------------------------ signatures
@@ -494,6 +578,16 @@ def status(db=None):
                    "fresh": bool(tz.get("at")) and time.time() - tz.get("at", 0) < 60,
                    "last_packet": max(tz.get("routers", {}).values() or [0])}}
     st["copy"]["receiving"] = bool(st["copy"]["last_packet"]) and time.time() - st["copy"]["last_packet"] < 300
+    lock = take_lock(False) if os.geteuid() == 0 else None
+    st["watcher"] = lock is None if os.geteuid() == 0 else None      # someone holds the lock = the real-time watcher runs
+    if lock:
+        lock.close()
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import rosapi
+        st["api"] = {ip: r.get("status", "") for ip, r in rosapi.load().items()}
+    except (ImportError, OSError, PermissionError):
+        st["api"] = {}
     return st
 
 
@@ -506,6 +600,7 @@ def main(argv=None):
     p.add_argument("--tap", default="mltap0")
     p = sub.add_parser("scan")
     p.add_argument("--from-start", action="store_true")
+    sub.add_parser("watch")
     p = sub.add_parser("update")
     p.add_argument("--offline", action="store_true")
     p = sub.add_parser("rule")
@@ -541,6 +636,8 @@ def main(argv=None):
     db = DB(a.cnf, a.db)
     if a.cmd == "scan":
         cmd_scan(db, a)
+    elif a.cmd == "watch":
+        cmd_watch(db, a)
     else:
         try:
             ip = str(ipaddress.ip_address(a.ip))
@@ -551,14 +648,18 @@ def main(argv=None):
             if not blockable(ip, lan_nets(read_conf())):
                 raise SystemExit("a LAN address is not blocked here — use quarantine (Security → Virus)")
             db.q("REPLACE INTO ml_ips_block (ip, reason, sid, hits, auto, created, until) VALUES (%s,%s,0,0,0,NOW(), NOW() + INTERVAL 30 DAY)", (ip, reason))
-            print(f"{ip} blocked on every router within a minute (30 days)")
-        elif a.cmd == "unblock":
+            res = push({ip: {"signature": reason}}, 30 * 24).get(ip, {})
+            print(f"{ip} blocked on every router " + ("now" if res and all(v == "ok" for v in res.values()) else "within a minute") + " (30 days)"
+                  + "".join(f"; {r}: {v}" for r, v in res.items() if v != "ok"))
+        elif a.cmd in ("unblock", "allow"):
+            if a.cmd == "allow":
+                db.q("REPLACE INTO ml_ips_allow (ip, comment, created) VALUES (%s,%s,NOW())", (ip, reason))
             db.q("DELETE FROM ml_ips_block WHERE ip=%s", (ip,))
-            print(f"{ip} unblocked (routers within a minute)")
-        elif a.cmd == "allow":
-            db.q("REPLACE INTO ml_ips_allow (ip, comment, created) VALUES (%s,%s,NOW())", (ip, reason))
-            db.q("DELETE FROM ml_ips_block WHERE ip=%s", (ip,))
-            print(f"{ip} is never blocked by the IPS")
+            res = unpush(ip)
+            if a.cmd == "unblock":
+                print(f"{ip} unblocked " + ("now" if res and all(v.startswith("ok") for v in res.values()) else "(routers within a minute)"))
+            else:
+                print(f"{ip} is never blocked by the IPS")
         else:
             db.q("DELETE FROM ml_ips_allow WHERE ip=%s", (ip,))
             print(f"{ip} may be blocked again")

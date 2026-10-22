@@ -58,9 +58,13 @@ PROPS = {
     "/ip dhcp-server alert": {"interface", "valid-server", "alert-timeout", "comment", "on-alert", "disabled"},
     "/system script": {"name", "policy", "source", "comment", "dont-require-permissions"},
     "/system scheduler": {"name", "interval", "start-time", "on-event", "policy", "comment"},
+    "/user group": {"name", "policy", "comment", "skin"},
+    "/user": {"name", "group", "address", "password", "comment", "disabled"},
+    "/certificate": {"name", "common-name", "days-valid", "key-size", "key-usage", "subject-alt-name", "trusted"},
+    "/ip service": {"certificate", "port", "address", "disabled", "tls-version"},
 }
 # one-shot commands (not a menu + add/set): their arguments are not checked
-COMMANDS = ("/tool fetch", "/certificate import", "/import", "/system script run")
+COMMANDS = ("/tool fetch", "/certificate import", "/certificate sign", "/import", "/system script run")
 VERBS = {"add", "set", "remove", "move", "disable", "enable", ":foreach", ":if", "}"}
 
 def strip_quoted(s):

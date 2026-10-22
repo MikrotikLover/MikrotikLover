@@ -3482,6 +3482,34 @@ async function ipsPage(tabs) {
         sw("Block attackers by itself", "An outside address that attacks is dropped on every router within a minute; for an infected device inside, the server it talks to.", se.autoblock, "autoblock")),
         h("div", { class: "toolbar ips-opts" }, h("label", { class: "field" }, "Block level", lvl), h("label", { class: "field" }, "Block for", hrs), h("label", { class: "field" }, "Routers copy", mir),
           isAdmin() ? h("button", { class: "small", onclick: (e) => { e.target.disabled = true; doIt("update"); } }, "Update signatures now") : null)),
+      (() => {
+        const routers = d.api_routers || [];
+        const addOne = async () => {
+          const ip = h("input", { placeholder: "router IP, e.g. 192.168.88.1", required: true, pattern: "\\d{1,3}(\\.\\d{1,3}){3}" });
+          const plain = h("input", { type: "checkbox" });
+          const form = h("form", { class: "form" }, h("label", { class: "field" }, "Router address (as this server reaches it)", ip),
+            h("label", { class: "chip" }, plain, "without TLS (port 8728) — only on a trusted LAN"));
+          dialog("Instant blocks on a router", form, [{ label: "Cancel" }, { label: "Make the router script", class: "primary", action: async () => {
+            if (!form.reportValidity()) return false;
+            const r = await act(api("POST", "/api/ips/api-add", { router: ip.value.trim(), plain: plain.checked }));
+            if (!r) return false;
+            const box = h("pre", { class: "code-box" }, r.script);
+            dialog(`Paste on the router ${ip.value.trim()} (Terminal)`, h("div", { class: "stack" },
+              h("div", { class: "muted small" }, "A user that may only use the API, only from this server; the API (TLS) only for this server. Then press Test."), box),
+              [{ label: "Copy", action: async () => { try { await navigator.clipboard.writeText(r.script); toast("Copied"); } catch { toast("Select the text and copy it", true); } return false; } },
+               { label: "Done", class: "primary", action: () => { load(); } }]);
+          } }]);
+        };
+        return card("Instant blocks (router API)", "~1 second instead of up to 2 minutes", h("div", { class: "stack" },
+          table([{ label: "Router", render: (r) => h("code", {}, r.ip) }, { label: "How", render: (r) => r.plain ? badge("API 8728 (no TLS)", "warn") : `API-SSL ${r.port}` },
+            { label: "Status", render: (r) => r.status === "ok" ? badge("working", "ok") : r.status && r.status.startsWith("failed") ? h("span", { class: "small" }, badge("failed", "bad"), " ", r.status.slice(8)) : h("span", { class: "muted small" }, r.status || "—"), wrap: true },
+            { label: "Last", render: (r) => (r.last || "").slice(5, 16) || "—" },
+            { label: "", render: (r) => isAdmin() ? h("div", { class: "row-actions" }, h("button", { class: "small", onclick: () => doIt("api-test", { router: r.ip }) }, "Test"),
+              h("button", { class: "small danger", onclick: () => doIt("api-del", { router: r.ip }, `Stop instant blocks on ${r.ip}? The 1-minute list keeps working.`) }, "Remove")) : null }],
+            routers, "No router yet — blocks reach the routers through the 1-minute list."),
+          isAdmin() ? h("div", { class: "toolbar" }, h("button", { class: "primary", onclick: addOne }, "+ Add a router"),
+            h("span", { class: "muted small" }, "The server puts a blocked attacker straight into the router's list the moment Suricata sees it.")) : null));
+      })(),
       card("What it saw", "by signature — switch one off if it is a false alarm", table([
         { label: "Level", render: (r) => sevBadge(r.severity) }, { label: "What", render: (r) => h("span", {}, h("b", {}, r.words), h("div", { class: "muted small" }, r.signature)), wrap: true },
         { label: "Hits", key: "hits", num: true }, { label: "Sources", key: "sources", num: true }, { label: "Last", render: (r) => String(r.last).slice(5, 16) },

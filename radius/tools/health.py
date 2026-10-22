@@ -424,6 +424,15 @@ class Checks:
                      "sudo radius-admin ips update  (the server needs internet to rules.emergingthreats.net)")
         else:
             self.add("ips", g, "Intrusion prevention", "ok", f"running, {st['rules']} signatures, copy from {', '.join(cp.get('routers', []))}")
+        if st.get("running") and st.get("watcher") is False:
+            self.add("ips-watch", g, "IPS real-time blocks", "warn", "the real-time watcher is not running: blocks take up to 2 minutes",
+                     "sudo radius-admin ips restart")
+        bad = {ip: v for ip, v in (st.get("api") or {}).items() if v != "ok"}
+        if bad:
+            self.add("ips-api", g, "IPS instant blocks (router API)", "warn", "; ".join(f"{ip}: {v}" for ip, v in bad.items())[:200],
+                     "Paste the router script again (Security → Intrusion prevention → Instant blocks), check that api-ssl is on for this server, then Test")
+        elif st.get("api"):
+            self.add("ips-api", g, "IPS instant blocks (router API)", "ok", f"{len(st['api'])} router(s) take blocks at once")
 
     def mail(self):
         """The mail server's hourly checks (mailsec.py): each problem its own line, so alerts say exactly what changed."""

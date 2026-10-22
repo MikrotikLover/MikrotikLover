@@ -1865,15 +1865,19 @@ ips_rsc() { # router part of sync.rsc: a copy of internet traffic to the server 
 ips_svc() { # start | stop the traffic copy receiver and Suricata (systemd when there is one)
     local act=$1
     if [ -d /run/systemd/system ]; then
-        if [ "$act" = start ]; then systemctl enable --now mikrotiklover-tzsp mikrotiklover-suricata >/dev/null 2>&1; systemctl restart mikrotiklover-suricata >/dev/null 2>&1
-        else systemctl disable --now mikrotiklover-suricata mikrotiklover-tzsp >/dev/null 2>&1; fi
+        if [ "$act" = start ]; then systemctl enable --now mikrotiklover-tzsp mikrotiklover-suricata mikrotiklover-ipswatch >/dev/null 2>&1
+            systemctl restart mikrotiklover-suricata mikrotiklover-ipswatch >/dev/null 2>&1
+        else systemctl disable --now mikrotiklover-ipswatch mikrotiklover-suricata mikrotiklover-tzsp >/dev/null 2>&1; fi
         return 0
     fi
     pkill -f 'mikrotiklover/tzsp2tap[.]py' 2>/dev/null || true
+    pkill -f 'mikrotiklover/ips[.]py .*watch' 2>/dev/null || true
     [ ! -s /run/mikrotiklover-suricata.pid ] || kill "$(cat /run/mikrotiklover-suricata.pid)" 2>/dev/null || true
     sleep 1; rm -f /run/mikrotiklover-suricata.pid
     [ "$act" = start ] || return 0
     nohup python3 -I /usr/local/lib/mikrotiklover/tzsp2tap.py >>/var/log/suricata/tzsp.log 2>&1 &
+    pkill -f 'mikrotiklover/ips[.]py .*watch' 2>/dev/null || true
+    nohup python3 -I "$IPSPY" --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" watch >>/var/log/suricata/ipswatch.log 2>&1 &
     sleep 2
     suricata -c "$CONF_DIR/suricata.yaml" --af-packet=mltap0 -k none -D --pidfile /run/mikrotiklover-suricata.pid >/dev/null 2>&1 \
         || warn "Suricata did not start: see /var/log/suricata/suricata.log"
@@ -1910,6 +1914,19 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 UNIT
+    cat > /etc/systemd/system/mikrotiklover-ipswatch.service <<UNIT
+[Unit]
+Description=MikrotikLover IPS: Suricata alerts in real time -> blocks (router API at once, 1-minute list as backup)
+After=mariadb.service mikrotiklover-suricata.service
+
+[Service]
+ExecStart=/usr/bin/python3 -I /usr/local/lib/mikrotiklover/ips.py --cnf $CONF_DIR/my.cnf --db $DB_NAME watch
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
     systemctl daemon-reload >/dev/null 2>&1 || true
     systemctl disable --now suricata >/dev/null 2>&1 || true      # the package's own service (eth0) is not used
 }
@@ -1940,6 +1957,31 @@ cmd_ips() { # intrusion prevention: Suricata on a copy of the routers' internet 
             cmd_policy build >/dev/null || die "router rules not built"
             ok "IPS off (routers stop sending the copy within 15 minutes; blocked addresses run out by themselves)" ;;
         json) ips_py status ;;
+        api)
+            local act=${1:-list}; shift || true
+            local R=(python3 -I /usr/local/lib/mikrotiklover/rosapi.py)
+            case $act in
+                add)
+                    [ -n "${1:-}" ] || die "usage: radius-admin ips api add ROUTER-IP [--plain] [--port N]"
+                    local sip; sip=$(setting_get server_ip)
+                    [[ $sip =~ ^[0-9]+(\.[0-9]+){3}$ ]] || die "Set the server's IP as the routers see it first: radius-admin security quarantine-server 192.168.88.10"
+                    local out; out=$("${R[@]}" add "$@" --server "$sip" 2>&1) || die "$out"
+                    echo "$out" > "$ROUTER_DIR/api-$1.rsc"; chmod 600 "$ROUTER_DIR/api-$1.rsc"
+                    echo "$out"
+                    ok "Paste these lines in the router's Terminal ($1), then: radius-admin ips api test $1" ;;
+                json) "${R[@]}" list ;;
+                list) "${R[@]}" list | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+for ip, r in d.items():
+    print(f"{ip:15} port {r["port"]} {"plain" if r.get("plain") else "TLS"}  user {r["user"]:8} {r.get("status", "")[:60]:60} {r.get("last", "")}")
+if not d:
+    print("no router set up for instant blocks (radius-admin ips api add ROUTER-IP)")' ;;
+                test|del|forget-cert) [ -n "${1:-}" ] || die "usage: radius-admin ips api $act ROUTER-IP"
+                    local out; out=$("${R[@]}" "$act" "$1" 2>&1) || die "$out"; [ "$act" = del ] && rm -f "$ROUTER_DIR/api-$1.rsc"; ok "$out" ;;
+                script) [ -s "$ROUTER_DIR/api-${1:-x}.rsc" ] || die "no script for ${1:-?} (radius-admin ips api add ROUTER-IP)"; cat "$ROUTER_DIR/api-$1.rsc" ;;
+                *) die "usage: radius-admin ips api add|list|test|del|script|forget-cert [ROUTER-IP]" ;;
+            esac ;;
         restart) [ "$(setting_get ips_on)" = 1 ] || die "IPS is off (radius-admin ips on)"; ips_py config >/dev/null; ips_svc start; ok "IPS restarted" ;;
         scan) [ "$(setting_get ips_on)" = 1 ] || [ "${1:-}" = --force ] || return 0; ips_py scan ;;
         update) local out rc=0; out=$(ips_py update 2>&1) || rc=$?; [ $rc = 0 ] && ok "$out" || { warn "$out"; return 1; } ;;
@@ -3297,6 +3339,7 @@ Blocking policies + router auto-sync (dashboard → Blocking)
   ips install|on|off|status            intrusion prevention (Suricata on a copy of the routers' internet traffic)
   ips alerts [--days N] · ips update · ips rule on|off SID · ips autoblock on|off · ips level high|medium
   ips hours N · ips mirror first|all · ips block|unblock|allow|disallow IP
+  ips api add|test|del|script ROUTER-IP · ips api list   instant blocks (~1 s) through the router's API (api-ssl)
   mail set ip IP domain DOMAIN [host H] [public IP] [dkim SEL] [webmail PORT]   the mail server on the LAN (MDaemon …)
   mail status · mail doors · mail guard|smtp-out on|off · mail rate N · mail trusted OBJECT|none · mail logs · mail checklist KEY on|off
   policy on|off NAME                    turn a policy off (kept, users stay in it, no router rules) or on again

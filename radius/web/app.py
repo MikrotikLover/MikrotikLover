@@ -3228,7 +3228,12 @@ def ips_get():
         r["off"] = int(r["sid"]) in disabled
     for r in blocks:
         r["cc"] = cc.get(r["ip"], "")
-    return jsonify(status=st, settings={"on": sett.get("ips_on") == "1", "autoblock": sett.get("ips_autoblock", "1") != "0",
+    ok2, out2 = radius_admin(["ips", "api", "json"], log=False, timeout=30)
+    try:
+        api_routers = [{"ip": k, **v} for k, v in json.loads(out2).items()] if ok2 else []
+    except ValueError:
+        api_routers = []
+    return jsonify(api_routers=api_routers, status=st, settings={"on": sett.get("ips_on") == "1", "autoblock": sett.get("ips_autoblock", "1") != "0",
                                         "level": sett.get("ips_block_level") or "high", "hours": int(sett.get("ips_block_hours") or 24),
                                         "mirror": sett.get("ips_mirror") or "first", "server_ip": sett.get("server_ip", "")},
                    counts={r["severity"]: {"hits": int(r["hits"]), "sources": int(r["sources"])} for r in counts},
@@ -3239,9 +3244,19 @@ def ips_get():
 @app.post("/api/ips/<action>")
 @login_required("admin")
 def ips_action(action):
-    if action not in ("on", "off", "update", "restart", "install", "autoblock", "level", "hours", "mirror", "rule", "block", "unblock", "allow", "disallow"):
+    if action not in ("on", "off", "update", "restart", "install", "autoblock", "level", "hours", "mirror", "rule", "block", "unblock", "allow", "disallow",
+                      "api-add", "api-test", "api-del"):
         abort(404)
     data = body()
+    if action.startswith("api-"):
+        rip = field(data, "router", re.compile(r"^\d{1,3}(\.\d{1,3}){3}$"), required=True)
+        if action == "api-add":
+            ok, msg = radius_admin(["ips", "api", "add", rip] + (["--plain"] if data.get("plain") else []), timeout=60)
+            if not ok:
+                return result(ok, msg)
+            ok, script = radius_admin(["ips", "api", "script", rip], log=False, timeout=30)
+            return result(ok, "Paste the lines on the router, then press Test", script=script)
+        return result(*radius_admin(["ips", "api", "test" if action == "api-test" else "del", rip], timeout=60))
     ip_re = re.compile(r"^[0-9a-fA-F.:]{3,45}$")
     if action in ("on", "off", "update", "restart", "install"):
         return result(*radius_admin(["ips", action], timeout=900))
