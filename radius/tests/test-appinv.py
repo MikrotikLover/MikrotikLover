@@ -76,6 +76,23 @@ check("per day: lookups + devices", per_day[(d1, "g.whatsapp.net")] == [2, {ali,
 dsql = appinv.domain_sql(hosts, per_day, d1)
 check("domain SQL: days re-read are replaced, first_seen never later",
       f"DELETE FROM ml_domain_day WHERE day >= '{d1}';" in dsql and "first_seen=LEAST(first_seen" in dsql)
+# app servers + what kind of device each one is
+srv = appinv.servers(recs, cdnmap.catalog())
+check("servers: app + address from the DNS answer", ("facebook.com", "203.0.113.9") in srv and srv[("whatsapp.com", "203.0.113.9")]["n"] == 2, sorted(srv))
+check("servers: shared CDN / unknown names give no app server", not any(k[0] in ("cloudfront.net", "some-unknown-blog.org") for k in srv))
+andro, iph, win, weak = "10.0.0.21", "10.0.0.22", "10.0.0.23", "10.0.0.24"
+look(T0 + 100, andro, "connectivitycheck.gstatic.com"); look(T0 + 101, andro, "play.googleapis.com")
+look(T0 + 102, iph, "captive.apple.com"); look(T0 + 103, win, "www.msftconnecttest.com"); look(T0 + 104, win, "settings-win.data.microsoft.com")
+look(T0 + 105, weak, "play.googleapis.com")                       # one weak hint only
+devs = appinv.devices(cdnlearn.parse(lines), lambda ip, t: users.get(ip, ""))
+check("device kind: Android, Apple, Windows from their system names", (devs[andro]["os"], devs[iph]["os"], devs[win]["os"]) == ("android", "apple", "windows"),
+      {k: v["os"] for k, v in devs.items()})
+check("  ... evidence kept", "connectivitycheck.gstatic.com" in devs[andro]["evidence"], devs[andro])
+check("  ... one weak hint is not enough", weak not in devs)
+check("  ... devices without system names are not guessed", ali not in devs)
+xs = appinv.extra_sql(srv, devs)
+check("SQL: servers + devices, first_seen never later", "INSERT INTO ml_app_server" in xs and "INSERT INTO ml_device" in xs and "first_seen=LEAST(first_seen" in xs)
+
 # hourly rebuild reads the rotated log too: after the nightly rotation yesterday's lines are in dns.log.1
 import gzip
 d = tempfile.mkdtemp()

@@ -2,12 +2,13 @@
 """Health check: every part of the server with a green / yellow / red mark and, when something is
 wrong, what to do about it.
 
-  health.py [--json] [--cnf FILE] [--db NAME]      (radius-admin doctor runs it as root)
+  health.py [--json] [--save] [--cnf FILE] [--db NAME]   (radius-admin doctor runs it as root;
+                                                         --save: also /var/lib/mikrotiklover/health.json, hourly)
 
 Each check -> {"id", "group", "name", "status": ok|warn|fail, "detail", "fix"}.
 """
 import glob, json, os, re, shutil, socket, ssl, subprocess, sys, time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 CONF_DIR = "/etc/mikrotiklover-radius"
 CERT = "/etc/freeradius/3.0/certs/mikrotiklover/server.pem"
@@ -51,6 +52,21 @@ def file_age(path):
         return time.time() - os.path.getmtime(path)
     except OSError:
         return None
+
+
+def when_active(spec):
+    """A moment when a rule with time=SPEC (RouterOS: 9h-17h,mon,tue …) is active: the next listed day, start + 1 min."""
+    rng, *days = spec.split(",")
+    secs = lambda t: sum(int(n) * {"h": 3600, "m": 60, "s": 1}[u] for n, u in re.findall(r"(\d+)([hms])", t))  # noqa: E731
+    start = secs(rng.split("-")[0]) + 60
+    names = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    want = [names.index(d) for d in days if d in names] or list(range(7))
+    now = datetime.now()
+    for i in range(8):
+        d = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=i)
+        if d.weekday() in want:
+            return d + timedelta(seconds=start)
+    return now
 
 
 class Checks:
@@ -225,8 +241,143 @@ class Checks:
             self.add(f"router:{addr}", g, f"{name} ({addr})", "ok" if up else ("warn" if last else "fail"), detail,
                      "router off / cable / VPN down? If it is up: allow ping from this server, and RADIUS 1812/1813 to this server")
 
+    # -------------------------------------------------------------- blocking, router sync, data
+    def blocking(self):
+        g = "Blocking & data"
+        rdir, pdir = f"{STATE_DIR}/router", f"{STATE_DIR}/policies"
+        lib = os.environ.get("MLHEALTH_LIB", "/usr/local/lib/mikrotiklover")
+        pols = sorted(glob.glob(f"{pdir}/*.txt"))
+        pols = [p for p in pols if not p.endswith("/README.txt")]
+        try:
+            off = {l.strip() for l in open(f"{pdir}/.off", encoding="utf-8") if l.strip()}
+        except OSError:
+            off = set()
+        built = file_age(f"{rdir}/webfilter-policies.rsc")
+        newest = min([file_age(p) for p in pols + [f"{pdir}/.off"] if file_age(p) is not None] or [None]) if pols else None
+        if built is None:
+            self.add("rules", g, "Router rules", "fail", "not built yet", "sudo radius-admin policy build  (or Blocking → Overview → Rebuild now)")
+            return
+        stale = newest is not None and newest < built                # a policy file newer than the rules
+        self.add("rules", g, "Router rules", "warn" if stale else "ok",
+                 f"built {age_text(built)}" + (" — a policy changed after that" if stale else ", after the last policy change"),
+                 "sudo radius-admin policy build  (or Blocking → Overview → Rebuild now)")
+        # the generated RouterOS files must import without errors
+        lint = os.path.join(lib, "rsclint.py")
+        files = sorted(glob.glob(f"{rdir}/*.rsc"))
+        if os.path.exists(lint) and files:
+            rc, out = sh([sys.executable, "-I", lint] + files, 60)
+            bad = [l for l in out.splitlines() if l and not l.startswith("ok")]
+            self.add("rsc", g, "Router scripts", "fail" if rc or bad else "ok",
+                     f"{len(files)} file(s) checked, all fine" if not (rc or bad) else f"{len(bad)} problem(s): {bad[0][:160] if bad else out[:160]}",
+                     "sudo radius-admin policy build; if it stays, send this to support (the rules would not import on the router)")
+        # every policy that is on is in the router file; every category it blocks has names in it
+        try:
+            rsc = open(f"{rdir}/webfilter-policies.rsc", encoding="utf-8", errors="replace").read()
+        except OSError:
+            rsc = ""
+        missing, empty, tested, wrong = [], [], 0, []
+        for p in pols:
+            name = os.path.basename(p)[:-4]
+            if name in off:
+                continue
+            text = open(p, encoding="utf-8", errors="replace").read()
+            rules = [l.split("#", 1)[0].strip() for l in text.splitlines()]
+            rules = [l for l in rules if l]
+            if rules and f"jump-target=wfp-{name} " not in rsc:
+                missing.append(name)
+            for l in rules:
+                k, _, v = l.partition(" ")
+                v = v.split(" time=")[0].strip()
+                if k == "block" and v not in ("keywords",) and f"chain=wf-{v} " in rsc:
+                    if rsc.count(f"chain=wf-{v} ") < 2:                  # only the final 'return' rule: nothing blocked
+                        empty.append(v)
+        # the finder agrees: a sample name of each blocking rule is blocked by the policy (at a time it is active)
+        try:
+            sys.path.insert(0, lib)
+            import whyblocked
+            for p in pols:
+                name = os.path.basename(p)[:-4]
+                if name in off:
+                    continue
+                text = open(p, encoding="utf-8", errors="replace").read()
+                for l in text.splitlines():
+                    l = l.split("#", 1)[0].strip()
+                    k, _, v = l.partition(" ")
+                    v = v.split(" time=")[0].strip()
+                    host = None
+                    if k == "block" and v not in ("keywords", "custom"):
+                        host = next((x.strip().lstrip("*.") for x in open(os.path.join(lib, "webfilter", "categories", v + ".txt"), encoding="utf-8", errors="replace")
+                                     if x.strip() and not x.startswith("#") and "*" not in x.strip().lstrip("*.")), None) \
+                            if os.path.exists(os.path.join(lib, "webfilter", "categories", v + ".txt")) else None
+                    elif k == "block-site" and v:
+                        host = "www." + v
+                    elif k == "block-word" and v:
+                        host = f"test{v.lstrip('^')}.example" if not v.startswith("^") else f"{v[1:]}test.example"
+                    if not host:
+                        continue
+                    t = re.search(r"time=(\S+)", l)
+                    at = when_active(t.group(1)) if t else datetime.now()
+                    r = whyblocked.explain(host, name, text, at, os.path.join(lib, "webfilter"))
+                    tested += 1
+                    if r["verdict"] != "blocked":
+                        wrong.append(f"{name}: {k} {v} ({host} → {r['verdict']})")
+        except Exception as e:  # noqa: BLE001
+            wrong.append(f"self-test could not run: {e}")
+        on = len([p for p in pols if os.path.basename(p)[:-4] not in off])
+        bad = missing + [f"category {c} has no names" for c in sorted(set(empty))] + wrong
+        self.add("policies", g, "Policies self-test", "fail" if missing or wrong else ("warn" if empty else "ok"),
+                 f"{on} policies on" + (f", {len(off)} off" if off else "") + f", {tested} rules tried: every one blocks its own sample"
+                 if not bad else "; ".join(bad[:4]) + (f" … +{len(bad) - 4}" if len(bad) > 4 else ""),
+                 "sudo radius-admin policy build; then Blocking → Activity → Why blocked? for the rule named here")
+        # did the routers take the rules?
+        try:
+            ver = open(f"{rdir}/version", encoding="utf-8").read().strip()
+        except OSError:
+            ver = ""
+        try:
+            rows = self.sql("SELECT router_ip, what, TIMESTAMPDIFF(SECOND, at, NOW()), version FROM ml_router_fetch ORDER BY router_ip")
+        except RuntimeError:
+            rows = []
+        routers = {}
+        for ip, what, age, v in rows:
+            routers.setdefault(ip, {})[what] = (int(age), v)
+        if not routers:
+            self.add("sync", g, "Routers take the rules", "warn", "no router has fetched the auto-sync script yet",
+                     "import the auto-sync script on each router once: Blocking → Overview → Router auto-sync")
+        for ip, r in sorted(routers.items()):
+            age, _ = r.get("version", (10 ** 9, ""))
+            s_age, s_ver = r.get("sync", (None, ""))
+            if age > 3600:
+                self.add(f"sync:{ip}", g, f"Router {ip} takes the rules", "fail",
+                         f"last asked for new rules {age_text(age)}" + (f", has version {s_ver[:12]}" if s_ver else ""),
+                         "router off, or its scheduler 'mikrotiklover-autosync' stopped / the server address changed — re-import the auto-sync script")
+            elif ver and s_ver != ver and age < 1800 and built < 1800:
+                self.add(f"sync:{ip}", g, f"Router {ip} takes the rules", "ok", f"asked {age_text(age)}; the newest rules (built {age_text(built)}) come at its next check")
+            else:
+                self.add(f"sync:{ip}", g, f"Router {ip} takes the rules", "ok" if s_ver == ver or not ver else "warn",
+                         f"asked {age_text(age)}, " + ("has the newest rules" if s_ver == ver else f"still has version {s_ver[:12] or '?'} (newest {ver[:12]})"),
+                         "the router asks every 15 minutes; if this stays: check the router log for 'mikrotiklover' import errors")
+        # data the dashboard needs
+        try:
+            last = self.sql("SELECT TIMESTAMPDIFF(SECOND, MAX(last_seen), NOW()) FROM ml_app")[0][0]
+            age = None if last in ("", "NULL") else int(last)
+            self.add("apps", g, "Apps on network (hourly)", "ok" if age is not None and age < 26 * 3600 else "warn",
+                     f"last app seen {age_text(age)}" if age is not None else "no app seen yet",
+                     "the router must send its DNS log here: sudo radius-admin dnslog on, and the router's DNS must be used by the devices")
+        except (RuntimeError, ValueError, IndexError):
+            pass
+        if sh(["pgrep", "-f", "flowcollector[.]py"])[0] == 0:
+            try:
+                last = self.sql("SELECT TIMESTAMPDIFF(SECOND, MAX(bucket), NOW()) FROM traffic_site")[0][0]
+                age = None if last in ("", "NULL") else int(last)
+                self.add("traffic", g, "Traffic data", "ok" if age is not None and age < 3 * 3600 else "warn",
+                         f"newest data {age_text(age)}" if age is not None else "no traffic data yet",
+                         "the router must send traffic flow to this server (Router setup → Traffic flow)")
+            except (RuntimeError, ValueError, IndexError):
+                pass
+
     def run(self):
-        for f in (self.services, self.jobs, self.system, self.routers):
+        for f in (self.services, self.jobs, self.system, self.routers, self.blocking):
             try:
                 f()
             except Exception as e:  # noqa: BLE001 — one broken check must not hide the others
@@ -239,8 +390,15 @@ def main():
     opt = lambda k, d: a[a.index(k) + 1] if k in a and a.index(k) + 1 < len(a) else d  # noqa: E731
     res = Checks(opt("--cnf", f"{CONF_DIR}/my.cnf"), opt("--db", "radius")).run()
     worst = "fail" if any(r["status"] == "fail" for r in res) else ("warn" if any(r["status"] == "warn" for r in res) else "ok")
+    doc = {"status": worst, "checked": time.strftime("%Y-%m-%d %H:%M:%S"), "host": socket.gethostname(), "checks": res}
+    if "--save" in a:                                     # the hourly check: the dashboard shows it, alerts.py reports changes
+        tmp = f"{STATE_DIR}/health.json.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(doc, f)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, f"{STATE_DIR}/health.json")
     if "--json" in a:
-        print(json.dumps({"status": worst, "checked": time.strftime("%Y-%m-%d %H:%M:%S"), "host": socket.gethostname(), "checks": res}))
+        print(json.dumps(doc))
     else:
         mark = {"ok": "\033[32m✔\033[0m", "warn": "\033[33m!\033[0m", "fail": "\033[31m✘\033[0m"}
         group = None

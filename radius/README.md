@@ -573,9 +573,16 @@ sudo radius-admin apps update               # abhi update karein (cron har ghant
 
 **Dashboard → Apps on network:**
 - Category tabs: video, social, gaming, messaging...
-- **Users**: kaun kaun se device ya user yeh app chala raha hai.
-- **Domains**: app ki domain list (CDN detective).
-- **⬇ Block**: is app ke tamam maloom domains band karne ka RouterOS script.
+- **Device kind filter**: All devices · **Android** · iPhone / Apple · Windows. Har app ke saath "Android 3 · iPhone 1".
+  - Device ki qism **khud pehchani jati hai**: phone ka system khud jo naam poochta hai — Android: `connectivitycheck.gstatic.com`, Play Store, Huawei / Xiaomi checks; iPhone: `captive.apple.com`; Windows: `msftconnecttest.com`. Ek kamzor ishara kaafi nahi (kam az kam ek pakka check). Table `ml_device`.
+- **Details** (app par click) — sab kuch ek jagah:
+  - **Ports and protocols** (traffic collector): maslan WhatsApp UDP 3478, TCP 5222.
+  - **Server addresses**: DNS jawab se app ke server IPs, kis naam se poocha, kab (table `ml_app_server`, hamesha ke liye).
+  - **Names**: network par dekhe gaye saare domains / subdomains, lookups, aakhri IPs; catalog ke naam bhi.
+  - **Devices**: kaun se device / user, aur un ki qism (Android / iPhone / Windows).
+- **⬇ Block**: is app ke tamam maloom domains band karne ka RouterOS script; ya "Block in a policy".
+- **Nayi app ka alert** (Settings → Alerts → New apps): "📱 New app on the network: Zing Clips (video) — 3 device(s) (2 Android)".
+- Tests: `tests/test-apps-health.sh` (API ke saath), `tests/test-appinv.py`, `tests/test-alerts.py`.
 
 > **Note:**
 > - Router par DNS logging on honi chahiye: `radius-admin dnslog on` aur `dns-logging.rsc`.
@@ -1220,6 +1227,14 @@ block-site example-bet.com       # sirf yeh site band (time= bhi chalta hai)
 
 Kya check hota hai: FreeRADIUS (chal raha hai + 1812/1813 par sun raha hai), database aur us ki tables, dashboard (web + nginx), DNS logger (aakhri lookup kab aaya), traffic collector, router logs, cron, hourly jobs aur weekly updates (fail hue?), aakhri backup kitna purana, off-site copy, disk, memory, CPU, certificate kitne din valid, clock sync, alerts on hain ya nahi, aur har router (ping + aakhri login / accounting).
 
+- **Tension free:** check **har ghante khud** chalta hai (hourly job, `doctor --save` → `/var/lib/mikrotiklover/health.json`). Kuch kharab ho to **Telegram / WhatsApp / email** khud aata hai ("🩺 Problem: … Fix: …"), aur theek hone par "✅ Fine again" (Settings → Alerts → Health check).
+- Dashboard → Health check: upar **ek saaf jawab** ("Everything is working" / "2 things to look at" / "1 problem — fix now"), phir **Your to-do** (sirf masle, laal pehle, har ek ke saath *How to fix*), **Check now**, aur **Copy report** (WhatsApp / email par bhejne ke liye text). Baqi saare checks neeche band.
+- **Naya group "Blocking & data":**
+  - **Router rules** policy badalne ke baad bane?
+  - **Router scripts** lint (import mein error to nahi aayega);
+  - **Policies self-test**: har chalu policy router file mein hai, har band category mein naam hain, aur har rule ki ek misaal site (category ki pehli site, block-site, block-word) "Why blocked?" ke hisaab se waqai band hai — apne waqt par;
+  - **Routers take the rules**: har router ne aakhri dafa kab naye rules maange aur kya us ke paas naya version hai (server har fetch note karta hai: `ml_router_fetch`); 1 ghante se zyada chup → laal;
+  - **Apps on network** aur **Traffic data** taaza hain?
 - `sudo radius-admin doctor --json` scripts / monitoring ke liye; masla ho to exit code 2.
 - **Tested:** container restart ke baad sab services band thin to doctor ne har aik ko laal dikhaya; services chalane ke baad sabz. Router jo ping na de laal, range wala peela. `tests/test-health.py` (25 checks) har check ko nakli haalat mein chalata hai.
 

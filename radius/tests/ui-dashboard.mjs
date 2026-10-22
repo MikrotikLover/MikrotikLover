@@ -248,13 +248,17 @@ try {
   const waRow = page.locator("tr", { has: page.locator("b", { hasText: /^WhatsApp$/ }) }).first();
   if (await waRow.count()) {
     await shot(page, "32-apps");
-    await waRow.getByRole("button", { name: "Users", exact: true }).click();
-    await page.locator("dialog[open] table, dialog[open] .empty").first().waitFor({ timeout: 15000 });
-    await shot(page, "33-app-users");
-    await dlgButton(page, "Close").click();
+    await waRow.getByRole("link", { name: "Details", exact: true }).click();
+    await page.locator("header h1", { hasText: "WhatsApp" }).waitFor({ timeout: 15000 });
+    for (const t of ["Ports and protocols", "Server addresses", "Names (domains and subdomains)", "Devices that use it"])
+      await page.locator(".card h2", { hasText: t }).waitFor({ timeout: 15000 });
+    await shot(page, "33-app-detail");
+    await go(page, "#/apps", "Apps on network");
+    await page.locator(".subtabs a", { hasText: /^Android/ }).click();
+    await page.locator(".subtabs a.active", { hasText: /^Android/ }).waitFor({ timeout: 15000 });
     await go(page, "#/apps/video", "Apps on network");
     await page.locator(".tabs a.active", { hasText: /^video/ }).waitFor({ timeout: 15000 });
-    ok("apps on network: list, who uses an app, category filter");
+    ok("apps on network: list, app details (ports, servers, names, devices), Android filter, category filter");
   } else console.log("     (no app inventory on this server — skipped)");
 
   // blocking: make a policy in the editor, give it to a user, WhatsApp only, router script, delete
@@ -366,7 +370,7 @@ try {
     const ac = page.locator(".card", { has: page.locator("h2", { hasText: /^Alerts/ }) });
     await ac.waitFor({ timeout: 30000 });
     await page.waitForLoadState("networkidle");
-    if ((await ac.locator(".alert-events input[type=checkbox]").count()) !== 12) throw new Error("alerts: 12 event switches expected");
+    if ((await ac.locator(".alert-events input[type=checkbox]").count()) !== 14) throw new Error("alerts: 14 event switches expected");
     for (const ch of ["Telegram", "WhatsApp", "Email"]) await ac.locator(".sub-card", { hasText: ch }).first().waitFor();
     if (/AAFake|SmtpPass/.test(await page.content())) throw new Error("alerts: a secret reached the browser");
     await ac.locator("input[name=WHATSAPP_PHONE]").fill("12ab");
@@ -436,7 +440,7 @@ try {
     ["#/data/site", "Data usage", "12-data-site"], ["#/data/ip", "Data usage", "13-data-ip"],
     ["#/settings", "Settings", "14-settings"], ["#/health", "Health check", "14b-health"], ["#/speed", "Speed schedule", "14c-speed"], ["#/insights", "Insights", "14d-insights"], ["#/security/reports", "Security", "14e-security-reports"], ["#/hotspot", "Hotspot page", "14f-hotspot"], ["#/blocking/parental", "Blocking", "14g-parental"], ["#/social", "Social WiFi", "14h-social"], ["#/setup", "Router setup", "14i-router-setup"], ["#/ipbind", "IP binding", "14j-ipbind"], ["#/traffic", "Traffic graphs", "14k-traffic"], ["#/departments", "Departments", "14l-departments"], ["#/blocking/why/facebook.com/kid1", "Blocking", "14m-why-blocked"], ["#/blocking/why/XVR6JW", "Blocking", "14n-block-code"], ["#/blocking/requests", "Blocking", "14o-requests"], ["#/blocking/apps", "Blocking", "14p-app-profiles"], ["#/blocking/web", "Blocking", "14q-allowed-websites"], ["#/blocking/guide", "Blocking", "14r-blocking-guide"], ["#/blocking/overview", "Blocking", "14s-blocking-overview"]]) {
     await go(page, hash, title);
-    if (hash === "#/health") await page.locator(".health-row").first().waitFor({ timeout: 60000 });
+    if (hash === "#/health") { await page.locator(".health-hero").waitFor({ timeout: 60000 }); await page.locator(".health-row").first().waitFor({ timeout: 60000 }); }
     if (hash === "#/insights") await page.locator(".insight-words li").first().waitFor({ timeout: 60000 });
     await page.waitForTimeout(700);
     await shot(page, name);

@@ -11,7 +11,7 @@
   alerts.py log [N]                      last N alerts sent
 Common options: --cnf FILE --db NAME (database), --conf FILE (settings), --state FILE.
 
-Events (EVENTS=, comma separated): security quarantine router service jobs disk expiring anomaly requests summary weekly
+Events (EVENTS=, comma separated): security quarantine router service jobs disk expiring anomaly requests newapp health summary weekly
   alerts.py weekly                       this week's report (sent by check on Monday at SUMMARY_HOUR)
   alerts.py monthly [--month YYYY-MM]    security report PDF (sent by check on the 1st at SUMMARY_HOUR)
 Settings live in /etc/mikrotiklover-radius/alerts.conf (root only, mode 600).
@@ -24,8 +24,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # insights.py (
 CONF = "/etc/mikrotiklover-radius/alerts.conf"
 STATE = "/var/lib/mikrotiklover/alerts-state.json"
 UPDATES = "/var/lib/mikrotiklover/updates.txt"
-EVENTS = ("security", "quarantine", "router", "service", "jobs", "disk", "expiring", "anomaly", "requests", "summary", "weekly", "monthly")
-DEFAULT_EVENTS = "security,quarantine,router,service,jobs,disk,anomaly,requests,summary,weekly,monthly"
+EVENTS = ("security", "quarantine", "router", "service", "jobs", "disk", "expiring", "anomaly", "requests", "newapp", "health", "summary", "weekly", "monthly")
+DEFAULT_EVENTS = "security,quarantine,router,service,jobs,disk,anomaly,requests,newapp,health,summary,weekly,monthly"
+HEALTH = "/var/lib/mikrotiklover/health.json"
 KEYS = {
     "TELEGRAM_TOKEN": r"^\d{3,15}:[A-Za-z0-9_-]{20,100}$",
     "TELEGRAM_CHAT": r"^-?\d{1,20}$|^@[A-Za-z0-9_]{4,64}$",
@@ -426,6 +427,38 @@ def check(c, db, state, now=None, ping_fn=ping, running_fn=running, updates=UPDA
                               + f". Dashboard → Blocking → Requests, or: radius-admin unblock approve {rid} 1h"))
         except Exception:                          # noqa: BLE001 — table missing on an old install
             pass
+    if "newapp" in ev:
+        # an app never seen before on the network (apps inventory, hourly), with the kind of devices using it
+        try:
+            since = state.get("newapp_at")
+            if not since:
+                state["newapp_at"] = db.rows("SELECT DATE_FORMAT(NOW(), '%Y-%m-%d %H:%i:%s')")[0][0]
+            else:
+                rows = db.rows(f"""SELECT a.site, a.app, a.category, DATE_FORMAT(a.first_seen, '%Y-%m-%d %H:%i:%s'),
+                                          COUNT(DISTINCT d.client_ip), COUNT(DISTINCT IF(dv.os='android', d.client_ip, NULL)),
+                                          COUNT(DISTINCT IF(dv.os='apple', d.client_ip, NULL))
+                                   FROM ml_app a LEFT JOIN ml_app_day d ON d.site=a.site LEFT JOIN ml_device dv ON dv.client_ip=d.client_ip
+                                   WHERE a.first_seen > '{since}' GROUP BY a.site ORDER BY a.first_seen LIMIT 20""")
+                for site, app, cat, first, n, andro, apple in rows:
+                    state["newapp_at"] = max(state["newapp_at"], first)
+                    kinds = ", ".join(x for x in (f"{andro} Android" if int(andro or 0) else "", f"{apple} iPhone" if int(apple or 0) else "") if x)
+                    found.append(("newapp", f"📱 New app on the network: {app} ({cat}) — {n} device(s){' (' + kinds + ')' if kinds else ''}. "
+                                            f"Dashboard → Apps on network → {app}: names, servers, ports"))
+        except Exception:                          # noqa: BLE001 — tables missing on an old install
+            pass
+    if "health" in ev:
+        # the hourly health check (radius-admin doctor --save): a check that fails, and when it is fine again
+        try:
+            hc = json.load(open(HEALTH, encoding="utf-8"))
+            if time.time() - os.path.getmtime(HEALTH) < 3 * 3600:
+                for c in hc.get("checks", []):
+                    r = updown(state, f"health:{c['id']}", c.get("status") != "fail", need=1, alert_new=True)
+                    if r == "down":
+                        found.append(("health", f"🩺 Problem: {c['name']} — {c.get('detail', '')}" + (f" Fix: {c['fix']}" if c.get("fix") else "")))
+                    elif r == "up":
+                        found.append(("health", f"✅ Fine again: {c['name']}"))
+        except (OSError, ValueError):
+            pass
     if "router" in ev:
         for addr, name in db.rows("SELECT nasname, shortname FROM nas ORDER BY nasname"):
             if "/" in addr or not re.match(r"^[A-Za-z0-9.:-]+$", addr):
@@ -505,7 +538,7 @@ def compose(found):
     kinds = sorted({k for k, _ in found})
     names = {"security": "security", "quarantine": "quarantine", "router": "routers", "service": "services",
              "jobs": "jobs", "disk": "disk", "expiring": "expiring users", "anomaly": "unusual data use",
-             "requests": "unblock requests"}
+             "requests": "unblock requests", "newapp": "new apps", "health": "health check"}
     return ",".join(kinds), f"{len(found)} alerts: " + ", ".join(names.get(k, k) for k in kinds), "\n".join(lines)
 
 

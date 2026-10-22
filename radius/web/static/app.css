@@ -393,3 +393,11 @@ dialog label.field > select { width: 100%; text-overflow: ellipsis; }
 .pol-table td.pol-switch { white-space: nowrap; }
 .word-warn { color: var(--warn); }
 .rule-row.item > select:not(.tp-sel) { flex: 0 0 auto; width: auto; }
+.app-link { color: inherit; } .app-link:hover b { color: var(--accent); }
+/* health: one clear answer on top */
+.health-hero { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; border-left: 6px solid var(--ok); }
+.health-hero.warn { border-left-color: var(--warn); } .health-hero.fail { border-left-color: var(--bad); }
+.hh-mark { width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; font-size: 26px; font-weight: 800; background: var(--ok-soft); color: var(--ok); flex: none; }
+.health-hero.warn .hh-mark { background: var(--warn-soft); color: var(--warn); } .health-hero.fail .hh-mark { background: var(--bad-soft); color: var(--bad); }
+.hh-title { font-size: 20px; font-weight: 700; letter-spacing: -.01em; }
+details.card > summary { font-weight: 700; }

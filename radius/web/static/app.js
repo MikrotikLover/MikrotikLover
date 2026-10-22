@@ -755,24 +755,41 @@ ROUTES.data = async (by = "site") => {
 
 // ------------------------------------------------------------------ settings
 // ------------------------------------------------------------------ health check
-ROUTES.health = async () => {
-  shell("Health check", h("div", { class: "empty" }, "Checking every part of the server …"));
-  const r = await api("GET", "/api/health");
+ROUTES.health = async (fresh) => {
+  let r = null;
+  if (fresh !== "now") r = await api("GET", "/api/health?saved=1").catch(() => null);
+  if (!r || !r.checks) {
+    shell("Health check", h("div", { class: "empty" }, "Checking every part of the server … (about half a minute)"));
+    r = await api("GET", "/api/health");
+  }
   const n = { ok: 0, warn: 0, fail: 0 };
   r.checks.forEach((c) => n[c.status]++);
   const mark = { ok: "✔", warn: "!", fail: "✘" };
   const groups = [...new Set(r.checks.map((c) => c.group))];
-  const head = h("div", { class: "grid g-tiles" },
-    tile("Overall", h("span", { class: `health-dot ${r.status}` }, { ok: "All good", warn: "Needs a look", fail: "Problem" }[r.status]), `checked ${r.checked.slice(11, 16)} on ${r.host}`),
-    tile("OK", String(n.ok), "green"), tile("Warnings", String(n.warn), "yellow"), tile("Problems", String(n.fail), "red"));
-  const body = groups.map((g) => card(g, null, h("div", { class: "health-list" }, r.checks.filter((c) => c.group === g).map((c) =>
-    h("div", { class: `health-row ${c.status}` }, h("span", { class: "health-mark", "aria-label": c.status }, mark[c.status]),
-      h("div", { class: "grow" }, h("b", {}, c.name), h("div", { class: "muted" }, c.detail),
-        c.fix ? h("div", { class: "health-fix" }, "How to fix: ", h("code", {}, c.fix)) : null))))));
-  shell("Health check", h("div", { class: "stack" }, head,
-    h("div", { class: "toolbar" }, h("span", { class: "muted grow" }, "Green = working · yellow = check when you can · red = fix now. Same on the server: sudo radius-admin doctor"),
-      h("button", { onclick: () => route() }, "Check again")),
-    h("div", { class: "grid g-2" }, body)));
+  const todo = r.checks.filter((c) => c.status !== "ok").sort((x, y) => (x.status === "fail" ? 0 : 1) - (y.status === "fail" ? 0 : 1));
+  const since = Math.max(0, Math.round((Date.now() - new Date(r.checked.replace(" ", "T")).getTime()) / 60000));
+  const when = r.saved ? `automatic check ${since < 2 ? "just now" : since < 120 ? since + " min ago" : Math.round(since / 60) + " h ago"} · runs every hour by itself` : `checked just now`;
+  const copyText = () => [`MikrotikLover health — ${r.host} — ${r.checked}`, `${n.ok} ok, ${n.warn} to look at, ${n.fail} problems`, "",
+    ...todo.map((c) => `${c.status === "fail" ? "PROBLEM" : "LOOK"}: ${c.name} — ${c.detail}${c.fix ? `\n   fix: ${c.fix}` : ""}`),
+    ...(todo.length ? [""] : []), ...r.checks.filter((c) => c.status === "ok").map((c) => `ok: ${c.name} — ${c.detail}`)].join("\n");
+  const hero = h("div", { class: `card health-hero ${r.status}` },
+    h("div", { class: "hh-mark" }, { ok: "✔", warn: "!", fail: "✘" }[r.status]),
+    h("div", { class: "grow" },
+      h("div", { class: "hh-title" }, r.status === "ok" ? "Everything is working" : r.status === "warn" ? `${n.warn} thing${n.warn > 1 ? "s" : ""} to look at when you can` : `${n.fail} problem${n.fail > 1 ? "s" : ""} — fix now`),
+      h("div", { class: "muted" }, `${n.ok} of ${r.checks.length} checks fine · ${when} · ${r.host}`),
+      h("div", { class: "muted small" }, "You get a Telegram / WhatsApp / email message by yourself when something breaks and when it is fine again (Settings → Alerts → Health check).")),
+    h("div", { class: "toolbar" },
+      h("button", { class: "primary", onclick: () => { location.hash === "#/health/now" ? route() : (location.hash = "#/health/now"); } }, icon("refresh"), "Check now"),
+      h("button", { onclick: async () => { try { await navigator.clipboard.writeText(copyText()); toast("Report copied — paste it in WhatsApp / email"); } catch (e) { dialog("Health report", h("pre", { class: "code-box" }, copyText()), [{ label: "Close" }]); } } }, "Copy report")));
+  const row = (c) => h("div", { class: `health-row ${c.status}` }, h("span", { class: "health-mark", "aria-label": c.status }, mark[c.status]),
+    h("div", { class: "grow" }, h("b", {}, c.name), h("span", { class: "muted small" }, ` · ${c.group}`), h("div", { class: "muted" }, c.detail),
+      c.fix ? h("div", { class: "health-fix" }, "How to fix: ", h("code", {}, c.fix)) : null));
+  const body = groups.map((g) => card(g, `${r.checks.filter((c) => c.group === g && c.status === "ok").length}/${r.checks.filter((c) => c.group === g).length} fine`,
+    h("div", { class: "health-list" }, r.checks.filter((c) => c.group === g).map(row))));
+  shell("Health check", h("div", { class: "stack" }, hero,
+    todo.length ? card("Your to-do", `${todo.length}`, h("div", { class: "health-list" }, todo.map(row))) : null,
+    h("details", { class: "card", open: !todo.length }, h("summary", {}, `All ${r.checks.length} checks`), h("div", { class: "grid g-2" }, body)),
+    h("div", { class: "muted small" }, "Green = working · yellow = look when you can · red = fix now. On the server: sudo radius-admin doctor")));
 };
 
 ROUTES.settings = async () => {
@@ -896,7 +913,7 @@ const ALERT_EVENTS = [
   ["security", "Virus, hacker attack, DDoS", "only HIGH danger"], ["quarantine", "Device quarantined", "automatic or by an admin"],
   ["router", "Router down / back", "router stops answering (2 checks)"], ["service", "Server service stopped", "FreeRADIUS, database, DNS logger, traffic"],
   ["jobs", "Backup / update failed", "nightly backup, off-site copy, updates"], ["disk", "Disk almost full", "under 10% free"],
-  ["expiring", "Users expiring", "subscription ends within 24 hours"], ["anomaly", "Unusual data use", "a user uses 10x a normal day"], ["requests", "Unblock requests", "a user asks to open a blocked site (block page)"],
+  ["expiring", "Users expiring", "subscription ends within 24 hours"], ["anomaly", "Unusual data use", "a user uses 10x a normal day"], ["requests", "Unblock requests", "a user asks to open a blocked site (block page)"], ["newapp", "New apps", "an app never seen before is used (with Android / iPhone devices)"], ["health", "Health check", "the hourly self-check finds a problem, and when it is fine again"],
   ["summary", "Daily summary", "users, data, sales, security"], ["weekly", "Weekly report", "Monday: top users & apps, this week vs last"],
   ["monthly", "Monthly security report", "1st of the month: PDF by email / Telegram"]];
 const alertsCard = async () => {
@@ -2842,41 +2859,84 @@ ROUTES.domains = async () => {
 };
 
 // ------------------------------------------------------------------ apps on the network (automatic list)
+const OS_LABEL = { android: "Android", apple: "iPhone / Apple", windows: "Windows" };
+const osBadge = (os) => os ? badge(OS_LABEL[os] || os, os === "android" ? "ok" : "info") : h("span", { class: "muted small" }, "not known");
+let appsOs = "";
 ROUTES.apps = async (cat = "") => {
   const holder = h("div", { class: "stack" });
   const days = h("select", {}, [["1", "Today"], ["7", "7 days"], ["30", "30 days"], ["90", "90 days"]].map(([v, l]) => h("option", { value: v, selected: v === "7" }, l)));
   const user = h("input", { type: "search", placeholder: "User" }), ip = h("input", { type: "search", placeholder: "Device IP" });
+  const find = h("input", { type: "search", placeholder: "Find an app …" });
   const srcBadge = (r) => r.source === "discovered" ? badge("auto-discovered", "warn") : null;
-  const showUsers = async (r) => {
-    const d = await api("GET", `/api/apps/users?${new URLSearchParams({ site: r.site, days: days.value })}`);
-    dialog(`${r.app} — who uses it`, table([{ label: "Device", render: (x) => h("span", {}, x.client_ip, x.username ? h("div", { class: "muted" }, x.username) : null) },
-      { label: "Lookups", key: "lookups", num: true }, { label: "Data", num: true, render: (x) => bytes(x.bytes) },
-      { label: "Days", render: (x) => x.first_day === x.last_day ? String(x.first_day) : `${x.first_day} → ${x.last_day}` }], d.rows, "Nobody in this period."), [{ label: "Close" }]);
-  };
+  const kinds = (r) => h("span", { class: "chips" }, ["android", "apple", "windows"].filter((k) => Number(r[k])).map((k) => badge(`${OS_LABEL[k]} ${r[k]}`, k === "android" ? "ok" : "info")));
   const load = async () => {
-    const d = await api("GET", `/api/apps?${new URLSearchParams({ days: days.value, user: user.value.trim(), ip: ip.value.trim(), category: cat, top: 300 })}`);
-    const t = d.totals;
+    const d = await api("GET", `/api/apps?${new URLSearchParams({ days: days.value, user: user.value.trim(), ip: ip.value.trim(), category: cat, os: appsOs, top: 300 })}`);
+    const t = d.totals, dv = d.devices || {};
+    const osSeg = h("div", { class: "subtabs" }, [["", "All devices"], ["android", `Android (${dv.android || 0})`], ["apple", `iPhone / Apple (${dv.apple || 0})`], ["windows", `Windows (${dv.windows || 0})`]]
+      .map(([k, l]) => h("a", { href: "#", class: k === appsOs ? "active" : "", onclick: (e) => { e.preventDefault(); appsOs = k; load().catch((x) => toast(x.message, true)); } }, l)));
+    const rows = d.rows.filter((r) => !find.value.trim() || `${r.app} ${r.site}`.toLowerCase().includes(find.value.trim().toLowerCase()));
     holder.replaceChildren(
-      h("div", { class: "grid g-tiles" }, tile("Apps seen (all time)", num(t.apps)), tile("In this period", num(d.rows.length), cat ? `category: ${cat}` : "all categories"),
-        tile("New this week", num(t.new_apps), "first seen in the last 7 days"), tile("Found automatically", num(t.discovered), "new apps, named from their website")),
+      h("div", { class: "grid g-tiles" }, tile("Apps seen (all time)", num(t.apps)), tile("In this period", num(d.rows.length), cat ? `category: ${cat}` : appsOs ? `on ${OS_LABEL[appsOs]} devices` : "all categories"),
+        tile("New this week", num(t.new_apps), "first seen in the last 7 days"), tile("Android devices", num(dv.android || 0), "recognised by themselves")),
+      osSeg,
       h("div", { class: "tabs" }, h("a", { href: "#/apps", class: cat ? "" : "active" }, "All"),
         d.categories.map((c) => h("a", { href: `#/apps/${c.category}`, class: c.category === cat ? "active" : "" }, `${c.category} (${c.n})`))),
       h("div", { class: "card" }, table([
-        { label: "App", render: (r) => h("span", {}, h("b", {}, r.app), " ", Number(r.is_new) ? badge("NEW", "ok") : null, " ", srcBadge(r), h("div", { class: "muted" }, r.site)) },
+        { label: "App", render: (r) => h("a", { href: `#/app/${encodeURIComponent(r.site)}`, class: "app-link" }, h("b", {}, r.app), " ", Number(r.is_new) ? badge("NEW", "ok") : null, " ", srcBadge(r), h("div", { class: "muted" }, r.site)) },
         { label: "Category", render: (r) => badge(r.category, "info") },
-        { label: "Devices", key: "devices", num: true }, { label: "Users", key: "users", num: true }, { label: "Lookups", key: "lookups", num: true },
+        { label: "Devices", key: "devices", num: true }, { label: "Kind of devices", render: kinds },
         { label: "Data", num: true, render: (r) => bytes(r.bytes) },
         { label: "First / last seen", render: (r) => h("span", {}, String(r.first_seen).slice(0, 10), h("div", { class: "muted" }, String(r.last_seen).slice(0, 16))) },
-        { label: "", render: (r) => h("div", { class: "toolbar" }, h("button", { class: "small", onclick: () => showUsers(r).catch((e) => toast(e.message, true)) }, "Users"),
-          h("a", { class: "btn small", href: `#/cdn` }, "Domains"),
+        { label: "", render: (r) => h("div", { class: "toolbar" }, h("a", { class: "btn small primary", href: `#/app/${encodeURIComponent(r.site)}` }, "Details"),
           h("a", { class: "btn small", href: `/api/cdn/rsc?app=${encodeURIComponent(r.app)}`, title: "RouterOS script that blocks every known domain of this app" }, "⬇ Block")) },
-      ], d.rows, "No apps yet — the list fills itself every hour from the router's DNS log (radius-admin dnslog on).")));
+      ], rows, appsOs ? `No app used by ${OS_LABEL[appsOs]} devices in this period.` : "No apps yet — the list fills itself every hour from the router's DNS log (radius-admin dnslog on).")));
   };
+  find.addEventListener("input", () => load().catch(() => {}));
   shell("Apps on network", h("div", { class: "stack" },
-    h("div", { class: "note" }, "Built automatically every hour: every app any device used, with category, devices, users and data. New apps that are not in the catalog are discovered and named from their website."),
-    card(null, null, h("div", { class: "toolbar" }, days, user, ip, h("button", { class: "primary", onclick: () => load().catch((e) => toast(e.message, true)) }, "Show"))),
+    hint("How it works", h("div", {}, "Built by itself every hour from the router's DNS log: every app any device used, its names, server addresses and ports. New apps not in the catalog are found and named from their website. A device's kind (Android, iPhone, Windows) is recognised from the names its system asks by itself (connectivity check, Play Store, updates). Click an app for everything about it.")),
+    card(null, null, h("div", { class: "toolbar" }, days, user, ip, find, h("button", { class: "primary", onclick: () => load().catch((e) => toast(e.message, true)) }, "Show"))),
     holder));
   await load();
+};
+
+// one app: names, server addresses, ports, devices (with their kind)
+ROUTES.app = async (site = "") => {
+  const days = h("select", {}, [["1", "Today"], ["7", "7 days"], ["30", "30 days"], ["90", "90 days"]].map(([v, l]) => h("option", { value: v, selected: v === "30" }, l)));
+  const holder = h("div", { class: "stack" });
+  const load = async () => {
+    const d = await api("GET", `/api/apps/detail?${new URLSearchParams({ site, days: days.value })}`);
+    const a = d.app;
+    const tcpUdp = d.ports.filter((p) => p.direction === "out");
+    const kinds = {}; d.devices.forEach((x) => { kinds[x.os || ""] = (kinds[x.os || ""] || 0) + 1; });
+    const portText = (p) => `${p.proto.toUpperCase()} ${p.port}`;
+    holder.replaceChildren(
+      h("div", { class: "grid g-tiles" }, tile("Names (domains)", num(d.names.length), `${num(d.known.length)} in the catalog`), tile("Server addresses", num(d.servers.length), "from DNS answers"),
+        tile("Ports", num(tcpUdp.length), tcpUdp.slice(0, 3).map(portText).join(" · ") || "no traffic data"), tile("Devices", num(d.devices.length), Object.entries(kinds).filter(([k]) => k).map(([k, n]) => `${OS_LABEL[k]} ${n}`).join(" · ") || "kind not known")),
+      card("Ports and protocols", "what the traffic collector saw", table([{ label: "Protocol / port", render: (p) => h("code", {}, portText(p)) },
+        { label: "Direction", render: (p) => badge(p.direction, p.direction === "out" ? "info" : "warn") }, { label: "Data", num: true, render: (p) => bytes(p.bytes) },
+        { label: "Connections", key: "flows", num: true }, { label: "Last seen", render: (p) => String(p.last_seen).slice(0, 16) }], d.ports, "No traffic data for this app yet (traffic collector).")),
+      card("Server addresses", `${d.servers.length}`, table([{ label: "Address", render: (x) => h("code", {}, x.ip) }, { label: "Asked as", render: (x) => h("code", {}, x.host), wrap: true },
+        { label: "Lookups", key: "lookups", num: true }, { label: "First / last seen", render: (x) => h("span", {}, String(x.first_seen).slice(0, 10), h("div", { class: "muted" }, String(x.last_seen).slice(0, 16))) }],
+        d.servers, "No server address yet (fills from the DNS log every hour).")),
+      card("Names (domains and subdomains)", `${d.names.length} seen on the network`, table([{ label: "Name", render: (x) => h("code", {}, x.host), wrap: true }, { label: "Domain", key: "base" },
+        { label: "Lookups", key: "lookups", num: true }, { label: "Last addresses", render: (x) => h("span", { class: "muted small" }, x.ips || "—"), wrap: true },
+        { label: "Last seen", render: (x) => String(x.last_seen).slice(0, 16) }], d.names, "No names seen yet."),
+        d.known.length ? h("details", { class: "g-after-table" }, h("summary", { class: "muted small" }, `In the app catalog (${d.known.length})`), h("div", { class: "mono small" }, d.known.join("  "))) : null),
+      card("Devices that use it", `last ${d.days} day(s)`, table([{ label: "Device", render: (x) => h("span", {}, x.client_ip, x.username ? h("div", { class: "muted" }, h("a", { href: `#/users/${encodeURIComponent(x.username)}` }, x.username)) : null) },
+        { label: "Kind", render: (x) => h("span", { title: x.evidence || "" }, osBadge(x.os)) }, { label: "Lookups", key: "lookups", num: true },
+        { label: "Days", render: (x) => x.first_day === x.last_day ? String(x.first_day) : `${x.first_day} → ${x.last_day}` }], d.devices, "Nobody in this period.")));
+    return a;
+  };
+  let a;
+  try { a = await load(); } catch (e) { shell("Apps on network", card(null, null, h("div", { class: "empty" }, e.message))); return; }
+  shell(a.app, h("div", { class: "stack" },
+    h("div", { class: "page-head" }, h("a", { class: "btn small", href: "#/apps" }, "← All apps"), badge(a.category, "info"),
+      a.source === "discovered" ? badge("auto-discovered", "warn") : null, h("span", { class: "muted small" }, `${a.site} · first seen ${String(a.first_seen).slice(0, 10)} · last ${String(a.last_seen).slice(0, 16)}`),
+      h("span", { class: "grow" }), days,
+      h("a", { class: "btn small", href: `/api/cdn/rsc?app=${encodeURIComponent(a.app)}` }, "⬇ Block script"),
+      isAdmin() ? h("a", { class: "btn small", href: "#/blocking/policies/new" }, "Block in a policy") : null),
+    holder));
+  days.addEventListener("change", () => load().catch((e) => toast(e.message, true)));
 };
 
 // ------------------------------------------------------------------ ports & protocols

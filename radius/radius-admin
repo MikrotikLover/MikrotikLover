@@ -2135,6 +2135,7 @@ GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_setting TO 'radius_web'@'localho
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_status TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_stat TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_setup TO 'radius_web'@'localhost';
+GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_fetch TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE ON \`$DB_NAME\`.ml_traffic TO 'radius_web'@'localhost';
 GRANT INSERT, DELETE ON \`$DB_NAME\`.ml_block_event TO 'radius_web'@'localhost';
 GRANT INSERT ON \`$DB_NAME\`.ml_unblock TO 'radius_web'@'localhost';
@@ -2178,6 +2179,8 @@ cmd_hourly() { # cron, every hour: one run at a time; each job's result is shown
     run_update "Hourly: security scan" cmd_security scan
     run_update "Hourly: allowed websites (read again, learn helpers)" cmd_webscan auto
     run_update "Hourly: router rules" cmd_policy build
+    # last: the self-check of everything (saved for the dashboard; alerts.py tells about new problems)
+    python3 -I /usr/local/lib/mikrotiklover/health.py --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" --save >/dev/null 2>&1 || true
     [ "$(setting_get notice_sms)" != 1 ] || run_update "Hourly: SMS warnings to users" cmd_notice run
 }
 

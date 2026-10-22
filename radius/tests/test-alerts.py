@@ -120,7 +120,7 @@ for bad in ("TELEGRAM_TOKEN=nope", "WHATSAPP_PHONE=12", "EVENTS=security,foo", "
     except ValueError:
         check(f"settings: {bad} refused", True)
 check("settings: empty value removes it", "WHATSAPP_PHONE" not in alerts.set_values(dict(c), ["WHATSAPP_PHONE="]))
-check("settings: default events", alerts.events({}) == ["security", "quarantine", "router", "service", "jobs", "disk", "anomaly", "requests", "summary", "weekly", "monthly"])
+check("settings: default events", alerts.events({}) == ["security", "quarantine", "router", "service", "jobs", "disk", "anomaly", "requests", "newapp", "health", "summary", "weekly", "monthly"])
 m = alerts.mask(c)
 check("status hides secrets", TOKEN not in json.dumps(m) and "SmtpPass123" not in json.dumps(m) and m["TELEGRAM_CHAT"] == "42")
 d = tempfile.mkdtemp()
@@ -231,6 +231,40 @@ check("expiring user reported once", [k for k, _ in run()] == ["expiring"] and r
 cfg2 = {"EVENTS": "jobs"}
 open(upd, "a").write("Security scan\t2026-10-17 03:00\tfailed: x\n")
 check("events switched off are not checked", [k for k, _ in alerts.check(cfg2, db, st, updates=upd)] == ["jobs"])
+
+# new apps (apps inventory) with the kind of devices; health check problems from the hourly self-check
+class AppDB(FakeDB):
+    def __init__(self):
+        super().__init__()
+        self.apps = []
+
+    def rows(self, q):
+        if "DATE_FORMAT(NOW()" in q:
+            return [["2026-10-22 10:00:00"]]
+        if "FROM ml_app a" in q:
+            since = q.split("a.first_seen > '")[1].split("'")[0]
+            return [r for r in self.apps if r[3] > since]
+        return super().rows(q)
+
+
+dba, sta = AppDB(), {}
+check("new apps: the first check only remembers", alerts.check({"EVENTS": "newapp"}, dba, sta) == [])
+dba.apps = [["zingclips.in", "Zing Clips", "video", "2026-10-22 10:30:00", "3", "2", "1"]]
+f = alerts.check({"EVENTS": "newapp"}, dba, sta)
+check("new app reported with Android / iPhone devices", len(f) == 1 and "Zing Clips" in f[0][1] and "2 Android" in f[0][1] and "1 iPhone" in f[0][1], f)
+check("  ... once", alerts.check({"EVENTS": "newapp"}, dba, sta) == [])
+hj = f"{d}/health.json"
+alerts.HEALTH = hj
+json.dump({"checks": [{"id": "sync:10.0.0.1", "name": "Router 10.0.0.1 takes the rules", "status": "fail", "detail": "last asked 3 h ago", "fix": "re-import"}]}, open(hj, "w"))
+sth = {}
+f = alerts.check({"EVENTS": "health"}, FakeDB(), sth)
+check("health: a failing check is told at once, with how to fix", len(f) == 1 and "takes the rules" in f[0][1] and "Fix: re-import" in f[0][1], f)
+check("  ... not again while it stays", alerts.check({"EVENTS": "health"}, FakeDB(), sth) == [])
+json.dump({"checks": [{"id": "sync:10.0.0.1", "name": "Router 10.0.0.1 takes the rules", "status": "ok", "detail": "fine", "fix": ""}]}, open(hj, "w"))
+f = alerts.check({"EVENTS": "health"}, FakeDB(), sth)
+check("  ... and 'fine again' when it is fixed", len(f) == 1 and "Fine again" in f[0][1], f)
+os.utime(hj, (time.time() - 5 * 3600, time.time() - 5 * 3600))
+check("health: an old saved check is not used", alerts.check({"EVENTS": "health"}, FakeDB(), {}) == [])
 
 # security events are written by the hourly scan with the time they happened (before the last check)
 db3, st3 = FakeDB(), {"last_check": time.time()}

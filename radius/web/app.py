@@ -1812,16 +1812,61 @@ def apps_inventory():
             tw.append(f"t.{col}=%s"); targs.append(val)
     if cat:
         w.append("a.category=%s"); args.append(cat)
+    os_ = request.args.get("os", "")
+    if os_ and os_ not in ("android", "apple", "windows"):
+        abort(400, "invalid os")
+    if os_:                                               # only devices of that kind (ml_device, from their system names)
+        w.append("d.client_ip IN (SELECT client_ip FROM ml_device WHERE os=%s)"); args.append(os_)
     rows = q(f"""SELECT a.site, a.app, a.category, a.source, a.first_seen, a.last_seen,
                         COUNT(DISTINCT d.client_ip) AS devices, COUNT(DISTINCT NULLIF(d.username,'')) AS users, SUM(d.queries) AS lookups,
+                        COUNT(DISTINCT IF(dv.os='android', d.client_ip, NULL)) AS android,
+                        COUNT(DISTINCT IF(dv.os='apple', d.client_ip, NULL)) AS apple,
+                        COUNT(DISTINCT IF(dv.os='windows', d.client_ip, NULL)) AS windows,
                         (SELECT COALESCE(SUM(t.bytes_down+t.bytes_up),0) FROM traffic_site t WHERE t.site=a.site AND {' AND '.join(tw)}) AS bytes,
                         a.first_seen >= NOW() - INTERVAL 7 DAY AS is_new
-                 FROM ml_app a JOIN ml_app_day d ON d.site=a.site WHERE {' AND '.join(w)}
+                 FROM ml_app a JOIN ml_app_day d ON d.site=a.site LEFT JOIN ml_device dv ON dv.client_ip=d.client_ip WHERE {' AND '.join(w)}
                  GROUP BY a.site ORDER BY devices DESC, lookups DESC LIMIT %s""", targs + args + [a.top])
     totals = q1("SELECT COUNT(*) AS apps, COALESCE(SUM(first_seen >= NOW() - INTERVAL 7 DAY),0) AS new_apps, "
                 "COALESCE(SUM(source='discovered'),0) AS discovered FROM ml_app")
     cats = q("SELECT category, COUNT(*) AS n FROM ml_app GROUP BY category ORDER BY n DESC")
-    return jsonify(rows=jsonable(rows), totals=jsonable([totals])[0], categories=jsonable(cats))
+    kinds = q("SELECT os, COUNT(*) AS n FROM ml_device WHERE last_seen >= NOW() - INTERVAL %s DAY GROUP BY os", (days,))
+    return jsonify(rows=jsonable(rows), totals=jsonable([totals])[0], categories=jsonable(cats),
+                   devices={r["os"]: int(r["n"]) for r in kinds})
+
+
+@app.get("/api/apps/detail")
+@login_required()
+def app_detail():
+    """Everything known about one app: its names, server addresses, ports, devices (with their kind)."""
+    import cdnmap
+    site = request.args.get("site", "").lower()
+    if not re.match(r"^[a-z0-9.-]{1,253}$", site):
+        abort(400, "invalid site")
+    days = int(max(report_args().days, 1))
+    a = q1("SELECT site, app, category, source, first_seen, last_seen FROM ml_app WHERE site=%s", (site,))
+    if not a:
+        abort(404, "unknown app")
+    names = q("""SELECT host, base, first_seen, last_seen, ips FROM ml_domain WHERE app=%s ORDER BY last_seen DESC LIMIT 500""", (a["app"],))
+    lookups = {r["host"]: int(r["n"]) for r in q("""SELECT host, SUM(lookups) AS n FROM ml_domain_day WHERE day >= CURDATE() - INTERVAL %s DAY
+                                                    AND host IN (SELECT host FROM ml_domain WHERE app=%s) GROUP BY host""", (days, a["app"]))}
+    for r in names:
+        r["lookups"] = lookups.get(r["host"], 0)
+    servers = q("""SELECT ip, host, first_seen, last_seen, lookups FROM ml_app_server WHERE site=%s ORDER BY last_seen DESC LIMIT 500""", (site,))
+    ports = q("""SELECT proto, port, direction, bytes, flows, first_seen, last_seen FROM ml_app_port WHERE site=%s ORDER BY bytes DESC LIMIT 100""", (site,))
+    devs = q("""SELECT d.client_ip, MAX(NULLIF(d.username,'')) AS username, SUM(d.queries) AS lookups, MIN(d.day) AS first_day, MAX(d.day) AS last_day,
+                       MAX(dv.os) AS os, MAX(dv.evidence) AS evidence
+                FROM ml_app_day d LEFT JOIN ml_device dv ON dv.client_ip=d.client_ip
+                WHERE d.site=%s AND d.day >= CURDATE() - INTERVAL %s DAY GROUP BY d.client_ip ORDER BY lookups DESC LIMIT 500""", (site, days))
+    known = []
+    try:
+        hit = next((v for v in cdnmap.catalog().apps().values() if v.get("site") == site or v.get("app") == a["app"]), None)
+        known = [d["domain"] for d in hit["domains"]] if hit else []
+    except Exception:                                     # noqa: BLE001
+        known = []
+    for r in ports:
+        r["proto"] = {6: "tcp", 17: "udp"}.get(int(r["proto"]), str(r["proto"]))
+    return jsonify(app=jsonable([a])[0], names=jsonable(names), servers=jsonable(servers), ports=jsonable(ports),
+                   devices=jsonable(devs), known=known[:300], days=days)
 
 
 @app.get("/api/apps/users")
@@ -2035,14 +2080,33 @@ def _router_file(name):
         abort(404)
 
 
+def note_fetch(what, version=""):
+    """Remember when a router took its auto-sync files (health check: does the router have the new rules?)."""
+    try:
+        with db().cursor() as c:
+            c.execute("INSERT INTO ml_router_fetch (router_ip, what, at, version) VALUES (%s, %s, NOW(), %s) "
+                      "ON DUPLICATE KEY UPDATE at=NOW(), version=VALUES(version)", (client_ip()[:45], what, version[:64]))
+        db().commit()
+    except Exception:                                       # noqa: BLE001 — never stop a router sync for a note
+        pass
+
+
 @app.get("/api/public/router/version")
 def router_version():
-    return app.response_class(_router_file("version").strip(), mimetype="text/plain")
+    v = _router_file("version").strip()
+    note_fetch("version", v)
+    return app.response_class(v, mimetype="text/plain")
 
 
 @app.get("/api/public/router/sync.rsc")
 def router_sync():
-    return app.response_class(_router_file("sync.rsc"), mimetype="text/plain")
+    body = _router_file("sync.rsc")
+    try:
+        v = open(os.path.join(ROUTER_DIR, "version"), encoding="utf-8").read().strip()
+    except OSError:
+        v = ""
+    note_fetch("sync", v)
+    return app.response_class(body, mimetype="text/plain")
 
 
 # ------------------------------------------------------------------ departments (shared speed) + traffic graphs
@@ -3207,7 +3271,14 @@ def security_report_make():
 @app.get("/api/health")
 @login_required()
 def health():
-    ok, out = radius_admin(["doctor", "--json"], log=False, timeout=120)
+    if request.args.get("saved"):                        # the hourly self-check, at once (no waiting)
+        try:
+            doc = json.load(open("/var/lib/mikrotiklover/health.json", encoding="utf-8"))
+            doc["saved"] = True
+            return jsonify(doc)
+        except (OSError, ValueError):
+            pass
+    ok, out = radius_admin(["doctor", "--json", "--save"], log=False, timeout=120)
     for line in out.splitlines():
         if line.startswith("{"):
             try:

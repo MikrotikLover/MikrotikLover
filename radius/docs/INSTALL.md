@@ -316,6 +316,8 @@ Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein
 | Traffic graphs (interface / user / group / department) | Traffic graphs | khud chalta hai: interfaces router report se (auto-sync), users accounting se (har 5 min) |
 | Site kyun band hai? (kaun si list / policy rule, abhi active?) | Blocking → Why blocked? | `radius-admin why facebook.com ali` |
 | Website / app ka sirf naam likho, baqi (fonts, CDN, tasveerein) khud — poori site (sitemap, 150 pages, JS) background mein | Blocking → policy → Websites / Apps always open · Blocking → Allowed websites & apps → Read the whole site | `radius-admin webscan list` · `webscan deep SITE` |
+| Sab theek hai? (har ghante khud, kharabi par alert) | Health check → ek jawab + Your to-do + Copy report | `sudo radius-admin doctor` |
+| Network par har app: servers, domains, ports, Android / iPhone devices | Apps on network → Android filter → app → Details | `radius-admin apps update` (hourly) |
 | Policy thori der ke liye band (users ke paas rahe) | Blocking → Policies → switch On / Off | `radius-admin policy off NAME` · `policy on NAME` |
 | Ek lafz se sites band (casino, ^bet) | Blocking → policy → Edit → Words in site names | policy file: `block-word casino` |
 | App ke ports: kaun se ports use karti hai, aur seedhe IP:port jo band hue (P2P / relay) — Allow par sirf wahi network + port | Blocking → Allowed websites & apps → card: Ports it uses / Direct connections it tried | `radius-admin webscan allow ao-hikconnect "NET/24 udp PORT"` |

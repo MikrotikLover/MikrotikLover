@@ -470,3 +470,36 @@ CREATE TABLE IF NOT EXISTS ml_unblock (
   KEY (status, until),
   KEY (ip, host)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Server addresses of every app (from the DNS answers its names got) — tools/appinv.py, hourly
+CREATE TABLE IF NOT EXISTS ml_app_server (
+  site VARCHAR(253) NOT NULL,
+  ip VARCHAR(45) NOT NULL,
+  host VARCHAR(253) NOT NULL DEFAULT '',
+  first_seen DATETIME NOT NULL,
+  last_seen DATETIME NOT NULL,
+  lookups INT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (site, ip),
+  KEY (ip)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- What kind of device an address is (Android, iPhone / Apple, Windows), from the names its system asks
+-- by itself (connectivity checks, store, updates) — tools/appinv.py, hourly
+CREATE TABLE IF NOT EXISTS ml_device (
+  client_ip VARCHAR(45) NOT NULL PRIMARY KEY,
+  os VARCHAR(16) NOT NULL DEFAULT '',
+  evidence VARCHAR(255) NOT NULL DEFAULT '',
+  username VARCHAR(64) NOT NULL DEFAULT '',
+  first_seen DATETIME NOT NULL,
+  last_seen DATETIME NOT NULL,
+  KEY (os)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- When each router last fetched its auto-sync files (health check: did the router take the new rules?)
+CREATE TABLE IF NOT EXISTS ml_router_fetch (
+  router_ip VARCHAR(45) NOT NULL,
+  what VARCHAR(16) NOT NULL,
+  at DATETIME NOT NULL,
+  version VARCHAR(64) NOT NULL DEFAULT '',
+  PRIMARY KEY (router_ip, what)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
