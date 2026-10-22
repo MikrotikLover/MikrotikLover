@@ -800,6 +800,8 @@ def block_decision(host, ip):
         return False, {"user": user, "policy": ""}
     if temp_allowed(user, ip, host):
         return False, {"user": user, "policy": policy}
+    if policy_is_off(policy):                            # turned off: nothing of it is blocked
+        return False, {"user": user, "policy": policy}
     try:
         text = open(os.path.join(POLICY_DIR, policy + ".txt"), encoding="utf-8").read()
     except OSError:
@@ -1078,6 +1080,12 @@ def why_blocked():
                      "for an IP range or a DHCP lease are not known here.")
     quar = q1("""SELECT reason, since FROM ml_quarantine WHERE released_at IS NULL AND
                  ((%s <> '' AND username=%s) OR (%s <> '' AND ip=%s)) ORDER BY since DESC LIMIT 1""", (user, user, ip, ip))
+    if policy and policy_is_off(policy):
+        res["verdict"] = "allowed"
+        res["summary"] = f"Policy '{policy}' is turned OFF — nothing is blocked by it until it is turned on again."
+        for r in res["rules"]:
+            r["active"] = False
+        notes.insert(0, f"Policy '{policy}' is OFF (Blocking → Policies → switch).")
     tmp = temp_allowed(user, ip, host) if (user or ip) else None
     if tmp and not quar:
         res["verdict"] = "allowed"
@@ -1863,6 +1871,17 @@ def parse_policy(text):
     return {"description": desc, "rules": rules}
 
 
+def policies_off():
+    try:
+        return {l.strip() for l in open(os.path.join(POLICY_DIR, ".off"), encoding="utf-8") if l.strip()}
+    except OSError:
+        return set()
+
+
+def policy_is_off(name):
+    return name in policies_off()
+
+
 def policy_members():
     users, groups = {}, {}
     for r in q("SELECT username, value FROM radreply WHERE attribute='Mikrotik-Address-List' AND value LIKE 'policy-%%'"):
@@ -1898,6 +1917,7 @@ def web_port():
 def blocking():
     import cdnmap
     users, groups = policy_members()
+    off = policies_off()
     pols = []
     for f in sorted(os.listdir(POLICY_DIR)) if os.path.isdir(POLICY_DIR) else []:
         if not f.endswith(".txt") or f == "README.txt":
@@ -1905,7 +1925,7 @@ def blocking():
         text = open(os.path.join(POLICY_DIR, f), encoding="utf-8", errors="replace").read()
         name = f[:-4]
         pols.append({"name": name, "text": text, **parse_policy(text), "users": sorted(users.get(name, [])),
-                     "groups": sorted(groups.get(name, []))})
+                     "groups": sorted(groups.get(name, [])), "enabled": name not in off})
     cats = []
     for c, d in CATEGORY_INFO.items():
         if c == "keywords" or os.path.exists(os.path.join(WF_DIR, "categories", c + ".txt")):
@@ -1934,7 +1954,7 @@ def blocking_summary():
             reading += 1 if sc and time.time() - sc.get("since", 0) < 900 else 0
     except Exception:                                     # noqa: BLE001 — the overview still shows the rest
         pass
-    return jsonify(policies=npol, users=len({u for v in users.values() for u in v}),
+    return jsonify(policies=npol, off=len(policies_off()), users=len({u for v in users.values() for u in v}),
                    groups=len({g for v in groups.values() for g in v}), requests=int(pending.get("n", 0) or 0),
                    exceptions=int(open_now.get("n", 0) or 0), suggestions=sugg, reading=reading, router=router_info())
 
@@ -1948,6 +1968,14 @@ def policy_save():
     if len(text) > 20000 or not text.strip() or re.search(r"[^\x20-\x7e\n\t -￿]", text):
         abort(400, "invalid policy text")
     return result(*radius_admin(["policy", "set", name], stdin=text.replace("\r", "") + "\n", action=f"policy set {name}"))
+
+
+@app.post("/api/policies/<name>/<onoff>")
+@login_required("admin")
+def policy_onoff(name, onoff):
+    if not POLICY_RE.match(name) or onoff not in ("on", "off"):
+        abort(404)
+    return result(*radius_admin(["policy", onoff, name], action=f"policy {onoff} {name}"))
 
 
 @app.delete("/api/policies/<name>")

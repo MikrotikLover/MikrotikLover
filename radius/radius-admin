@@ -1759,6 +1759,8 @@ router_key_perms() {
     chgrp "$(id -gn mlweb 2>/dev/null || echo root)" "$ROUTER_DIR/key" 2>/dev/null || true
 }
 
+policy_is_off() { [ -f "$POLICY_DIR/.off" ] && grep -qx "$1" "$POLICY_DIR/.off"; }
+
 cmd_policy() {
     local sub=${1:-list}; shift || true
     case $sub in
@@ -1768,13 +1770,23 @@ cmd_policy() {
             [ -f "$f" ] || continue
             n=$(basename "$f" .txt); [ "$n" = README ] && continue
             groups=$(echo "SELECT COALESCE(GROUP_CONCAT(groupname),'') FROM radgroupreply WHERE attribute='Mikrotik-Address-List' AND value=$(q "policy-$n")" | db)
-            printf '%-18s %s\n' "$n" "$(head -1 "$f" | sed 's/^# *//')"
+            printf '%-18s %s%s\n' "$n" "$(policy_is_off "$n" && echo '[OFF] ')" "$(head -1 "$f" | sed 's/^# *//')"
             printf '%-18s %s\n' "" "$(grep -v '^[[:space:]]*#' "$f" | grep . | paste -sd ';' | sed 's/;/; /g')"
             printf '%-18s used by %s user(s)/group(s)   groups: %s\n' "" "$(policy_users "$n")" "${groups:--}"
         done ;;
     show)
         local n=${1:-}; valid_policy "$n"; policy_exists "$n" || die "No policy '$n'"
         cat "$POLICY_DIR/$n.txt" ;;
+    on|off)
+        # off: the policy stays given to its users but the routers get none of its rules; on: back again
+        local n=${1:-}; valid_policy "$n"; policy_exists "$n" || die "No policy '$n'"
+        local tmp; tmp=$(mktemp)
+        { if [ -f "$POLICY_DIR/.off" ]; then grep -vx "$n" "$POLICY_DIR/.off" || true; fi
+          if [ "$sub" = off ]; then echo "$n"; fi; } | sort -u > "$tmp"
+        install -m 644 "$tmp" "$POLICY_DIR/.off"; rm -f "$tmp"
+        cmd_policy build >/dev/null
+        if [ "$sub" = off ]; then ok "Policy '$n' turned OFF: its $(policy_users "$n") user(s)/group(s) are not limited until you turn it on"
+        else ok "Policy '$n' turned ON: its rules are back for $(policy_users "$n") user(s)/group(s)"; fi ;;
     set)
         # radius-admin policy set NAME < file   (first line "# description", then directives)
         local n=${1:-}; valid_policy "$n"
@@ -1798,6 +1810,7 @@ cmd_policy() {
         local used; used=$(policy_users "$n")
         [ "$used" = 0 ] || die "Policy '$n' is still used by $used user(s)/group(s) — change them first"
         rm -f "${POLICY_DIR:?}/${n:?}.txt"
+        [ ! -f "$POLICY_DIR/.off" ] || sed -i "/^${n}\$/d" "$POLICY_DIR/.off"
         cmd_policy build >/dev/null
         ok "Policy '$n' deleted" ;;
     build)
@@ -2957,6 +2970,7 @@ Blocking policies + router auto-sync (dashboard → Blocking)
   policy list | show NAME               web-filter policies (who is in them, what they block)
   policy set NAME < file                create / change a policy (directives: webfilter/policies/README.txt)
   policy del NAME                       delete an unused policy
+  policy on|off NAME                    turn a policy off (kept, users stay in it, no router rules) or on again
   policy build                          rebuild the router rules (+ VPN server list); cron does it every hour
   policy sync                           URL + key for the router auto-sync script (dashboard → Blocking)
   policy new-key                        new router sync key (then re-import the script on every router)

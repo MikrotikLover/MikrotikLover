@@ -610,6 +610,10 @@ add chain=wfp-staff protocol=tcp dst-port=443 action=jump jump-target=wf-torrent
 add chain=wfp-staff protocol=tcp dst-port=443 action=jump jump-target=wf-keywords comment="wfpolicy:staff keywords"
 add chain=wfp-staff protocol=tcp tls-host="example-bet.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-site" comment="wfpolicy:staff site example-bet.com"
 add chain=wfp-staff protocol=tcp tls-host="*.example-bet.com" action=reject reject-with=tcp-reset log=yes log-prefix="WF-site" comment="wfpolicy:staff site example-bet.com"
+add chain=wfp-staff protocol=tcp tls-host="*casino*" action=reject reject-with=tcp-reset log=yes log-prefix="WF-word" comment="wfpolicy:staff word casino"
+add chain=wfp-staff protocol=tcp tls-host="bet*" action=reject reject-with=tcp-reset log=yes log-prefix="WF-word" time=20h-23h,fri,sat comment="wfpolicy:staff word ^bet"
+add chain=wfp-staff protocol=tcp tls-host="*.bet*" action=reject reject-with=tcp-reset log=yes log-prefix="WF-word" time=20h-23h,fri,sat comment="wfpolicy:staff word ^bet"
+add chain=wfp-staff protocol=tcp tls-host="*-bet*" action=reject reject-with=tcp-reset log=yes log-prefix="WF-word" time=20h-23h,fri,sat comment="wfpolicy:staff word ^bet"
 add chain=wfp-staff protocol=udp dst-port=443 action=drop comment="wfpolicy:staff no QUIC"
 # --- policy students: Students / kids: no social media, video, games, VPN, torrents, adult words; family-safe DNS
 add chain=forward src-address-list=policy-students action=jump jump-target=wfp-students comment="wfpolicy:students"

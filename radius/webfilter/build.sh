@@ -316,7 +316,10 @@ split_time() { # " time=22h-6h,mon,fri" -> " time=22h-23h59m59s,mon,fri" + " tim
 declare -A DNS_IP=( [family]=1.1.1.3 [adguard-family]=94.140.14.15 [cleanbrowsing-family]=185.228.168.168 [cleanbrowsing-adult]=185.228.168.10 )
 used_cats=() used_apps=() used_ao=()
 pol_out=$(mktemp)
-policy_files() { for f in "$POLICY_DIR"/*.txt; do [ -f "$f" ] && [ "$(basename "$f")" != README.txt ] && echo "$f"; done; }
+# a policy turned off (radius-admin policy off NAME: its name in POLICY_DIR/.off) gets no router rules; its
+# users stay in it and get every rule back when it is turned on again
+policy_off() { [ -f "$POLICY_DIR/.off" ] && grep -qx "$1" "$POLICY_DIR/.off"; }
+policy_files() { for f in "$POLICY_DIR"/*.txt; do [ -f "$f" ] && [ "$(basename "$f")" != README.txt ] && ! policy_off "$(basename "$f" .txt)" && echo "$f"; done; }
 app_slug() { local s=${1,,}; s=${s//[^a-z0-9]/-}; while [[ $s == *--* ]]; do s=${s//--/-}; done; s=${s#-}; echo "${s%-}"; }
 dnsnames=()
 for pf in $(policy_files); do
@@ -370,6 +373,18 @@ for pf in $(policy_files); do
                     for tt in "${TT[@]}"; do
                         for pat in "$val" "*.$val"; do
                             echo "add chain=forward src-address-list=$L protocol=tcp tls-host=\"$pat\" action=reject reject-with=tcp-reset log=yes log-prefix=\"WF-site\"$tt comment=\"$C site $val\""
+                        done
+                    done ;;
+                block-word)
+                    # block-word casino [time=...]   every site whose NAME contains the word (casino.com, bestcasino.net, m.casino-x.org)
+                    # block-word ^bet                 only at the start of a name part: bet365.com, x.betway.com, best-bets.org — not alphabet.com
+                    [[ $val =~ ^[a-z0-9]{3,32}$ || $val =~ ^\^[a-z0-9]{2,32}$ ]] || { echo "build.sh: bad word '$val' in $pf (3-32 letters/digits, or ^ + 2-32)" >&2; exit 1; }
+                    any=1
+                    if [ -z "$t" ]; then untimed=1; else qtimes+=("${TT[@]}"); fi
+                    if [[ $val == ^* ]]; then pats=("${val#^}*" "*.${val#^}*" "*-${val#^}*"); else pats=("*$val*"); fi
+                    for tt in "${TT[@]}"; do
+                        for pat in "${pats[@]}"; do
+                            echo "add chain=forward src-address-list=$L protocol=tcp tls-host=\"$pat\" action=reject reject-with=tcp-reset log=yes log-prefix=\"WF-word\"$tt comment=\"$C word $val\""
                         done
                     done ;;
                 allow-web)

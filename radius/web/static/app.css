@@ -95,9 +95,9 @@ button svg { width: 16px; height: 16px; }
 input, select, textarea { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; min-width: 0; }
 input:focus, select:focus, textarea:focus, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 input[type=search] { width: 260px; max-width: 100%; }
-label.field { display: flex; flex-direction: column; gap: 5px; font-weight: 600; font-size: 13px; }
+label.field, div.field { display: flex; flex-direction: column; gap: 5px; font-weight: 600; font-size: 13px; }
 label.field > input, label.field > select, label.field > textarea { min-width: 0; max-width: 100%; }
-label.field span.help { font-weight: 400; color: var(--muted); font-size: 12px; }
+label.field span.help, div.field span.help { font-weight: 400; color: var(--muted); font-size: 12px; }
 label.check { display: flex; gap: 8px; align-items: center; font-weight: 500; }
 .form { display: grid; gap: 14px; }
 .form.cols { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -359,7 +359,7 @@ input[type=color] { width: 60px; height: 34px; padding: 2px; }
 .form > .seg button { width: auto; flex: none; }
 /* a dialog form never gets wider than the dialog (long option texts in a select) */
 dialog .form:not(.cols) { grid-template-columns: minmax(0, 1fr); }
-dialog .field select { width: 100%; text-overflow: ellipsis; }
+dialog label.field > select { width: 100%; text-overflow: ellipsis; }
 /* Blocking guide */
 .g-toc { position: sticky; top: 0; z-index: 2; }
 .guide-sec { scroll-margin-top: 60px; }
@@ -380,3 +380,16 @@ dialog .field select { width: 100%; text-overflow: ellipsis; }
   .g-recipes tr { display: block; padding: 10px 16px; border-bottom: 1px solid var(--border); }
   .g-recipes td { display: block; padding: 2px 0; border: 0; white-space: normal; }
 }
+/* on / off switch (policies) */
+.switch { position: relative; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--muted); user-select: none; }
+.switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.switch .track { width: 36px; height: 20px; border-radius: 999px; background: var(--border); position: relative; transition: background .15s; flex: none; }
+.switch .track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: left .15s; }
+.switch input:checked + .track { background: var(--ok); }
+.switch input:checked + .track::after { left: 18px; }
+.switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch input:disabled + .track { opacity: .5; }
+.pol-table tr.off td:not(:last-child):not(.pol-switch) { opacity: .5; }
+.pol-table td.pol-switch { white-space: nowrap; }
+.word-warn { color: var(--warn); }
+.rule-row.item > select:not(.tp-sel) { flex: 0 0 auto; width: auto; }

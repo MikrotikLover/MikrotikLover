@@ -1791,6 +1791,7 @@ function ruleLabel(r) {
     case "block-app": return badge(`app: ${r.value}${t}`, "bad");
     case "block-vpn": return badge(`VPN blocked${t}`, "bad");
     case "block-site": return badge(`site: ${r.value}${t}`, "bad");
+    case "block-word": return badge(`word: ${r.value.replace(/^\^/, "")}${r.value.startsWith("^") ? " (start)" : ""}${t}`, "bad");
     case "allow-site": return badge(`always open: ${r.value}`, "ok");
     case "allow-web": return badge(`always open: ${r.value} (+ what it needs)`, "ok");
     case "allow-app": return badge(`app always open: ${r.value}`, "ok");
@@ -1911,6 +1912,39 @@ function policyEditor(meta, pol) {
   };
   rules.forEach((r, n) => { if (!used.has(n) && r.kind === "block-site") { used.add(n); addSite(r.value, r.time); } });
   const addSiteBtn = h("button", { type: "button", class: "small", onclick: () => { addSite("", "").focus(); } }, icon("plus"), "Add a site");
+  // single words in site names (block-word): anywhere, or only at the start of a name part
+  const IMPORTANT = ["google.com", "googlevideo.com", "gstatic.com", "googleapis.com", "youtube.com", "ytimg.com", "gmail.com", "android.com",
+    "facebook.com", "fbcdn.net", "whatsapp.net", "whatsapp.com", "instagram.com", "cdninstagram.com", "microsoft.com", "windowsupdate.com",
+    "live.com", "office.com", "apple.com", "icloud.com", "cloudflare.com", "akamaized.net", "amazonaws.com", "cloudfront.net", "netflix.com",
+    "nflxvideo.net", "zoom.us", "tiktokcdn.com", "linkedin.com", "x.com", "telegram.org", "wikipedia.org", "bing.com", "yahoo.com",
+    "jazz.com.pk", "easypaisa.com.pk", "daraz.pk", "hbl.com", "mozilla.org"];
+  const wordHits = (w, start) => IMPORTANT.filter((d) => start ? d.startsWith(w) || d.includes("." + w) || d.includes("-" + w) : d.includes(w));
+  const wordRows = [];
+  const wordBox = h("div", { class: "stack tight" });
+  const addWord = (value, spec) => {
+    const start = (value || "").startsWith("^");
+    const inp = h("input", { value: (value || "").replace(/^\^/, ""), placeholder: "casino", spellcheck: "false", class: "grow", "aria-label": "word" });
+    const where = h("select", { "aria-label": "where in the name" }, [["any", "anywhere in the name"], ["start", "start of a name part"]].map(([v, l]) => h("option", { value: v, selected: (v === "start") === start }, l)));
+    const tp = timePicker(spec || "", () => preview());
+    const warn = h("div", { class: "muted small", hidden: true });
+    const r = { inp, where, tp };
+    const check = () => {
+      const w = inp.value.trim().toLowerCase(), st = where.value === "start";
+      const bad = w && !(st ? /^[a-z0-9]{2,32}$/ : /^[a-z0-9]{3,32}$/).test(w);
+      const hits = !bad && w ? wordHits(w, st) : [];
+      warn.hidden = !bad && !hits.length;
+      warn.className = "small " + (bad || hits.length ? "word-warn" : "muted");
+      warn.textContent = bad ? (st ? "2–32 letters or digits" : "3–32 letters or digits (shorter: choose 'start of a name part')")
+        : hits.length ? `Careful: this also blocks ${hits.slice(0, 4).join(", ")}${hits.length > 4 ? " …" : ""} — try 'start of a name part' or a longer word` : "";
+    };
+    r.el = h("div", { class: "stack tight" }, h("div", { class: "rule-row item" }, inp, where, tp,
+      h("button", { type: "button", class: "chip-x", title: "remove", onclick: () => { wordRows.splice(wordRows.indexOf(r), 1); r.el.remove(); preview(); } }, "×")), warn);
+    inp.addEventListener("input", () => { check(); preview(); }); where.addEventListener("change", () => { check(); preview(); });
+    check(); wordRows.push(r); wordBox.append(r.el);
+    return inp;
+  };
+  rules.forEach((r, n) => { if (!used.has(n) && r.kind === "block-word") { used.add(n); addWord(r.value, r.time); } });
+  const addWordBtn = h("button", { type: "button", class: "small", onclick: () => { addWord("", "").focus(); } }, icon("plus"), "Add a word");
   const cleanSite = (x) => x.trim().toLowerCase().replace(/^[a-z]+:\/\//, "").replace(/[/?#:].*$/, "").replace(/^\*\./, "").replace(/^www\./, "");
   const okSite = (x) => /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(x);
   const dnsRule = first((r) => r.kind === "dns");
@@ -1946,7 +1980,8 @@ function policyEditor(meta, pol) {
       vpn, off),
     h("div", { class: "pe-section stack" }, h("h3", {}, "Single apps and websites"),
       h("label", { class: "field" }, "Single apps", h("span", { class: "help" }, "Every known domain of the app is blocked, the ones learned on your network too. \"new\" = discovered automatically."), appSearch, appBox, chosenBox),
-      h("div", { class: "field" }, h("span", {}, "Single websites to block"), h("span", { class: "help" }, "like example.com — its subdomains too"), siteBox, h("div", {}, addSiteBtn))),
+      h("div", { class: "field" }, h("span", {}, "Single websites to block"), h("span", { class: "help" }, "like example.com — its subdomains too"), siteBox, h("div", {}, addSiteBtn)),
+      h("div", { class: "field" }, h("span", {}, "Words in site names"), h("span", { class: "help" }, "one word blocks every site whose NAME has it: casino → bestcasino.net, casino-x.org. 'Start of a name part': bet → bet365.com, best-bets.org but not alphabet.com. Only the site name is seen, not the page text (HTTPS)."), wordBox, h("div", {}, addWordBtn))),
     h("details", { class: "pe-section", open: !!(dnsRule || echRule || extraBox) }, h("summary", {}, "Advanced: DNS, hidden site names, other rules"),
       h("div", { class: "stack" }, h("label", { class: "field" }, "DNS for these users", dnsSel), ech, extraBox)));
   function text() {
@@ -1959,6 +1994,8 @@ function policyEditor(meta, pol) {
       if (vpn.cb.checked) lines.push(`block-vpn${tm(vpn.tp.value())}`);
       const seen = new Set();
       siteRows.forEach((r) => { const d = cleanSite(r.inp.value); if (okSite(d) && !seen.has(d)) { seen.add(d); lines.push(`block-site ${d}${tm(r.tp.value())}`); } });
+      wordRows.forEach((r) => { const w = r.inp.value.trim().toLowerCase(), st = r.where.value === "start";
+        if ((st ? /^[a-z0-9]{2,32}$/ : /^[a-z0-9]{3,32}$/).test(w) && !seen.has("w:" + (st ? "^" : "") + w)) { seen.add("w:" + (st ? "^" : "") + w); lines.push(`block-word ${st ? "^" : ""}${w}${tm(r.tp.value())}`); } });
       if (off.cb.checked) lines.push(`block-all${tm(off.tp.value())}`);
       if (dnsSel.value !== "router") lines.push(`dns ${dnsSel.value}`);
       if (echCb.checked) lines.push("strict-ech");
@@ -2064,7 +2101,7 @@ async function blockingOverview() {
   const topBlocked = (logs.summary || []).slice(0, 6);
   shell("Blocking", h("div", { class: "stack" }, blockingTabs("overview"),
     h("div", { class: "grid g-tiles" },
-      tile("Policies", num(sum.policies), "ready-made + your own"),
+      tile("Policies", num(sum.policies), sum.off ? `${num(sum.off)} turned off` : "ready-made + your own"),
       tile("Users with a policy", num(sum.users), `${num(sum.groups)} group(s) too`),
       tile("Requests waiting", num(sum.requests), sum.exceptions ? `${num(sum.exceptions)} site(s) open for a while` : "from the block page"),
       tile("Blocked today", num((logs.rows || []).length), (logs.rows || []).length >= 300 ? "300 or more" : "tries the router logged")),
@@ -2112,6 +2149,8 @@ function ruleWords(r, meta) {
     case "block-app": return [h("b", {}, r.value), " app band — us ke saare domains, network par seekhe hue bhi", when];
     case "block-vpn": return [h("b", {}, "VPN band"), " — VPN apps, VPN websites, VPN servers aur protocols (koshish log hoti hai)", when];
     case "block-site": return ["Website ", h("b", {}, r.value), " band (subdomains bhi)", when];
+    case "block-word": return r.value.startsWith("^") ? ["Jis site ke naam ka koi hissa ", h("b", {}, r.value.slice(1)), " se shuru ho, band (", h("i", {}, `${r.value.slice(1)}365.com, best-${r.value.slice(1)}s.org`), ")", when]
+      : ["Jis site ke naam mein ", h("b", {}, r.value), " ho, band (", h("i", {}, `best${r.value}.net, ${r.value}-x.org`), ")", when];
     case "block-all": return [h("b", {}, "Internet bilkul band"), r.time ? when : " — hamesha (sirf 'always open' wali cheezein chalti hain)"];
     case "allow-only": return ["Sirf ", h("b", {}, r.value), " chalega (app profile) — baqi sab band"];
     case "allow-web": return [h("b", {}, r.value), " hamesha khuli — server site parh kar us ke fonts / CDN / tasveerein bhi kholta hai"];
@@ -2123,6 +2162,7 @@ function ruleWords(r, meta) {
   }
 }
 function policyMode(p) {
+  if (p.enabled === false) return ["OFF", "warn", "Ye policy band (off) hai: users ke paas hai lekin kuch block nahi hota. Policies → switch se on karein."];
   const k = new Set(p.rules.map((r) => r.kind));
   if (k.has("allow-only")) return ["Sirf chuni hui apps", "warn", "Sirf neeche likhi apps chalti hain, baqi har cheez band."];
   if (p.rules.some((r) => r.kind === "block-all" && !r.time)) return ["Internet band", "bad", "Internet band hai; sirf 'hamesha khuli' wali cheezein chalti hain."];
@@ -2154,6 +2194,7 @@ async function blockingGuide() {
     ["block-app TikTok", "Policy → Single apps", "Us app ke saare domains band (seekhe hue bhi)", "Same — app ke saare naam (tls-host)"],
     ["block-vpn", "Policy → Block VPN", "VPN apps, sites, servers, protocols", "VPN naam + VPN server IPs + protocol ports"],
     ["block-site example.com", "Policy → Single websites", "Ek website aur subdomains", "HTTPS naam (tls-host) se reset"],
+    ["block-word casino / ^bet", "Policy → Words in site names", "Naam mein lafz ho to site band (^ = naam ke hisse ke shuru mein)", "HTTPS naam (tls-host) mein lafz dekh kar reset; page ka text nahi"],
     ["block-all", "Policy → Internet off completely / mode 'No internet'", "Poora internet band (waqt ke saath bhi)", "Har naya connection reject"],
     ["allow-only whatsapp", "Mode 'ONLY the apps I choose'", "Sirf ye apps; baqi sab band", "App ke servers ki address list; baqi reject"],
     ["allow-web site.com", "Websites always open", "Site + jo us ko chahiye (fonts, CDN) — hamesha", "Pehle 'return' rule: naam + DNS address list"],
@@ -2194,7 +2235,8 @@ async function blockingGuide() {
         h("li", {}, "User online hai to ek dafa disconnect hota hai; dobara login par router use policy ki list (", h("code", {}, "policy-NAME"), ") mein daal deta hai."),
         h("li", {}, h("b", {}, "Pehli dafa"), ": Overview → Router auto-sync → script download karke router par ek dafa import. Uske baad har tabdeeli khud pohanchti hai."),
         h("li", {}, h("b", {}, "Check karein"), ": Activity → Why blocked? → site + user → kaun sa rule, abhi chal raha hai ya nahi. Activity → Blocked tries mein har roki gayi koshish."),
-        h("li", {}, h("b", {}, "Policy hatani ho"), ": Give dialog mein doosri policy, ya user ke page par policy khali."))),
+        h("li", {}, h("b", {}, "Policy hatani ho"), ": Give dialog mein doosri policy, ya user ke page par policy khali."),
+        h("li", {}, h("b", {}, "Thori der ke liye band karni ho"), ": Policies → policy ke saath wala switch ", h("i", {}, "Off"), ". Policy users ke paas rehti hai, router se us ke rules hat jate hain; ", h("i", {}, "On"), " karte hi wapas (15 minute mein router par)."))),
     sec("policies", `Har policy — aasaan alfaz mein (${meta.policies.length})`, h("div", { class: "g-pols" }, polCards)),
     sec("rules", "Har rule kaise kaam karta hai",
       h("div", { class: "table-wrap" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Policy file mein"), h("th", {}, "Dashboard mein"), h("th", {}, "Kya hota hai"), h("th", {}, "Router kaise rokta hai"))),
@@ -2221,17 +2263,30 @@ async function blockingGuide() {
 async function blockingPolicies(action, which) {
   const [meta, ul] = await Promise.all([api("GET", "/api/blocking"), api("GET", "/api/users")]);
   const search = h("input", { type: "search", placeholder: "Search policies, users, rules …" });
-  const show = h("select", {}, [["all", "All policies"], ["used", "In use"], ["unused", "Not used"]].map(([v, l]) => h("option", { value: v }, l)));
+  const show = h("select", {}, [["all", "All policies"], ["used", "In use"], ["unused", "Not used"], ["off", "Turned off"]].map(([v, l]) => h("option", { value: v }, l)));
   const MAXR = 5;
   const usedBy = (p) => {
     const all = [...p.users, ...p.groups.map((g) => `${g} (group)`)];
     if (!all.length) return h("span", { class: "muted" }, "not used");
     return h("div", { class: "pol-used", title: all.join(", ") }, all.slice(0, 3).join(", "), all.length > 3 ? h("span", { class: "muted" }, ` +${all.length - 3} more`) : null);
   };
+  const policySwitch = (p) => {
+    const cb = h("input", { type: "checkbox", checked: p.enabled !== false, disabled: !isAdmin(), "aria-label": `policy ${p.name} on` });
+    const txt = h("span", {}, p.enabled !== false ? "On" : "Off");
+    cb.addEventListener("change", async () => {
+      const on = cb.checked;
+      if (!on && (p.users.length || p.groups.length) && !(await confirmDlg("Turn policy off", `Turn "${p.name}" off? Its ${p.users.length + p.groups.length} user(s) / group(s) keep it, but nothing of it is blocked until you turn it on again.`, "Turn off"))) { cb.checked = true; return; }
+      cb.disabled = true;
+      if (await act(api("POST", `/api/policies/${encodeURIComponent(p.name)}/${on ? "on" : "off"}`, {}))) { blSummary = null; route(); }
+      else { cb.checked = !on; cb.disabled = false; }
+    });
+    return h("label", { class: "switch", title: "On: the routers block what it says. Off: kept and still given, nothing blocked." }, cb, h("span", { class: "track" }), txt);
+  };
   const rows = meta.policies.map((p) => {
     const extra = p.rules.length - MAXR;
-    const tr = h("tr", { class: "policy-row", "data-name": p.name },
-      h("td", { class: "pol-name" }, h("b", {}, p.name), h("span", {}, p.description)),
+    const tr = h("tr", { class: "policy-row" + (p.enabled === false ? " off" : ""), "data-name": p.name },
+      h("td", { class: "pol-switch" }, policySwitch(p)),
+      h("td", { class: "pol-name" }, h("b", {}, p.name, p.enabled === false ? [" ", badge("OFF", "warn")] : null), h("span", {}, p.description)),
       h("td", { class: "pol-rules-td" }, h("div", { class: "pol-rules" }, p.rules.slice(0, MAXR).map(ruleLabel), extra > 0 ? badge(`+${extra} more`) : null)),
       h("td", { class: "pol-used-td" }, usedBy(p)),
       h("td", {}, isAdmin() ? h("div", { class: "pol-actions" },
@@ -2240,13 +2295,14 @@ async function blockingPolicies(action, which) {
         h("button", { class: "small", title: "delete", onclick: async () => { if (await confirmDlg("Delete policy", `Delete policy "${p.name}"?`)) { await act(api("DELETE", `/api/policies/${encodeURIComponent(p.name)}`)); blSummary = null; route(); } } }, "Delete")) : null));
     tr._text = [p.name, p.description, ...p.users, ...p.groups, ...p.rules.map((r) => `${r.kind} ${r.value}`)].join(" ").toLowerCase();
     tr._used = p.users.length + p.groups.length > 0;
+    tr._off = p.enabled === false;
     return tr;
   });
   const empty = h("div", { class: "empty", hidden: true }, "No policy matches.");
   const filter = () => {
     const t = search.value.trim().toLowerCase();
     let n = 0;
-    rows.forEach((r) => { r.hidden = (t && !r._text.includes(t)) || (show.value === "used" && !r._used) || (show.value === "unused" && r._used); n += r.hidden ? 0 : 1; });
+    rows.forEach((r) => { r.hidden = (t && !r._text.includes(t)) || (show.value === "used" && !r._used) || (show.value === "unused" && r._used) || (show.value === "off" && !r._off); n += r.hidden ? 0 : 1; });
     empty.hidden = n > 0;
   };
   search.addEventListener("input", filter); show.addEventListener("change", filter);
@@ -2254,9 +2310,9 @@ async function blockingPolicies(action, which) {
     h("div", { class: "page-head" }, search, show, h("span", { class: "grow" }),
       isAdmin() ? h("button", { onclick: () => givePolicyDialog(meta, ul.users) }, icon("users"), "Give a policy") : null,
       isAdmin() ? h("button", { class: "primary", onclick: () => openPolicyEditor(meta, null) }, "+ New policy") : null),
-    h("div", { class: "card" }, h("h2", {}, h("span", {}, "Policies"), h("span", { class: "sub" }, `${meta.policies.length} · ${meta.policies.filter((p) => p.users.length || p.groups.length).length} in use`)),
+    h("div", { class: "card" }, h("h2", {}, h("span", {}, "Policies"), h("span", { class: "sub" }, `${meta.policies.length} · ${meta.policies.filter((p) => p.users.length || p.groups.length).length} in use${meta.policies.some((p) => p.enabled === false) ? ` · ${meta.policies.filter((p) => p.enabled === false).length} off` : ""}`)),
       h("div", { class: "table-wrap" }, h("table", { class: "pol-table" },
-        h("thead", {}, h("tr", {}, h("th", {}, "Policy"), h("th", {}, "Rules"), h("th", {}, "Used by"), h("th", {}, ""))),
+        h("thead", {}, h("tr", {}, h("th", {}, ""), h("th", {}, "Policy"), h("th", {}, "Rules"), h("th", {}, "Used by"), h("th", {}, ""))),
         h("tbody", {}, rows))), empty),
     hint("A policy is a set of rules. Give it to users or groups; one user has one policy (own, else the group's).")));
   if (action === "new" && isAdmin()) { history.replaceState(null, "", "#/blocking/policies"); openPolicyEditor(meta, null); }

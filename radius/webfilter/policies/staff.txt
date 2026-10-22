@@ -6,3 +6,5 @@ block torrent-piracy
 block keywords
 allow-site linkedin.com
 block-site example-bet.com
+block-word casino
+block-word ^bet time=20h-23h,fri,sat

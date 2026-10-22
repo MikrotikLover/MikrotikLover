@@ -246,7 +246,8 @@ def block_reason(tag):
         return f"app {tag[4:]}"
     return {"vpn": "VPN / proxy", "allowonly": "not allowed (allow-only)", "noinet": "no internet", "keywords": "adult word in the name",
             "threat": "threat list (security)", "scan": "port scan (security)", "brute": "password guessing (security)",
-            "synflood": "SYN flood (security)", "vpn-proxy": "VPN / proxy website", "site": "site blocked by name (block-site)"}.get(tag, f"category {tag}")
+            "synflood": "SYN flood (security)", "vpn-proxy": "VPN / proxy website", "site": "site blocked by name (block-site)",
+            "word": "a blocked word in the site name (block-word)"}.get(tag, f"category {tag}")
 
 
 def user_policies(cnf, db):

@@ -127,6 +127,38 @@ await p.goto(URL + "/#/blocking/policies/give"); await p.locator("dialog[open] #
 ok("give dialog: no wider than the dialog", await p.evaluate(() => { const b = document.querySelector("dialog[open] .dlg-body"); return b.scrollWidth <= b.clientWidth + 1; }));
 await p.keyboard.press("Escape");
 
+// words in site names (block-word): warning for a word that hits big sites, "start of a name part"
+await openEditor(null);
+{
+  const dd = p.locator("dialog[open]");
+  await dd.locator("input[name=name]").fill("ui-words");
+  await dd.getByRole("button", { name: "Add a word" }).click();
+  const word = dd.locator("input[aria-label=word]").last();
+  await word.fill("video");
+  ok("word: warning when it also hits big sites", /googlevideo\.com/.test(await dd.locator(".word-warn").first().textContent()));
+  await dd.locator("select[aria-label='where in the name']").last().selectOption("start");
+  ok("  ... no warning at the start of a name part", (await dd.locator(".word-warn").count()) === 0);
+  ok("  ... saved as ^video", norm(await editorText()).includes("block-word ^video"));
+  await word.fill("ab");
+  await dd.locator("select[aria-label='where in the name']").last().selectOption("any");
+  ok("word: too short is not written to the file", !norm(await editorText()).includes("block-word") && /3–32/.test(await dd.locator(".word-warn").first().textContent()));
+  await p.keyboard.press("Escape");
+}
+
+// policy on / off switch in the table
+await p.goto(URL + "/#/dashboard"); await p.waitForTimeout(200);
+await p.goto(URL + "/#/blocking/policies"); await p.locator('.policy-row[data-name="no-vpn"]').waitFor();
+const swNoVpn = () => p.locator('.policy-row[data-name="no-vpn"] .switch');
+const enabledOf = async (n) => p.evaluate(async (x) => (await (await fetch("/api/blocking")).json()).policies.find((q) => q.name === x).enabled, n);
+if ((await p.locator('.policy-row[data-name="no-vpn"] td.pol-used-td', { hasText: "not used" }).count()) === 1) {
+  await swNoVpn().click();
+  await p.locator('.policy-row.off[data-name="no-vpn"]').waitFor({ timeout: 30000 });
+  ok("switch: policy turned off (row shown off, server says off)", (await enabledOf("no-vpn")) === false);
+  await swNoVpn().click();
+  await p.locator('.policy-row:not(.off)[data-name="no-vpn"]').waitFor({ timeout: 30000 });
+  ok("switch: on again", (await enabledOf("no-vpn")) === true);
+}
+
 // guide: every policy explained in words, every rule known, Give opens with that policy
 await p.goto(URL + "/#/dashboard"); await p.waitForTimeout(200);
 await p.goto(URL + "/#/blocking/guide"); await p.locator(".g-pol").first().waitFor();

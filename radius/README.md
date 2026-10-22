@@ -1175,6 +1175,20 @@ Misal: social sirf daftar ke waqt, games hamesha, TikTok 16–19 Mon–Fri, inte
 
 ## 7r. Ek site band / khuli (policy ke andar) aur unblock ki darkhwast
 
+**Policy on / off** (Blocking → Policies → har line ke shuru mein switch, ya `radius-admin policy off NAAM` / `policy on NAAM`):
+- **Off**: policy users / groups ke paas hi rehti hai, lekin router ko us ke koi rules nahi milte — kuch band nahi. **On**: sab wapas (auto-sync se 15 minute mein).
+- Off policy ko edit karein to off hi rehti hai. List mein `[OFF]`, table mein halki line + "OFF", Overview: "1 turned off". Why blocked? bata deta hai "policy OFF hai".
+- Kis ke paas hai us ke saath off karne se pehle tasdeeq poochi jati hai. Naam `policies/.off` mein rehta hai.
+
+**Ek lafz se block** (Policy → Edit → **Words in site names**, ya policy file):
+```
+block-word casino                       # naam mein kahin bhi: bestcasino.net, casino-x.org
+block-word ^bet time=20h-23h,fri,sat    # sirf naam ke hisse ke shuru mein: bet365.com, best-bets.org — alphabet.com NAHI
+```
+- Router HTTPS site ka **naam** (tls-host) dekhta hai, page ke andar ka text nahi (HTTPS mein woh nazar nahi aata). Log mein `WF-word`.
+- Lafz: 3–32 harf / number (`^` ke saath 2–32). Editor khabardar karta hai agar lafz bari sites ko bhi rokta ho (maslan "video" → googlevideo.com = YouTube); tab "start of a name part" ya lamba lafz.
+- Sample `staff` policy mein `block-word casino` aur shaam ko `^bet`. Tests: `tests/test-policy-onoff.sh` (25, API ke saath), `tests/simulate-policies.py` (+7), `tests/test-whyblocked.py` (+8).
+
 **Policy mein single sites** (dashboard → Blocking → policy → Edit, ya policy file):
 ```
 block social

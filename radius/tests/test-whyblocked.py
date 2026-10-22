@@ -29,6 +29,7 @@ class Cat:                       # tiny stand-in for the CDN catalog
 
 
 MON_10 = datetime(2026, 10, 19, 10, 0)     # a Monday
+FRI_21 = datetime(2026, 10, 23, 21, 0)     # a Friday evening
 MON_23 = datetime(2026, 10, 19, 23, 30)
 SAT_10 = datetime(2026, 10, 24, 10, 0)
 
@@ -88,6 +89,16 @@ r = w.explain("web.whatsapp.com", "wh", "allow-only whatsapp\nallow-only hikconn
 t("two apps only: WhatsApp allowed", r["verdict"] == "allowed", r)
 r = w.explain("www.google.com", "wh", "allow-only whatsapp\nallow-only hikconnect\n", MON_10, WF, Cat(), ao_dir=AO)
 t("two apps only: the rest blocked, one reason naming both", r["verdict"] == "blocked" and len(r["rules"]) == 1 and "whatsapp + hikconnect are allowed" in r["summary"], r)
+
+# block-word: a word in the site name; ^word only at the start of a name part
+POLW = "block-word casino\nblock-word ^bet time=20h-23h,fri,sat\n"
+for host, at, want, name in [("www.bestcasino.net", MON_10, "blocked", "casino anywhere in the name"), ("casino-x.org", MON_10, "blocked", "casino at the start"),
+                             ("bet365.com", FRI_21, "blocked", "^bet at the start, in its time"), ("x.best-bets.org", FRI_21, "blocked", "^bet after a dash"),
+                             ("abc.alphabet.com", FRI_21, "allowed", "^bet inside a word: not blocked"), ("bet365.com", MON_10, "blocked-other-times", "^bet outside its time")]:
+    r = w.explain(host, "wt", POLW, at, WF, Cat())
+    t(f"block-word: {name}", r["verdict"] == want and (want != "blocked" or "in the site name" in r["summary"]), r)
+t("word_hit: plain word", w.word_hit("abccasinoxyz.com", "casino") and not w.word_hit("casin.com", "casino"))
+t("word_hit: ^word at name-part start only", w.word_hit("a.bet.com", "^bet") and w.word_hit("x-bet.org", "^bet") and not w.word_hit("alphabet.com", "^bet"))
 
 import tempfile
 WS = tempfile.mkdtemp()

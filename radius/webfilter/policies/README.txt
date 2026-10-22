@@ -11,6 +11,8 @@ First line: "# description". Directives (one per line):
   block-app APP [time=...]    block one app with every domain the CDN detective knows for it, the ones
                               learned on your network included (radius-admin cdn apps), e.g. block-app PUBG Mobile
   block-site example.com [time=...]   one website (and its subdomains) for this policy only
+  block-word casino [time=...]        every site whose NAME contains the word (bestcasino.net, casino-x.org)
+  block-word ^bet [time=...]          the word only at the start of a name part (bet365.com, best-bets.org — not alphabet.com)
   allow-site example.com      an exception: this policy never blocks it (e.g. block social, allow-site linkedin.com)
   allow-web example.com       like allow-site, and the server finds what the site loads from elsewhere (fonts,
                               CDNs, image hosts) by reading it, daily, and learns more from the DNS log

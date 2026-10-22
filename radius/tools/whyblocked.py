@@ -153,6 +153,15 @@ def ao_file(profile, wf_dir, ao_dir=None):
     return ""
 
 
+def word_hit(host, word):
+    """block-word: 'casino' anywhere in the name; '^bet' only at the start of a name part (like the router's
+    tls-host patterns bet*, *.bet*, *-bet*)."""
+    if word.startswith("^"):
+        w = word[1:]
+        return bool(w) and (host.startswith(w) or "." + w in host or "-" + w in host)
+    return bool(word) and word in host
+
+
 def allow_only_ok(host, profile, wf_dir, ao_dir=None, webscan_dir=None):
     """Does an allow-only profile let this name through (host / domain lines, names learned while it was
     used; networks need the IP)?"""
@@ -223,6 +232,8 @@ def explain(host, policy=None, policy_text="", at=None, wf_dir=WF_DIR, catalog=N
             why, router = "VPN / proxy website or app", "WF-vpn"
         elif k == "block-site" and domain_hit(host, v.lower()):
             why, router = f"{v} is blocked by name in this policy", "WF-site"
+        elif k == "block-word" and word_hit(host, v.lower()):
+            why, router = f"the word '{v.lstrip('^')}' is in the site name", "WF-word"
         elif k == "block-all":
             why, router = "no internet for this policy", "WF-noinet"
         elif k == "allow-only" and not ao_pass and not ao_done:
