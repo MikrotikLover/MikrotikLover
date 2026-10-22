@@ -360,12 +360,13 @@ try {
   await gd.locator("input[name=target]").fill("10.124.3.0/24");
   await gd.locator("input[name=comment]").fill("ui-net-test");
   await clickToast(page, dlgButton(page, "Apply"));
-  const nrow = page.locator("tr", { hasText: "10.124.3.0/24" });
+  const ncard = page.locator(".card", { has: page.locator("h2", { hasText: "Networks and IPs with a policy" }) });
+  const nrow = ncard.locator("tr", { hasText: "10.124.3.0/24" });
   await nrow.waitFor({ timeout: 15000 });
   await nrow.getByRole("button", { name: "Remove" }).click();
   await clickToast(page, dlgButton(page, "Remove"));
   await page.waitForTimeout(800);
-  if (await page.locator("tr", { hasText: "10.124.3.0/24" }).count()) throw new Error("network policy not removed");
+  if (await ncard.locator("tr", { hasText: "10.124.3.0/24" }).count()) throw new Error("network policy not removed");
   ok("setup steps page (5 steps, checks) + policy for a network: given in the dialog, removed");
 
   // firewall: a policy made in the dialog (country source picked by search), seen in the router order, looked up, deleted
