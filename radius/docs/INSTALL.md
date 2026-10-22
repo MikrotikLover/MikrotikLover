@@ -320,6 +320,8 @@ Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein
 | Firewall (FortiGate jaisa): policies order mein, Allow / Deny / Reject, addresses, services, schedules, hits | Firewall → Policies | `radius-admin firewall list` · `firewall rule add NAME --dir wan --service RDP --action deny` |
 | Port forward sirf kuch addresses / countries ke liye | Firewall → Port forwards | `radius-admin firewall vip add DVR 37777 192.168.88.20 --src office,geo:PK` |
 | Mulk band karna (Geo-IP), andar aate ya bahar jaate | Firewall → Countries | `radius-admin firewall geo update` · `firewall rule add X --dir wan --src geo:CN --action deny` |
+| IPS (Suricata): hamle pehchanna aur hamla karne wale IP ko minute mein band | Security → Intrusion prevention | `radius-admin ips install` · `ips on` · `ips status` · `ips alerts` |
+| Mail server (MDaemon) ki hifazat: safe ports, password guessing band, spam bots, DNS / blacklist / certificate checks | Mail server | `radius-admin mail set ip 192.168.88.30 domain example.com` · `mail doors` · `mail status` |
 | Ye connection kaun si policy le gi? | Firewall → Policy lookup | `radius-admin firewall lookup router 1.2.3.4 203.0.113.1 tcp 8291` |
 | Bahar se kya andar aa raha hai: khule darwaze (port forward, UPnP, router services), kis IP ne kis andar ke IP:port ko chhua | Security → From outside → Who? | naya auto-sync script import + traffic collector |
 | Microsoft Windows Update band / sirf office hours mein band / on | Blocking → Overview → Windows Update | `radius-admin winupdate off` · `winupdate office` · `winupdate on` |

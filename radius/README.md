@@ -1063,6 +1063,44 @@ sudo radius-admin firewall logs
 - **Hadein:** ek policy max 200 router rules (zyada addresses × services ho to address object banayein). Bara mulk (US, CN) hazaron networks — router pehli dafa ek minute leta hai. Website naam wale address router khud resolve karta hai (Policy lookup mein check nahi hote). SSL inspection / antivirus MikroTik par mumkin nahi — un ki jagah web filter (HTTPS naam se), threat lists aur security detective.
 - Tests: `tests/test-firewall.py` (rules, countries, lookup, logs — bina database), `tests/test-firewall.sh` (CLI, router files + lint, country file, hits, logs, API), UI suite.
 
+## 7h1. Intrusion prevention (IPS) — Suricata, Fortinet jaisa
+
+Dashboard → **Security → Intrusion prevention**. Router internet traffic ki **copy** server ko bhejta hai (TZSP, UDP 37008), server par **Suricata** use 40,000+ hamlon ki pehchaan (Emerging Threats Open, roz update) aur hamare apne rules se check karta hai. Hamla mila → alert, Security page, Telegram / WhatsApp, aur (switch on ho to) hamla karne wala IP **har router par ek minute ke andar band**.
+
+```
+sudo radius-admin ips install      # Suricata + signatures (ek dafa; 4 GB+ RAM behtar)
+sudo radius-admin ips on           # routers 15 minute mein copy bhejna shuru karte hain
+sudo radius-admin ips status       # chal raha hai? copy aa rahi hai? kitni signatures?
+sudo radius-admin ips alerts       # kya pakra
+```
+
+- **Kya pakarta hai:** exploits (Windows / router / web bugs), password guessing (RDP, mail, Winbox, SSH), scans, botnet / malware servers se baat (andar ka PC infected), crypto mining, MDaemon admin port (1000) par bahar se dastak, PC se seedha mail bhejna (spam bot).
+- **Block:** bahar ka hamla karne wala IP; andar infected device ho to woh **bahar ka malware server** (device khud quarantine se — Security → Virus). LAN ke IPs, routers, ye server aur "Never blocked" list kabhi band nahi hote. Level: sirf high (default) ya high + medium; muddat 1 ghanta – 30 din (default 24 h).
+- **Router par:** `mangle action=sniff-tzsp` (default sirf har connection ke **pehle 256 KB** — hamle pehchanne ke liye kaafi, server par bojh kam; "all" bhi chun sakte hain) aur `raw` mein `ml-ips` list drop. Block list har minute (`ml-live`) aati hai, time ke saath (server band ho to bhi khud khatam).
+- **Ghalat alarm:** "What it saw" mein signature **Switch off** — foran band, aglay updates mein bhi band. Shor machane wale packet / stream checks default band hain (adhoori copy par bekaar).
+- **Haqeeqat:** ye copy dekhta hai, is liye hamle ke pehle packets guzar jaate hain; band seconds se minute mein. HTTPS ke andar nahi dekhta (pattern, server aur behaviour se pakarta hai). Server ke UDP 37008 tak router se rasta khula ho.
+- Health check: "Intrusion prevention" — Suricata band, copy na aa rahi ho, ya signatures download na hui hon to warning aur kya karna hai.
+- Tests: `tests/test-ips.py` (TZSP, alerts, kise block, config, rule on/off), `tests/test-ips.sh` (asal Suricata: TZSP → tzsp2tap → Suricata → scan → database → router list → API).
+
+## 7h2b. Mail server ki hifazat (MDaemon, Exchange, Zimbra … LAN par)
+
+Dashboard → **Mail server**. Mail server ka LAN IP aur domain likhein (`radius-admin mail set ip 192.168.88.30 domain example.com`):
+
+| Hissa | Kya karta hai |
+|---|---|
+| **Set up the doors** | Firewall mein port forwards: 25, 587, 465, 993, 995, webmail 443. **Kabhi nahi:** 1000 (MDaemon Remote Admin), 3000 (plain HTTP webmail), 143/110 (plain) — khule hon to laal |
+| **Password guessing rokna** | 110/143/443/465/587/993/995/webmail par ek IP se minute mein 30 se zyada naye logins → woh IP **1 ghanta band** har router par (rate badal sakte hain; "Never block" address object). Port 25 nahi (Gmail jaise servers zyada connections kholte hain) |
+| **Sirf mail server mail bheje** | port 25 bahar sirf MDaemon se; kisi PC ka virus spam bhejne ki koshish kare to router mana kar deta hai aur device ka naam list mein — aap ka IP blacklist hone se bachta hai |
+| **Har ghante checks** | MX, A, SPF, DMARC, DKIM (selector MDaemon), reverse DNS (PTR), **8 blacklists** (Spamhaus, SpamCop, Barracuda, SORBS …), har mail port ka **TLS certificate** (din baqi, self-signed, ghalat naam), khule ports, **outgoing mail achanak 5 guna** (hacked mailbox?) — har ek ke saath kya karna hai |
+| **MDaemon checklist** | Dynamic Screening, SMTP AUTH, relay, TLS + Let's Encrypt, DKIM/DMARC, strong passwords + 2FA, Remote Admin sirf LAN, AntiVirus, IP Shield, backup — tick karte jayein |
+| **Activity** | kaun se IP password guess karte pakre gaye (mulk ke saath), kaun se devices ne seedha mail bhejne ki koshish ki (user ke naam ke saath) |
+
+- Problems Health check aur alerts mein bhi ("Mail server" group), naya masla ho to Telegram / WhatsApp.
+- IPS ke apne mail rules bhi hain (mail password guessing, AUTH on port 25, MDaemon admin port, spam bot).
+- Spamhaus public DNS (8.8.8.8) se poochne par jawab nahi deta → "unknown"; apna DNS server ho to sahi jawab.
+- CLI: `radius-admin mail status | doors | guard on|off | smtp-out on|off | rate 30 | trusted OBJECT | logs | checklist KEY on|off`.
+- Tests: `tests/test-mailsec.py` (nakli DNS server + asal TLS server: DNS records, blacklists, certificates, doors, volume, logs), `tests/test-mail.sh` (router rules + lint, doors, checklist, API).
+
 ## 7h3. Bahar se network mein kya aa raha hai (From outside)
 
 Dashboard → **Security → From outside**. Teen sawaal, teen jawab:

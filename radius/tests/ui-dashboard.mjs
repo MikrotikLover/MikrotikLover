@@ -344,6 +344,9 @@ try {
   await page.locator(".health-hero").waitFor({ timeout: 30000 });
   await page.locator(".card h2", { hasText: "Protection" }).waitFor();
   ok("security: intrusion prevention (status, protection, alerts)");
+  await go(page, "#/mail", "Mail server");
+  await page.locator(".card h2", { hasText: /Your mail server|Checks/ }).first().waitFor({ timeout: 30000 });
+  ok("mail server page (set-up form or checks)");
 
   // firewall: a policy made in the dialog (country source picked by search), seen in the router order, looked up, deleted
   await go(page, "#/firewall", "Firewall");
