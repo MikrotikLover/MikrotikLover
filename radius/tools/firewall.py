@@ -75,6 +75,7 @@ SCHEDULES = {
 }
 DIRS = {"out": "LAN → Internet", "in": "Internet → LAN (port forwards)", "wan": "Internet → LAN + router",
         "router": "→ the router itself", "lan": "LAN ↔ LAN"}
+LOOKUP_DIRS = {"out": "LAN → Internet", "in": "Internet → LAN", "router": "Internet → router", "router-lan": "LAN → router", "lan": "LAN ↔ LAN"}
 ACTIONS = {"allow": "Allow", "deny": "Deny (drop)", "reject": "Reject (tell the app)"}
 VIP_RISK = {3389: "RDP", 445: "SMB", 139: "NetBIOS", 23: "Telnet", 21: "FTP", 5900: "VNC", 3306: "MySQL", 1433: "MS-SQL",
             8291: "Winbox", 8728: "MikroTik API", 22: "SSH", 37777: "Dahua DVR", 8000: "Hikvision DVR", 554: "RTSP"}
@@ -605,6 +606,102 @@ def lookup(ip):
     return ""
 
 
+# ------------------------------------------------------------------ policy lookup (which policy would take this connection)
+def _in_ref(st, ref, ip, cache):
+    """-> True / False, or None when it cannot be known here (a website name)."""
+    if ref == "all":
+        return True
+    entries = [ref] if ref.startswith("geo:") else st["addrs"][ref]["entries"]
+    unknown = False
+    for e in entries:
+        if e.startswith("geo:"):
+            cc = e[4:]
+            if cc not in cache:
+                try:
+                    with open(os.path.join(GEO_DIR, f"{cc}.txt")) as f:
+                        cache[cc] = [ipaddress.IPv4Network(l.strip()) for l in f if l.strip()]
+                except OSError:
+                    cache[cc] = []
+            if any(ip in n for n in cache[cc]):
+                return True
+        elif "-" in e and e[0].isdigit():
+            lo, hi = (ipaddress.IPv4Address(x) for x in e.split("-"))
+            if lo <= ip <= hi:
+                return True
+        elif e[0].isdigit():
+            if ip in ipaddress.IPv4Network(e):
+                return True
+        else:
+            unknown = True
+    return None if unknown else False
+
+
+def _in_service(st, names, proto, port):
+    svcs = all_services(st)
+    for n in names:
+        for e in svcs[n]["entries"]:
+            p, ports = service_entry(e)
+            if not p:
+                return True
+            if p != proto:
+                continue
+            if not ports:
+                return True
+            for part in ports.split(","):
+                lo, _, hi = part.partition("-")
+                if int(lo) <= port <= int(hi or lo):
+                    return True
+    return False
+
+
+def _in_schedule(st, name, when):
+    sc = all_schedules(st)[name]
+    if not sc["start"]:
+        return True
+    day, now = DAYS[when.weekday()], (when.hour, when.minute)
+    s, e = hhmm(sc["start"]), hhmm(sc["end"])
+    if day not in (sc["days"] or DAYS):
+        return False
+    return s <= now <= e if s < e else (now >= s or now <= e)
+
+
+def lookup_policy(st, direction, src, dst, proto, port, when=None):
+    """First enabled policy that takes the connection -> {verdict, rule, steps: [...]}."""
+    from datetime import datetime
+    when = when or datetime.now()
+    if direction not in LOOKUP_DIRS:
+        raise Bad("direction: " + " | ".join(LOOKUP_DIRS))
+    s_ip, d_ip = ipaddress.IPv4Address(src), ipaddress.IPv4Address(dst)
+    proto = str(proto).lower()
+    if proto not in ("tcp", "udp", "icmp"):
+        raise Bad("protocol: tcp | udp | icmp")
+    port = int(port or 0)
+    cache, steps = {}, []
+    for r in st["rules"]:
+        if not r["enabled"]:
+            steps.append({"id": r["id"], "name": r["name"], "match": False, "why": "policy is off"})
+            continue
+        dirs = {"wan": ("in", "router"), "router": ("router", "router-lan")}.get(r["dir"], (r["dir"],))
+        why = ""
+        if direction not in dirs:
+            why = f"other direction ({DIRS[r['dir']]})"
+        else:
+            sm = [_in_ref(st, x, s_ip, cache) for x in r["src"]]
+            dm = [_in_ref(st, x, d_ip, cache) for x in r["dst"]]
+            if True not in sm:
+                why = "source not in " + ",".join(r["src"]) + (" (website names cannot be checked here)" if None in sm else "")
+            elif True not in dm:
+                why = "destination not in " + ",".join(r["dst"]) + (" (website names cannot be checked here)" if None in dm else "")
+            elif not _in_service(st, r["service"], proto, port):
+                why = "service is " + ",".join(r["service"])
+            elif not _in_schedule(st, r["schedule"], when):
+                why = f"not now (schedule {r['schedule']})"
+        steps.append({"id": r["id"], "name": r["name"], "match": not why, "why": why or "matches"})
+        if not why:
+            return {"verdict": r["action"], "rule": r["id"], "name": r["name"], "steps": steps}
+    return {"verdict": "no-policy", "rule": 0, "name": "", "steps": steps}
+
+
 # ------------------------------------------------------------------ logs
 FW_LOG_RE = re.compile(r"^(\S+) (\S+) .*?WF-fw(a?)-(\d+)\b.*?(?:proto (\w+)[^,]*, )?(\d+\.\d+\.\d+\.\d+)(?::(\d+))?->(\d+\.\d+\.\d+\.\d+)(?::(\d+))?")
 
@@ -675,6 +772,13 @@ def main(argv=None):
     p.add_argument("--geo-url", default="")
     p = sub.add_parser("geo-rsc")
     p.add_argument("--out", required=True)
+    p = sub.add_parser("lookup")
+    p.add_argument("dir")
+    p.add_argument("src")
+    p.add_argument("dst")
+    p.add_argument("proto")
+    p.add_argument("port", nargs="?", default="0")
+    p.add_argument("--json", action="store_true")
     p = sub.add_parser("logs")
     p.add_argument("--file", default="/var/log/mikrotik/webfilter.log")
     p.add_argument("--n", type=int, default=50)
@@ -721,6 +825,18 @@ def main(argv=None):
     st = load(db)
     if a.cmd == "list":
         show(st)
+    elif a.cmd == "lookup":
+        try:
+            res = lookup_policy(st, a.dir, a.src, a.dst, a.proto, a.port)
+        except ipaddress.AddressValueError as e:
+            raise Bad(f"bad address: {e}")
+        if a.json:
+            json.dump(res, sys.stdout)
+            return 0
+        for x in res["steps"]:
+            print(f"  #{x['id']:<4} {x['name'][:28]:28} {'MATCH' if x['match'] else '-':6} {x['why']}")
+        print({"allow": "ALLOWED by", "deny": "DENIED by", "reject": "REJECTED by"}.get(res["verdict"], "no firewall policy matches —")
+              + (f" policy #{res['rule']} '{res['name']}'" if res["rule"] else " the router's own rules decide (web filter / security still apply)"))
     elif a.cmd == "json":
         json.dump({"rules": st["rules"], "addrs": list(st["addrs"].values()), "services": list(all_services(st).values()),
                    "schedules": list(all_schedules(st).values()), "vips": st["vips"]}, sys.stdout, default=str)

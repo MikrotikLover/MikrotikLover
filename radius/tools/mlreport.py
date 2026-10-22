@@ -244,6 +244,8 @@ def block_reason(tag):
     """Log prefix WF-<tag> -> what blocked it, in words."""
     if tag.startswith("app-"):
         return f"app {tag[4:]}"
+    if tag.startswith("fw-"):
+        return f"firewall policy #{tag[3:]}"
     return {"vpn": "VPN / proxy", "allowonly": "not allowed (allow-only)", "noinet": "no internet", "keywords": "adult word in the name",
             "threat": "threat list (security)", "scan": "port scan (security)", "brute": "password guessing (security)",
             "synflood": "SYN flood (security)", "vpn-proxy": "VPN / proxy website", "site": "site blocked by name (block-site)",
@@ -282,13 +284,13 @@ def blocked_detail(a, s, policies):
             continue
         t, router, tag, mac, src, dst, port = m.groups()
         ts = ts_of(t)
-        if ts is None or ts < since:
+        if ts is None or ts < since or tag.startswith("fwa-"):      # firewall 'allow + log' lines are not blocks
             continue
         user = s.who(src, ts, mac or "")
         if not match(user, src, a):
             continue
         lst = policies.get(user, "") if user != "-" else ""
-        policy = "security.rsc (everyone)" if tag in SECURITY_TAGS else lst[7:] if lst.startswith("policy-") else lst or "router list"
+        policy = "firewall" if tag.startswith("fw-") else "security.rsc (everyone)" if tag in SECURITY_TAGS else lst[7:] if lst.startswith("policy-") else lst or "router list"
         if getattr(a, "policy", "") and policy != a.policy:
             continue
         out.append({"time": t[:19].replace("T", " "), "user": user, "ip": src, "mac": (mac or "-").upper().replace(":", "-"),

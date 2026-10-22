@@ -2699,7 +2699,7 @@ def router_report():
          VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())""",
       (ip, d["identity"], d["board"], d["version"], d["uptime"], d["cpu"], d["mem_free"], d["mem_total"], d["hdd_free"], d["hdd_total"],
        d["hotspot"], d["ppp"], d["dhcp"], json.dumps(d["interfaces"]), json.dumps(d["links"]),
-       json.dumps({"nat": d.get("nat", []), "services": d.get("services", [])})))
+       json.dumps({"nat": d.get("nat", []), "services": d.get("services", []), "fw": d.get("fw", {}), "fwn": d.get("fwn", {})})))
     if prev and 0 < (prev["age"] or 0) < 600:
         traffic_ifaces(ip, d["identity"], d["interfaces"], old)
     rx, tx = routerstat.busiest(d["interfaces"])
@@ -3084,6 +3084,174 @@ def inbound_detail():
     for r in rows:
         r["threat"] = th.ip(r["remote_ip"]) or ""
     return jsonify(rows=jsonable(rows))
+
+
+# ------------------------------------------------------------------ firewall (FortiGate / Untangle style): tools/firewall.py
+def fw_state():
+    """Firewall objects straight from the database (the same shape firewall.load() gives)."""
+    import firewall
+    st = {"rules": q("SELECT * FROM ml_fw_rule ORDER BY pos, id"),
+          "addrs": {r["name"]: r for r in q("SELECT * FROM ml_fw_addr ORDER BY name")},
+          "services": {r["name"]: r for r in q("SELECT * FROM ml_fw_service ORDER BY name")},
+          "schedules": {r["name"]: r for r in q("SELECT * FROM ml_fw_schedule ORDER BY name")},
+          "vips": q("SELECT * FROM ml_fw_vip ORDER BY id")}
+    for r in st["rules"]:
+        for k in ("src", "dst", "service"):
+            r[k] = [x for x in (r[k] or "").split(",") if x]
+    for r in st["vips"]:
+        r["src"] = [x for x in (r["src"] or "").split(",") if x]
+    for o in list(st["addrs"].values()) + list(st["services"].values()):
+        o["entries"] = [x for x in (o["entries"] or "").split("\n") if x]
+    return firewall, st
+
+
+def fw_hits():
+    """Policy / port-forward counters summed over every router (since each one last took new rules)."""
+    hits, vhits, routers = {}, {}, []
+    for r in q("SELECT router_ip, identity, exposed, last_seen FROM ml_router_status ORDER BY identity"):
+        try:
+            ex = json.loads(r["exposed"] or "{}")
+        except ValueError:
+            ex = {}
+        if "fw" in ex:
+            routers.append({"identity": r["identity"], "router_ip": r["router_ip"], "last_seen": str(r["last_seen"])})
+        for src, dst in ((ex.get("fw") or {}, hits), (ex.get("fwn") or {}, vhits)):
+            for k, (p, b) in src.items():
+                c = dst.setdefault(int(k), [0, 0])
+                c[0] += int(p)
+                c[1] += int(b)
+    return hits, vhits, routers
+
+
+@app.get("/api/firewall")
+@login_required()
+def firewall_get():
+    fw, st = fw_state()
+    hits, vhits, routers = fw_hits()
+    used = fw.used_by(st)
+    meta = fw.geo_meta()
+    countries = fw.used_countries(st)
+    warnings = []
+    missing = [c for c in countries if not meta["counts"].get(c)]
+    if missing:
+        warnings.append({"kind": "geo", "text": f"No country list yet for {', '.join(missing)} — Countries → Download now"})
+    vips = []
+    for v in st["vips"]:
+        lo, hi = (int(x) for x in (v["port"].split("-") + [v["port"]])[:2])
+        risk = [fw.VIP_RISK[p] for p in range(lo, min(hi, lo + 5000) + 1) if p in fw.VIP_RISK][:3]
+        vips.append({**v, "risk": ", ".join(risk), "open_all": v["src"] == ["all"], "hits": vhits.get(v["id"], [0, 0])})
+        if risk and v["src"] == ["all"] and v["enabled"]:
+            warnings.append({"kind": "vip", "text": f"Port forward {v['name']}: {', '.join(risk)} open to the whole internet — limit 'Allowed from' or use a VPN"})
+    rules = []
+    for i, r in enumerate(st["rules"], 1):
+        rules.append({**r, "seq": i, "hits": hits.get(r["id"], [0, 0]), "router_rules": len(fw.rule_lines(st, r)) if r["enabled"] else 0})
+    addrs = [{**a, "used": used.get(a["name"], []), "kind": sorted({fw.addr_entry(e)[0] for e in a["entries"]})} for a in st["addrs"].values()]
+    return jsonify(rules=jsonable(rules), addrs=jsonable(addrs), vips=jsonable(vips),
+                   services=[{**x, "used": used.get(x["name"], [])} for x in fw.all_services(st).values()],
+                   schedules=[{**x, "used": used.get(x["name"], [])} for x in fw.all_schedules(st).values()],
+                   dirs=fw.DIRS, lookup_dirs=fw.LOOKUP_DIRS, actions=fw.ACTIONS, countries=fw.COUNTRIES,
+                   geo={"updated": meta["updated"], "source": meta["source"], "counts": meta["counts"], "used": countries},
+                   routers=routers, warnings=warnings, built=fw_built())
+
+
+def fw_built():
+    try:
+        return datetime.fromtimestamp(os.path.getmtime("/var/lib/mikrotiklover/router/sync.rsc")).strftime("%Y-%m-%d %H:%M")
+    except OSError:
+        return ""
+
+
+FW_KINDS = {"rule": "rule", "addr": "addr", "service": "service", "schedule": "schedule", "vip": "vip"}
+
+
+@app.post("/api/firewall/<kind>")
+@login_required("admin")
+def firewall_save(kind):
+    if kind == "geo-update":
+        return result(*radius_admin(["firewall", "geo", "update"], timeout=900))
+    if kind not in FW_KINDS:
+        abort(404)
+    data = body()
+    if "id" in data and data["id"] not in (None, "", 0) and not str(data["id"]).isdigit():
+        abort(400, "bad id")
+    text = json.dumps(data)
+    if len(text) > 200000:
+        abort(413)
+    return result(*radius_admin(["firewall", kind, "save"], stdin=text, timeout=300, action=f"firewall {kind} save {data.get('name', '')}"[:120]))
+
+
+@app.post("/api/firewall/<kind>/<key>/<what>")
+@login_required("admin")
+def firewall_action(kind, key, what):
+    if kind in ("rule", "vip"):
+        if not key.isdigit() or what not in ("del", "on", "off") + (("up", "down", "top", "bottom") if kind == "rule" else ()):
+            abort(404)
+        args = ["firewall", kind, "move", key, what] if what in ("up", "down", "top", "bottom") else ["firewall", kind, what, key]
+    elif kind in ("addr", "service", "schedule"):
+        if what != "del" or not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$", key):
+            abort(404)
+        args = ["firewall", kind, "del", key]
+    else:
+        abort(404)
+    return result(*radius_admin(args, timeout=300))
+
+
+@app.get("/api/firewall/lookup")
+@login_required()
+def firewall_lookup():
+    fw, st = fw_state()
+    a = request.args
+    try:
+        res = fw.lookup_policy(st, a.get("dir", ""), a.get("src", ""), a.get("dst", ""), a.get("proto", "tcp"),
+                               int(a.get("port") or 0) if str(a.get("port") or "0").isdigit() else -1)
+    except fw.Bad as e:
+        abort(400, str(e))
+    except ValueError:
+        abort(400, "addresses: IPv4, port: a number")
+    for x in (a.get("src", ""), a.get("dst", "")):
+        res.setdefault("countries", []).append(fw.lookup(x) if not ipaddress.IPv4Address(x).is_private else "LAN")
+    return jsonify(res)
+
+
+@app.get("/api/firewall/logs")
+@login_required()
+def firewall_logs():
+    fw, st = fw_state()
+    a = report_args()
+    rid = request.args.get("rule", "")
+    if rid and not rid.isdigit():
+        abort(400, "bad rule")
+    rows = fw.parse_logs(mlreport.read_lines(mlreport.WF_LOG, time.time() - a.days * 86400), time.time() - a.days * 86400)
+    if rid:
+        rows = [r for r in rows if r["rule"] == int(rid)]
+    names = {r["id"]: r["name"] for r in st["rules"]}
+    rows = rows[-2000:]
+    cache = {}
+    for r in rows:
+        r["policy"] = names.get(r["rule"], f"#{r['rule']} (deleted)")
+        if r["src"] not in cache:
+            try:
+                cache[r["src"]] = "LAN" if ipaddress.IPv4Address(r["src"]).is_private else fw.lookup(r["src"])
+            except ValueError:
+                cache[r["src"]] = ""
+        r["country"] = cache[r["src"]]
+    by_rule, by_src = {}, {}
+    for r in rows:
+        by_rule[r["rule"]] = by_rule.get(r["rule"], 0) + 1
+        by_src[r["src"]] = by_src.get(r["src"], 0) + 1
+    top_src = sorted(by_src.items(), key=lambda x: -x[1])[:15]
+    return jsonify(rows=list(reversed(rows[-500:])), by_rule=[{"rule": k, "policy": names.get(k, f"#{k}"), "count": v} for k, v in
+                                                               sorted(by_rule.items(), key=lambda x: -x[1])],
+                   top_sources=[{"ip": k, "count": v, "country": cache.get(k, "")} for k, v in top_src])
+
+
+@app.get("/api/public/router/geo.rsc")
+def router_geo():
+    """Country lists for the routers (only the countries the firewall uses). Same key as the auto-sync."""
+    key = request.args.get("key", "")
+    if not key or not router_key() or not hmac.compare_digest(key, router_key()):
+        abort(403)
+    return send_from_directory("/var/lib/mikrotiklover/router", "geo.rsc", mimetype="text/plain", max_age=0)
 
 
 @app.post("/api/security/<action>")

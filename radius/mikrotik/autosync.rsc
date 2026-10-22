@@ -59,6 +59,8 @@ add name=ml-stats policy=read,test comment="mikrotiklover: router health report"
 :do { :set d ($d . "\nppp=" . [:len [/ppp active find]]) } on-error={}
 :do { :set d ($d . "\ndhcp=" . [:len [/ip dhcp-server lease find where status="bound"]]) } on-error={}
 :do { :foreach n in=[/ip firewall nat find where chain="dstnat" and (action="dst-nat" or action="netmap")] do={ :local x [/ip firewall nat get $n]; :set d ($d . "\nnat=" . ($x->"protocol") . "|" . ($x->"dst-port") . "|" . ($x->"to-addresses") . "|" . ($x->"to-ports") . "|" . ($x->"in-interface") . ($x->"in-interface-list") . "|" . ($x->"dst-address") . ($x->"dst-address-list") . "|" . ($x->"src-address") . ($x->"src-address-list") . "|" . ($x->"disabled") . "|" . ($x->"dynamic") . "|" . ($x->"comment")) } } on-error={}
+:do { :foreach n in=[/ip firewall filter find where comment~"^mlfw:[0-9]"] do={ :local x [/ip firewall filter get $n]; :set d ($d . "\nfw=" . ($x->"comment") . "|" . ($x->"packets") . "|" . ($x->"bytes")) } } on-error={}
+:do { :foreach n in=[/ip firewall nat find where comment~"^mlfw-vip:[0-9]"] do={ :local x [/ip firewall nat get $n]; :set d ($d . "\nfwn=" . ($x->"comment") . "|" . ($x->"packets") . "|" . ($x->"bytes")) } } on-error={}
 :do { :foreach n in=[/ip service find where disabled=no] do={ :local x [/ip service get $n]; :set d ($d . "\nsvc=" . ($x->"name") . "|" . ($x->"port") . "|" . ($x->"address")) } } on-error={}
 :do { /tool fetch url="$base/report?key=$key" http-method=post http-data=$d http-header-field="Content-Type: text/plain" check-certificate=yes-without-crl output=none } on-error={ :log warning "ml-stats: RADIUS server not reachable" }
 }

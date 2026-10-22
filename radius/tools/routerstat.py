@@ -34,8 +34,8 @@ def _pair(s):
 def parse(text):
     """-> dict, or raises ValueError for something that is not a router report."""
     d = {"identity": "", "version": "", "board": "", "uptime": "", "cpu": 0, "mem_free": 0, "mem_total": 0,
-         "hdd_free": 0, "hdd_total": 0, "hotspot": 0, "ppp": 0, "dhcp": 0, "interfaces": [], "links": [], "nat": [], "services": []}
-    for line in str(text).splitlines()[:400]:
+         "hdd_free": 0, "hdd_total": 0, "hotspot": 0, "ppp": 0, "dhcp": 0, "interfaces": [], "links": [], "nat": [], "services": [], "fw": {}, "fwn": {}}
+    for line in str(text).splitlines()[:1500]:
         k, sep, v = line.partition("=")
         if not sep:
             continue
@@ -73,6 +73,12 @@ def parse(text):
                 d["nat"].append({"proto": p[0] or "any", "port": p[1], "to": p[2], "to_port": p[3] or p[1], "in": p[4],
                                  "dst": p[5], "src": p[6], "disabled": p[7] == "true", "dynamic": p[8] == "true",
                                  "comment": SAFE.sub("", " / ".join(v.split("|")[9:]))[:64]})
+        elif k in ("fw", "fwn"):          # firewall policy / port forward counters: "mlfw:12 name|packets|bytes"
+            m = re.match(r"^mlfw(?:-vip)?:(\d{1,9})\b[^|]*\|(\d+)\|(\d+)$", v)
+            if m and (m.group(1) in d[k] or len(d[k]) < 1000):
+                c = d[k].setdefault(m.group(1), [0, 0])
+                c[0] += int(m.group(2))
+                c[1] += int(m.group(3))
         elif k == "svc" and len(d["services"]) < MAX_SVC:
             p = [SAFE.sub("", x)[:128] for x in v.split("|")]
             if len(p) >= 2 and re.match(r"^[a-z0-9-]{1,16}$", p[0]):

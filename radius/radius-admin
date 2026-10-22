@@ -1779,6 +1779,8 @@ cmd_firewall() { # policies, address objects, services, schedules, port forwards
     case $sub in
         list|json) fw_py "$sub" ;;
         logs) shift; fw_py logs "$@" ;;
+        lookup) shift; [ $# -ge 4 ] || die "usage: radius-admin firewall lookup out|in|router|router-lan|lan SRC-IP DST-IP tcp|udp|icmp [PORT]"
+                fw_py lookup "$@" ;;
         rsc) fw_rsc ;;
         geo)
             case ${2:-status} in
@@ -3075,6 +3077,7 @@ Blocking policies + router auto-sync (dashboard → Blocking)
   firewall service set NAME tcp/8080,8443 udp/5000-5100 · schedule set NAME mon,tue 09:00-17:00
   firewall vip add NAME OUT-PORT IN-IP[:PORT] [--proto tcp|udp|both] [--src office,geo:PK] · vip del|on|off ID
   firewall geo update|import FILE|status|lookup IP · firewall logs [--n 50]
+  firewall lookup out|in|router|router-lan|lan SRC DST tcp|udp|icmp [PORT]   which policy takes this connection
   policy on|off NAME                    turn a policy off (kept, users stay in it, no router rules) or on again
   policy build                          rebuild the router rules (+ VPN server list); cron does it every hour
   policy sync                           URL + key for the router auto-sync script (dashboard → Blocking)
