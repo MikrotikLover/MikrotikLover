@@ -424,6 +424,19 @@ class Checks:
                      "sudo radius-admin ips update  (the server needs internet to rules.emergingthreats.net)")
         else:
             self.add("ips", g, "Intrusion prevention", "ok", f"running, {st['rules']} signatures, copy from {', '.join(cp.get('routers', []))}")
+        md, il = st.get("mode") or {}, st.get("inline") or {}
+        if md.get("mode") == "inline":
+            if il.get("bypass"):
+                self.add("ips-inline", g, "Inline IPS", "fail" if il.get("held") or not il.get("manual") else "warn",
+                         f"BYPASS on ({il.get('reason', '')}): traffic passes the server unchecked" + (" — 3 failures in 10 minutes, staying on bypass" if il.get("held") else ""),
+                         "radius-admin ips restart ; see /var/log/suricata/suricata.log ; bypass by hand off: radius-admin ips bypass off")
+            elif il.get("at") and time.time() - il["at"] > 30:
+                self.add("ips-inline", g, "Inline IPS", "fail", "the inline guard is not running: if Suricata stops, the LAN loses the internet",
+                         "sudo systemctl restart mikrotiklover-ipsguard  (or radius-admin ips restart)")
+            else:
+                self.add("ips-inline", g, "Inline IPS", "ok" if md.get("drop") else "warn",
+                         f"{md.get('wan')} ⇄ {md.get('lan')}: " + ("attacks stopped at the first packet" if md.get("drop") else "alert only (test mode)"),
+                         "" if md.get("drop") else "When the alerts look right: Security → Intrusion prevention → Mode → Stop attacks")
         if st.get("running") and st.get("watcher") is False:
             self.add("ips-watch", g, "IPS real-time blocks", "warn", "the real-time watcher is not running: blocks take up to 2 minutes",
                      "sudo radius-admin ips restart")

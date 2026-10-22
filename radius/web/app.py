@@ -3233,7 +3233,19 @@ def ips_get():
         api_routers = [{"ip": k, **v} for k, v in json.loads(out2).items()] if ok2 else []
     except ValueError:
         api_routers = []
-    return jsonify(api_routers=api_routers, status=st, settings={"on": sett.get("ips_on") == "1", "autoblock": sett.get("ips_autoblock", "1") != "0",
+    ifaces = []
+    try:
+        dflt = subprocess.run(["ip", "-o", "route", "show", "default"], capture_output=True, text=True, timeout=5).stdout
+        addrs = subprocess.run(["ip", "-o", "-4", "addr", "show"], capture_output=True, text=True, timeout=5).stdout
+        for n in sorted(os.listdir("/sys/class/net")):
+            if n == "lo" or n.startswith(("br-ml", "mltap", "veth", "docker", "virbr")) or not re.match(r"^[\w.-]{1,15}$", n):
+                continue
+            ip4 = [l.split()[3] for l in addrs.splitlines() if l.split()[1] == n]
+            ifaces.append({"name": n, "ip": ", ".join(ip4), "default": f" dev {n} " in f" {dflt} ",
+                           "up": open(f"/sys/class/net/{n}/operstate").read().strip() == "up"})
+    except OSError:
+        pass
+    return jsonify(ifaces=ifaces, api_routers=api_routers, status=st, settings={"on": sett.get("ips_on") == "1", "autoblock": sett.get("ips_autoblock", "1") != "0",
                                         "level": sett.get("ips_block_level") or "high", "hours": int(sett.get("ips_block_hours") or 24),
                                         "mirror": sett.get("ips_mirror") or "first", "server_ip": sett.get("server_ip", "")},
                    counts={r["severity"]: {"hits": int(r["hits"]), "sources": int(r["sources"])} for r in counts},
@@ -3245,9 +3257,20 @@ def ips_get():
 @login_required("admin")
 def ips_action(action):
     if action not in ("on", "off", "update", "restart", "install", "autoblock", "level", "hours", "mirror", "rule", "block", "unblock", "allow", "disallow",
-                      "api-add", "api-test", "api-del"):
+                      "api-add", "api-test", "api-del", "inline", "bypass"):
         abort(404)
     data = body()
+    if action == "inline":
+        what = field(data, "what", re.compile(r"^(on|drop|alert|off)$"), required=True)
+        if what == "on":
+            ifre = re.compile(r"^[A-Za-z0-9._-]{1,15}$")
+            args = ["ips", "inline", "on", field(data, "wan", ifre, required=True), field(data, "lan", ifre, required=True),
+                    "drop" if data.get("drop") else "alert"]
+        else:
+            args = ["ips", "inline", what]
+        return result(*radius_admin(args, timeout=600))
+    if action == "bypass":
+        return result(*radius_admin(["ips", "bypass", "on" if data.get("on") else "off"], timeout=60))
     if action.startswith("api-"):
         rip = field(data, "router", re.compile(r"^\d{1,3}(\.\d{1,3}){3}$"), required=True)
         if action == "api-add":

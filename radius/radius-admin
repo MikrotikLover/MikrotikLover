@@ -1840,7 +1840,16 @@ ips_py() { python3 -I "$IPSPY" --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@"; }
 ips_rsc() { # router part of sync.rsc: a copy of internet traffic to the server (TZSP), and drop what the IPS blocked
     local sip cb=""
     sip=$(setting_get server_ip 2>/dev/null || true)
-    if [ "$(setting_get ips_on 2>/dev/null)" = 1 ] && [[ $sip =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
+    if [ "$(setting_get ips_on 2>/dev/null)" = 1 ] && grep -q '"inline"' "$CONF_DIR/ips-mode.json" 2>/dev/null; then
+        echo "# IPS inline on the server (traffic passes through it): no copy needed; addresses it blocks (list ml-ips) are dropped here too"
+        echo "/ip firewall mangle"
+        echo 'remove [find comment~"^mlips:"]'
+        echo "/ip firewall raw"
+        echo 'remove [find comment~"^mlips:"]'
+        echo 'add chain=prerouting src-address-list=ml-ips action=drop comment="mlips: blocked by the IPS (from)"'
+        echo 'add chain=prerouting dst-address-list=ml-ips action=drop comment="mlips: blocked by the IPS (to)"'
+        echo 'move [find comment~"^mlips:"] destination=0'
+    elif [ "$(setting_get ips_on 2>/dev/null)" = 1 ] && [[ $sip =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
         [ "$(setting_get ips_mirror 2>/dev/null)" = all ] || cb=" connection-bytes=0-262144"
         echo "# IPS (radius-admin ips): a copy of internet traffic to Suricata on $sip; addresses it blocks (list ml-ips, every minute) are dropped"
         echo "/ip firewall mangle"
@@ -1865,22 +1874,30 @@ ips_rsc() { # router part of sync.rsc: a copy of internet traffic to the server 
 ips_svc() { # start | stop the traffic copy receiver and Suricata (systemd when there is one)
     local act=$1
     if [ -d /run/systemd/system ]; then
-        if [ "$act" = start ]; then systemctl enable --now mikrotiklover-tzsp mikrotiklover-suricata mikrotiklover-ipswatch >/dev/null 2>&1
-            systemctl restart mikrotiklover-suricata mikrotiklover-ipswatch >/dev/null 2>&1
-        else systemctl disable --now mikrotiklover-ipswatch mikrotiklover-suricata mikrotiklover-tzsp >/dev/null 2>&1; fi
+        if [ "$act" = start ]; then systemctl enable --now mikrotiklover-tzsp mikrotiklover-suricata mikrotiklover-ipswatch mikrotiklover-ipsguard >/dev/null 2>&1
+            systemctl restart mikrotiklover-suricata mikrotiklover-ipswatch mikrotiklover-ipsguard >/dev/null 2>&1
+        else systemctl disable --now mikrotiklover-ipsguard mikrotiklover-ipswatch mikrotiklover-suricata mikrotiklover-tzsp >/dev/null 2>&1; fi
         return 0
     fi
     pkill -f 'mikrotiklover/tzsp2tap[.]py' 2>/dev/null || true
     pkill -f 'mikrotiklover/ips[.]py .*watch' 2>/dev/null || true
-    [ ! -s /run/mikrotiklover-suricata.pid ] || kill "$(cat /run/mikrotiklover-suricata.pid)" 2>/dev/null || true
-    sleep 1; rm -f /run/mikrotiklover-suricata.pid
+    [ "$act" = start ] || pkill -f 'mikrotiklover/ipsguard[.]py' 2>/dev/null || true
+    if [ -s /run/mikrotiklover-suricata.pid ]; then
+        local sp; sp=$(cat /run/mikrotiklover-suricata.pid)
+        kill "$sp" 2>/dev/null || true
+        local i; for i in $(seq 1 30); do kill -0 "$sp" 2>/dev/null || break; sleep 0.5; done   # let it finish before a new one starts
+        kill -9 "$sp" 2>/dev/null || true
+    fi
+    rm -f /run/mikrotiklover-suricata.pid
     [ "$act" = start ] || return 0
     nohup python3 -I /usr/local/lib/mikrotiklover/tzsp2tap.py >>/var/log/suricata/tzsp.log 2>&1 &
     pkill -f 'mikrotiklover/ips[.]py .*watch' 2>/dev/null || true
     nohup python3 -I "$IPSPY" --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" watch >>/var/log/suricata/ipswatch.log 2>&1 &
+    pkill -f 'mikrotiklover/ipsguard[.]py' 2>/dev/null || true
+    nohup python3 -I /usr/local/lib/mikrotiklover/ipsguard.py >>/var/log/suricata/ipsguard.log 2>&1 &
     sleep 2
-    suricata -c "$CONF_DIR/suricata.yaml" --af-packet=mltap0 -k none -D --pidfile /run/mikrotiklover-suricata.pid >/dev/null 2>&1 \
-        || warn "Suricata did not start: see /var/log/suricata/suricata.log"
+    # shellcheck disable=SC2046
+    suricata -D $(ips_py suricata-args) >/dev/null 2>&1 || warn "Suricata did not start: see /var/log/suricata/suricata.log"
 }
 
 ips_units() {
@@ -1905,8 +1922,8 @@ After=mikrotiklover-tzsp.service
 Requires=mikrotiklover-tzsp.service
 
 [Service]
-ExecStartPre=/bin/sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do ip link show mltap0 >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
-ExecStart=/usr/bin/suricata -c $CONF_DIR/suricata.yaml --af-packet=mltap0 -k none --pidfile /run/mikrotiklover-suricata.pid
+ExecStartPre=/bin/sh -c 'grep -q "\\"inline\\"" $CONF_DIR/ips-mode.json 2>/dev/null && exit 0; for i in 1 2 3 4 5 6 7 8 9 10; do ip link show mltap0 >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
+ExecStart=/bin/sh -c 'exec /usr/bin/suricata \$\$(/usr/bin/python3 -I /usr/local/lib/mikrotiklover/ips.py suricata-args)'
 ExecReload=/bin/kill -USR2 \$MAINPID
 Restart=on-failure
 RestartSec=10
@@ -1923,6 +1940,19 @@ After=mariadb.service mikrotiklover-suricata.service
 ExecStart=/usr/bin/python3 -I /usr/local/lib/mikrotiklover/ips.py --cnf $CONF_DIR/my.cnf --db $DB_NAME watch
 Restart=always
 RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    cat > /etc/systemd/system/mikrotiklover-ipsguard.service <<UNIT
+[Unit]
+Description=MikrotikLover IPS: inline guard — joins the two network cards if Suricata stops (internet keeps working)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 -I /usr/local/lib/mikrotiklover/ipsguard.py
+Restart=always
+RestartSec=1
 
 [Install]
 WantedBy=multi-user.target
@@ -1957,6 +1987,44 @@ cmd_ips() { # intrusion prevention: Suricata on a copy of the routers' internet 
             cmd_policy build >/dev/null || die "router rules not built"
             ok "IPS off (routers stop sending the copy within 15 minutes; blocked addresses run out by themselves)" ;;
         json) ips_py status ;;
+        inline)
+            local act=${1:-status}; shift || true
+            case $act in
+                on)
+                    local wan=${1:-} lan=${2:-} how=${3:-alert}
+                    [ -n "$wan" ] && [ -n "$lan" ] && [[ $how =~ ^(alert|drop)$ ]] || die "usage: radius-admin ips inline on WAN-IF LAN-IF [alert|drop]   (WAN-IF: card to the MikroTik, LAN-IF: card to the LAN switch)"
+                    command -v suricata >/dev/null || die "Suricata is not installed: sudo radius-admin ips install"
+                    local i; for i in "$wan" "$lan"; do
+                        [ -e "/sys/class/net/$i" ] || die "no network card '$i' (ip link)"
+                        [ -z "$(ip -4 -o addr show dev "$i" 2>/dev/null)" ] || [ "${FORCE:-}" = 1 ] || die "'$i' has an IP address: the inline cards carry traffic only (manage the server through a third card). FORCE=1 to go on anyway"
+                        ip route show default 2>/dev/null | grep -qw "dev $i" && [ "${FORCE:-}" != 1 ] && die "'$i' is this server's internet / default route card — pick two other cards"
+                    done
+                    local out; out=$(ips_py mode inline "$wan" "$lan" "$how" 2>&1) || die "$out"
+                    setting_set ips_on 1
+                    ips_py update >/dev/null 2>&1 || true
+                    ips_svc start
+                    cmd_policy build >/dev/null || die "router rules not built"
+                    ok "IPS inline between $wan (MikroTik side) and $lan (LAN side): $([ "$how" = drop ] && echo 'attacks are STOPPED' || echo 'alert only (test mode) — when the alerts look right: radius-admin ips inline drop'). $out" ;;
+                drop|alert)
+                    grep -q '"inline"' "$CONF_DIR/ips-mode.json" 2>/dev/null || die "inline mode is off (radius-admin ips inline on WAN-IF LAN-IF)"
+                    local m; m=$(ips_py mode); local w l
+                    w=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["wan"])' "$m"); l=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["lan"])' "$m")
+                    local out; out=$(ips_py mode inline "$w" "$l" "$act" 2>&1) || die "$out"
+                    ips_py update >/dev/null 2>&1 || true
+                    python3 -I "$IPSPY" status >/dev/null; [ -s /run/mikrotiklover-suricata.pid ] && kill -USR2 "$(cat /run/mikrotiklover-suricata.pid)" 2>/dev/null || true
+                    ok "inline: $([ "$act" = drop ] && echo 'attacks are STOPPED' || echo 'alert only (nothing stopped)') — $out" ;;
+                off)
+                    local out; out=$(ips_py mode copy 2>&1) || die "$out"
+                    rm -f /run/mikrotiklover/bypass.manual
+                    if [ "$(setting_get ips_on)" = 1 ]; then ips_svc start; else ips_svc stop; fi
+                    sleep 3; python3 -I /usr/local/lib/mikrotiklover/ipsguard.py bypass status >/dev/null 2>&1 || true
+                    cmd_policy build >/dev/null || die "router rules not built"
+                    ok "inline off: back to the routers' copy. IMPORTANT: put the LAN cable back from the server to the MikroTik (or keep the bypass: radius-admin ips bypass on before you switch)" ;;
+                status|*) ips_py mode; echo; cat /run/mikrotiklover/inline.json 2>/dev/null; echo ;;
+            esac ;;
+        bypass)
+            [[ ${1:-} =~ ^(on|off|status)$ ]] || die "usage: radius-admin ips bypass on|off|status   (on: traffic passes the server unchecked)"
+            local out; out=$(python3 -I /usr/local/lib/mikrotiklover/ipsguard.py bypass "$1" 2>&1) || die "$out"; ok "$out" ;;
         api)
             local act=${1:-list}; shift || true
             local R=(python3 -I /usr/local/lib/mikrotiklover/rosapi.py)
@@ -3340,6 +3408,8 @@ Blocking policies + router auto-sync (dashboard → Blocking)
   ips alerts [--days N] · ips update · ips rule on|off SID · ips autoblock on|off · ips level high|medium
   ips hours N · ips mirror first|all · ips block|unblock|allow|disallow IP
   ips api add|test|del|script ROUTER-IP · ips api list   instant blocks (~1 s) through the router's API (api-ssl)
+  ips inline on WAN-IF LAN-IF [alert|drop]  Suricata in the traffic path (first packet stopped); ips inline drop|alert|off|status
+  ips bypass on|off|status               inline: join the two cards (traffic unchecked) — also done by itself if Suricata stops
   mail set ip IP domain DOMAIN [host H] [public IP] [dkim SEL] [webmail PORT]   the mail server on the LAN (MDaemon …)
   mail status · mail doors · mail guard|smtp-out on|off · mail rate N · mail trusted OBJECT|none · mail logs · mail checklist KEY on|off
   policy on|off NAME                    turn a policy off (kept, users stay in it, no router rules) or on again

@@ -3483,6 +3483,33 @@ async function ipsPage(tabs) {
         h("div", { class: "toolbar ips-opts" }, h("label", { class: "field" }, "Block level", lvl), h("label", { class: "field" }, "Block for", hrs), h("label", { class: "field" }, "Routers copy", mir),
           isAdmin() ? h("button", { class: "small", onclick: (e) => { e.target.disabled = true; doIt("update"); } }, "Update signatures now") : null)),
       (() => {
+        const md = st.mode || { mode: "copy" }, il = st.inline || {}, inline = md.mode === "inline";
+        const ifs = d.ifaces || [];
+        const opt = (sel) => ifs.map((i) => h("option", { value: i.name, selected: i.name === sel, disabled: i.default },
+          `${i.name}${i.ip ? " — " + i.ip : ""}${i.default ? " (server's own link)" : ""}${i.up ? "" : " (no cable)"}`));
+        const wan = h("select", { disabled: !isAdmin() || inline }, opt(md.wan)), lan = h("select", { disabled: !isAdmin() || inline }, opt(md.lan || (ifs[1] || {}).name));
+        const state = !inline ? null : il.bypass ? badge(il.manual ? "BYPASS (by hand) — traffic NOT checked" : `BYPASS — ${il.reason || "Suricata not passing traffic"}`, "bad")
+          : badge(md.drop ? "inline: attacks STOPPED" : "inline: alert only (test)", md.drop ? "ok" : "warn");
+        return card("Mode", inline ? "Suricata is in the traffic path" : "the routers send a copy", h("div", { class: "stack" },
+          h("div", { class: "grid g-2 ips-modes" },
+            h("div", { class: "ips-mode" + (inline ? "" : " on") }, h("b", {}, "Copy (safe, default)"),
+              h("div", { class: "muted small" }, "Routers send a copy; attackers are blocked ~0.25 s – 1 min later. The first packets of an attack get through. Nothing can stop your internet.")),
+            h("div", { class: "ips-mode" + (inline ? " on" : "") }, h("b", {}, "Inline (like Fortinet)"),
+              h("div", { class: "muted small" }, "Cable: MikroTik → server card 1, server card 2 → LAN switch. Suricata passes every packet and stops an attack at its first packet. If Suricata stops or sticks, the server joins the two cards by itself within ~3 s (bypass), so the internet keeps working."))),
+          inline ? h("div", { class: "toolbar" }, state, h("span", { class: "muted small" }, `${md.wan} (MikroTik side) ⇄ ${md.lan} (LAN side)`),
+            il.held ? badge("3 failures in 10 min: staying on bypass", "bad") : null) : null,
+          isAdmin() ? (inline
+            ? h("div", { class: "toolbar" },
+                h("div", { class: "seg" }, h("button", { type: "button", class: md.drop ? "" : "on", onclick: () => !md.drop || doIt("inline", { what: "alert" }) }, "Alert only (test)"),
+                  h("button", { type: "button", class: md.drop ? "on" : "", onclick: () => md.drop || doIt("inline", { what: "drop" }, "Stop attacks now? Traffic matching a high-level signature is dropped at once — watch Alerts for a few days in test mode first.") }, "Stop attacks")),
+                h("button", { class: "small", onclick: () => doIt("bypass", { on: !il.manual }, il.manual ? null : "Let all traffic pass unchecked (bypass) until you turn it off?") }, il.manual ? "Bypass off" : "Bypass on (maintenance)"),
+                h("button", { class: "small danger", onclick: () => doIt("inline", { what: "off" }, "Back to copy mode? Turn bypass on first and move the cable back (LAN switch → MikroTik), or the LAN loses the internet.") }, "Back to copy mode"))
+            : h("div", { class: "toolbar ips-opts" }, h("label", { class: "field" }, "Card to the MikroTik", wan), h("label", { class: "field" }, "Card to the LAN switch", lan),
+                h("button", { class: "primary", disabled: ifs.length < 2, onclick: () => doIt("inline", { what: "on", wan: wan.value, lan: lan.value, drop: false },
+                  `Go inline between ${wan.value} and ${lan.value}? Plug the cables first. It starts in alert-only test mode.`) }, "Go inline (test mode)"),
+                ifs.length < 2 ? h("span", { class: "muted small" }, "needs two network cards (a third one for managing the server is best)") : null)) : null));
+      })(),
+      (() => {
         const routers = d.api_routers || [];
         const addOne = async () => {
           const ip = h("input", { placeholder: "router IP, e.g. 192.168.88.1", required: true, pattern: "\\d{1,3}(\\.\\d{1,3}){3}" });

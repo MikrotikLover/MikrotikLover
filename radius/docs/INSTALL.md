@@ -322,6 +322,7 @@ Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein
 | Mulk band karna (Geo-IP), andar aate ya bahar jaate | Firewall → Countries | `radius-admin firewall geo update` · `firewall rule add X --dir wan --src geo:CN --action deny` |
 | IPS (Suricata): hamle pehchanna aur hamla karne wale IP ko minute mein band | Security → Intrusion prevention | `radius-admin ips install` · `ips on` · `ips status` · `ips alerts` |
 | IPS block ~1 second mein (MikroTik API, api-ssl) | Security → Intrusion prevention → Instant blocks → + Add a router | `radius-admin ips api add 192.168.88.1` · `ips api test 192.168.88.1` · `ips api list` |
+| Inline IPS (pehla packet ruke) + khud bypass agar Suricata band / atke | Security → Intrusion prevention → Mode → Inline | `radius-admin ips inline on eth1 eth2` · `ips inline drop` · `ips bypass on|off` · `ips inline off` |
 | Mail server (MDaemon) ki hifazat: safe ports, password guessing band, spam bots, DNS / blacklist / certificate checks | Mail server | `radius-admin mail set ip 192.168.88.30 domain example.com` · `mail doors` · `mail status` |
 | Ye connection kaun si policy le gi? | Firewall → Policy lookup | `radius-admin firewall lookup router 1.2.3.4 203.0.113.1 tcp 8291` |
 | Bahar se kya andar aa raha hai: khule darwaze (port forward, UPnP, router services), kis IP ne kis andar ke IP:port ko chhua | Security → From outside → Who? | naya auto-sync script import + traffic collector |

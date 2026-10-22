@@ -92,7 +92,52 @@ def read_conf(path=f"{CONF_DIR}/radius.conf"):
     return conf
 
 
-def suricata_yaml(home, tap="mltap0", rule_dir=RULE_DIR, log_dir=LOG_DIR):
+MODE_FILE = os.environ.get("ML_IPS_MODE", f"{CONF_DIR}/ips-mode.json")
+
+
+def mode():
+    """{'mode': 'copy' | 'inline', 'wan': iface, 'lan': iface, 'drop': bool} — copy (the routers send a copy) is the default."""
+    try:
+        m = json.load(open(MODE_FILE))
+    except (OSError, ValueError):
+        m = {}
+    m.setdefault("mode", "copy")
+    m.setdefault("drop", False)
+    return m
+
+
+def set_mode(m):
+    os.makedirs(os.path.dirname(MODE_FILE), exist_ok=True)
+    with open(MODE_FILE + ".tmp", "w") as f:
+        json.dump(m, f)
+    os.replace(MODE_FILE + ".tmp", MODE_FILE)
+
+
+def suricata_args(m=None):
+    m = m or mode()
+    base = ["-c", SURI_CONF, "-k", "none", "--pidfile", PIDFILE]
+    return base + (["--af-packet"] if m["mode"] == "inline" else ["--af-packet=mltap0"])
+
+
+def af_packet(m, tap):
+    if m.get("mode") != "inline":
+        return f"""af-packet:
+  - interface: {tap}
+    cluster-id: 99
+    cluster-type: cluster_flow
+    defrag: yes
+    checksum-checks: no
+  - interface: default"""
+    # inline: Suricata itself passes every packet between the two network cards (and stops the bad ones)
+    out = ["af-packet:"]
+    for i, (a, b) in enumerate(((m["wan"], m["lan"]), (m["lan"], m["wan"]))):
+        out += [f"  - interface: {a}", "    copy-mode: ips", f"    copy-iface: {b}", f"    cluster-id: {97 + i}", "    cluster-type: cluster_flow",
+                "    defrag: no", "    use-mmap: yes", "    tpacket-v3: no", "    checksum-checks: no"]
+    return "\n".join(out)
+
+
+def suricata_yaml(home, tap="mltap0", rule_dir=RULE_DIR, log_dir=LOG_DIR, m=None):
+    m = m or {"mode": "copy"}
     cls = os.path.join(rule_dir, "classification.config")
     cls = cls if os.path.exists(cls) else "/etc/suricata/classification.config"
     ref = os.path.join(rule_dir, "reference.config")
@@ -102,7 +147,7 @@ def suricata_yaml(home, tap="mltap0", rule_dir=RULE_DIR, log_dir=LOG_DIR):
                                                          "ENIP_CLIENT", "ENIP_SERVER"))
     return f"""%YAML 1.1
 ---
-# MikrotikLover IPS (ips.py config) — the routers' copy of internet traffic arrives on {tap} (tzsp2tap.py)
+# MikrotikLover IPS (ips.py config) — {'inline between ' + m['wan'] + ' and ' + m['lan'] if m.get('mode') == 'inline' else 'the routers copy of internet traffic arrives on ' + tap + ' (tzsp2tap.py)'}
 vars:
   address-groups:
     HOME_NET: "[{','.join(home)}]"
@@ -133,6 +178,8 @@ outputs:
       types:
         - alert:
             tagged-packets: no
+        - drop:
+            alerts: yes
 logging:
   default-log-level: notice
   outputs:
@@ -142,13 +189,7 @@ logging:
         enabled: yes
         level: info
         filename: suricata.log
-af-packet:
-  - interface: {tap}
-    cluster-id: 99
-    cluster-type: cluster_flow
-    defrag: yes
-    checksum-checks: no
-  - interface: default
+{af_packet(m, tap)}
 default-rule-path: {rule_dir}
 rule-files:
   - suricata.rules
@@ -193,6 +234,8 @@ app-layer:
           dp: 53
     imap:
       enabled: detection-only
+livedev:
+  use-for-tracking: false
 """
 
 
@@ -497,7 +540,8 @@ def reload_rules():
 
 
 # a copy of only the first part of each connection makes these packet / stream checks shout all day: off by default
-DEFAULT_DISABLE = ["group:stream-events.rules", "group:decoder-events.rules", "group:app-layer-events.rules"]
+DEFAULT_DISABLE = ["group:stream-events.rules", "group:decoder-events.rules", "group:app-layer-events.rules",
+                   "group:modbus-events.rules", "group:dnp3-events.rules"]      # industrial protocols: not used here, not parsed
 
 
 def ensure_disable():
@@ -505,10 +549,52 @@ def ensure_disable():
         have = open(DISABLE).read()
     except OSError:
         have = ""
-    if "# defaults" not in have:
+    missing = [x for x in DEFAULT_DISABLE if x not in have.split()]
+    if missing or "# defaults" not in have:
         os.makedirs(os.path.dirname(DISABLE), exist_ok=True)
         with open(DISABLE, "w") as f:
-            f.write("# defaults (ips.py): packet / stream checks, noisy on a partial copy\n" + "".join(x + "\n" for x in DEFAULT_DISABLE) + have)
+            f.write(("" if "# defaults" in have else "# defaults (ips.py): packet / stream checks, noisy on a partial copy\n")
+                    + have + "".join(x + "\n" for x in missing))
+
+
+def drop_classes(path="/etc/suricata/classification.config"):
+    """Classes of priority 1 (break-ins, malware, attacks on the admin) — what inline mode stops."""
+    out = set()
+    try:
+        for l in open(path):
+            m = re.match(r"^config classification:\s*([\w-]+),[^,]*,\s*1\s*$", l.strip())
+            if m:
+                out.add(m.group(1))
+    except OSError:
+        out = {"attempted-admin", "successful-admin", "attempted-user", "successful-user", "shellcode-detect", "trojan-activity",
+               "web-application-attack", "exploit-kit", "command-and-control", "domain-c2", "targeted-activity", "credential-theft"}
+    return out
+
+
+def apply_drop(m=None, path=None):
+    """Inline + block: the high-level rules (and our own) say 'drop'; otherwise every rule only alerts. -> rules that drop."""
+    m = m or mode()
+    path = path or os.path.join(RULE_DIR, "suricata.rules")
+    want = m.get("mode") == "inline" and m.get("drop")
+    classes = drop_classes()
+    try:
+        lines = open(path, errors="replace").read().splitlines()
+    except OSError:
+        return 0
+    n, out = 0, []
+    for l in lines:
+        mm = re.match(r"^(alert|drop) ", l)
+        if mm:
+            ct = re.search(r"classtype:\s*([\w-]+)", l)
+            own = re.search(r"\bsid:\s*91000\d\d\s*;", l)
+            act = "drop" if want and ((ct and ct.group(1) in classes) or own) else "alert"
+            l = act + l[len(mm.group(1)):]
+            n += act == "drop"
+        out.append(l)
+    with open(path + ".tmp", "w") as f:
+        f.write("\n".join(out) + "\n")
+    os.replace(path + ".tmp", path)
+    return n
 
 
 def cmd_update(offline=False):
@@ -519,6 +605,7 @@ def cmd_update(offline=False):
     if offline:
         cmd.append("--offline")
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+    apply_drop()
     n = rule_count()
     fetch_err = [l for l in (p.stderr + p.stdout).splitlines() if "Failed to fetch" in l]
     if p.returncode == 0 and n and fetch_err:
@@ -531,6 +618,7 @@ def cmd_update(offline=False):
             with open(os.path.join(RULE_DIR, "suricata.rules"), "w") as f:
                 f.write("".join(l + "\n" for l in LOCAL.splitlines() if l and not l.startswith("#")
                                 and int(re.search(r"sid:(\d+)", l).group(1)) not in dis))
+            apply_drop()
             n = rule_count()
         msg = (p.stderr or p.stdout).strip().splitlines()[-1:] or ["?"]
         return False, f"signatures not downloaded ({msg[0][:160]}); {n} rules in use", n
@@ -578,6 +666,11 @@ def status(db=None):
                    "fresh": bool(tz.get("at")) and time.time() - tz.get("at", 0) < 60,
                    "last_packet": max(tz.get("routers", {}).values() or [0])}}
     st["copy"]["receiving"] = bool(st["copy"]["last_packet"]) and time.time() - st["copy"]["last_packet"] < 300
+    st["mode"] = mode()
+    try:
+        st["inline"] = json.load(open("/run/mikrotiklover/inline.json"))
+    except (OSError, ValueError):
+        st["inline"] = {}
     lock = take_lock(False) if os.geteuid() == 0 else None
     st["watcher"] = lock is None if os.geteuid() == 0 else None      # someone holds the lock = the real-time watcher runs
     if lock:
@@ -607,6 +700,9 @@ def main(argv=None):
     p.add_argument("onoff", choices=["on", "off"])
     p.add_argument("sid", type=int)
     sub.add_parser("status")
+    sub.add_parser("suricata-args")
+    p = sub.add_parser("mode")
+    p.add_argument("set", nargs="*", help="copy | inline WAN-IF LAN-IF [drop|alert]")
     for k in ("block", "unblock", "allow", "disallow"):
         p = sub.add_parser(k)
         p.add_argument("ip")
@@ -615,9 +711,10 @@ def main(argv=None):
     if a.cmd == "config":
         os.makedirs(os.path.dirname(SURI_CONF), exist_ok=True)
         with open(SURI_CONF, "w") as f:
-            f.write(suricata_yaml(lan_nets(read_conf()), a.tap))
+            f.write(suricata_yaml(lan_nets(read_conf()), a.tap, m=mode()))
         write_local()
         ensure_disable()
+        apply_drop()
         print(f"Suricata config written ({SURI_CONF})")
         return 0
     if a.cmd == "update":
@@ -632,6 +729,29 @@ def main(argv=None):
         return 0
     if a.cmd == "status":
         json.dump(status(), sys.stdout)
+        return 0
+    if a.cmd == "suricata-args":
+        print(" ".join(suricata_args()))
+        return 0
+    if a.cmd == "mode":
+        if not a.set:
+            json.dump(mode(), sys.stdout)
+            return 0
+        if a.set[0] == "copy":
+            set_mode({**mode(), "mode": "copy"})
+        elif a.set[0] == "inline" and len(a.set) >= 3:
+            wan, lan = a.set[1], a.set[2]
+            for i in (wan, lan):
+                if not re.match(r"^[A-Za-z0-9._-]{1,15}$", i) or not os.path.exists(f"/sys/class/net/{i}"):
+                    raise SystemExit(f"no network card '{i}' on this server")
+            if wan == lan:
+                raise SystemExit("two different network cards are needed")
+            set_mode({"mode": "inline", "wan": wan, "lan": lan, "drop": (a.set[3] if len(a.set) > 3 else "alert") == "drop"})
+        else:
+            raise SystemExit("usage: ips.py mode copy | inline WAN-IF LAN-IF [drop|alert]")
+        with open(SURI_CONF, "w") as f:
+            f.write(suricata_yaml(lan_nets(read_conf()), m=mode()))
+        print(f"mode {mode()['mode']}, {apply_drop()} rules stop traffic")
         return 0
     db = DB(a.cnf, a.db)
     if a.cmd == "scan":

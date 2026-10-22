@@ -78,5 +78,22 @@ check("switch a signature off: listed, commented out in the rule file, defaults 
       and "group:stream-events.rules" in open(ips.DISABLE).read() and "# alert" in [l[:7] for l in open(os.path.join(d, "suricata.rules")) if "9100004" in l][0])
 ips.set_rule(9100004, True)
 check("  ... and on again", 9100004 not in ips.disabled_sids() and ips.rule_count(os.path.join(d, "suricata.rules")) == 8)
+# inline mode: config and rules that stop traffic
+m = {"mode": "inline", "wan": "eth1", "lan": "eth2", "drop": True}
+y = ips.suricata_yaml(["192.168.0.0/16"], m=m, rule_dir=d, log_dir=d)
+check("inline config: both cards copy to each other (ips), no tap, one flow per connection across cards",
+      "- interface: eth1\n    copy-mode: ips\n    copy-iface: eth2" in y and "- interface: eth2\n    copy-mode: ips\n    copy-iface: eth1" in y
+      and "mltap0" not in y and "use-for-tracking: false" in y and "- drop:" in y)
+check("inline: Suricata started on every configured card", ips.suricata_args(m)[-1] == "--af-packet" and ips.suricata_args({"mode": "copy"})[-1] == "--af-packet=mltap0")
+rf = os.path.join(d, "r.rules")
+open(rf, "w").write("alert tcp any any -> any 1 (msg:\"x\"; classtype:trojan-activity; sid:1;)\n"
+                    "alert tcp any any -> any 2 (msg:\"y\"; classtype:misc-activity; sid:2;)\n"
+                    "# alert tcp any any -> any 3 (msg:\"z\"; classtype:trojan-activity; sid:3;)\n" + ips.LOCAL)
+n = ips.apply_drop(m, rf)
+lines = open(rf).read().splitlines()
+check("inline + stop: high-level classes and our own rules drop, others alert, switched-off stay off",
+      lines[0].startswith("drop ") and lines[1].startswith("alert ") and lines[2].startswith("# alert") and n == 1 + 8, (n, lines[:3]))
+check("alert only (test) / copy mode: nothing drops", ips.apply_drop({**m, "drop": False}, rf) == 0 and ips.apply_drop({"mode": "copy"}, rf) == 0
+      and not any(l.startswith("drop ") for l in open(rf)))
 print("all IPS tests passed" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)
