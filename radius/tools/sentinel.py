@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Security detective: infected devices (virus), hacker attacks and DDoS attacks.
+"""Security detective: infected devices (virus), hacker attacks, DDoS attacks and ransomware.
 
-Three sources, three categories:
+Three sources, four categories:
   virus   a LAN device looks up malware / phishing / crypto-mining names (threat lists), asks for
           many random names that do not exist (DGA malware), talks to a botnet server, sends spam
           to many mail servers, scans the internet or the local network, or floods someone (DDoS bot)
@@ -9,11 +9,16 @@ Three sources, three categories:
           hotspot users, the dashboard) or comes from a known attacker network
   ddos    floods towards your network, by type: SYN flood, UDP flood, ICMP flood, HTTP flood, and
           reflection/amplification by service (DNS, NTP, SSDP, memcached, CLDAP, SNMP ...)
+  ransomware  what ransomware does on the network before and while it locks files: Tor and ransom-note
+          (Tor gateway) sites, spreading inside the LAN over SMB / RDP, much more upload than the device's
+          own usual (data stolen first), file-sharing upload sites / rclone, and a sudden mass of SMB data
+          with a file server (files being encrypted). ransom_risk() turns a device's signals into 0-100.
 
 FlowWatch is fed every flow by flowcollector.py (one-minute windows); the hourly scan reads the DNS
 log, the router logs and the RADIUS / dashboard login failures.
 
   sentinel.py sql [--cnf FILE] [--db NAME]   SQL for the hourly log scan (since yesterday)
+  sentinel.py risk [--cnf FILE] [--db NAME]   ransomware risk per device (last 24 h): ip, user, score, signals
   sentinel.py update                          download the threat lists (malware, phishing, mining,
                                               botnet and attacker IPs) into /var/lib/mikrotiklover
 """
@@ -54,6 +59,18 @@ AMP_PORTS = {53: "DNS", 123: "NTP", 1900: "SSDP", 11211: "memcached", 389: "CLDA
              3702: "WS-Discovery", 5353: "mDNS", 37810: "DVR (DHAP)", 10001: "Ubiquiti discovery", 3283: "Apple Remote Desktop",
              111: "Portmap", 1194: "OpenVPN", 3478: "STUN", 27015: "Steam / game server"}
 MINING_PORTS = {3333, 4444, 7777, 14444, 14433, 45700}
+# ransomware moves inside the LAN over these (WannaCry, Ryuk, LockBit …)
+LATERAL_PORTS = {445: "SMB", 139: "NetBIOS", 3389: "RDP", 135: "RPC", 5985: "WinRM", 5986: "WinRM"}
+TOR_PORTS = {9001, 9030, 9050, 9051, 9150}
+# ransom notes send victims to a Tor site, often through a web gateway; a name ending in .onion asked
+# from the normal DNS is a Tor client leaking
+ONION_RE = re.compile(r"(\.onion(\.[a-z0-9-]+)*$)|((^|\.)(onion\.(ws|ly|pet|to|ink|re|cab|city|direct|sh|dog|moe|rip|top|si|nu|link|lu|cloud)"
+                      r"|tor2web\.[a-z]+|torproxy\.[a-z]+|onion-router\.[a-z]+|darknet\.to)$)")
+# anonymous upload sites (not the big cloud drives people use every day) and the data-copy tool rclone
+EXFIL_SITES = ("mega.nz", "mega.co.nz", "mega.io", "transfer.sh", "anonfiles.com", "gofile.io", "file.io", "sendspace.com", "temp.sh",
+               "catbox.moe", "pixeldrain.com", "oshi.at", "bashupload.com", "ufile.io", "filetransfer.io", "anonymfile.com", "bayfiles.com",
+               "uploadfiles.io", "filebin.net", "tmpfiles.org", "0x0.st", "put.re", "files.catbox.moe", "litterbox.catbox.moe")
+EXFIL_TOOLS = ("rclone.org", "downloads.rclone.org", "beta.rclone.org")
 
 # per one-minute window; flowcollector scales them to its flush interval. Override in
 # /etc/mikrotiklover-radius/radius.conf as SEC_<NAME>=value
@@ -76,6 +93,11 @@ THRESHOLDS = {
     "ARP_TAKEOVER": 3,          # one device takes over this many addresses in a day = ARP spoofing
     "RADIUS_REJECTS": 15,
     "DASHBOARD_LOGIN_FAILS": 8,
+    "LATERAL_HOSTS": 8,             # LAN device -> this many LAN devices on SMB / RDP / RPC in a minute
+    "SMB_BURST_MB": 1000,           # MB with one file server over SMB in a minute (mass encryption)
+    "EXFIL_MB": 300,                # MB uploaded to one internet host in a minute
+    "EXFIL_HOUR_MB": 1500,          # an hour's upload at least this big ...
+    "EXFIL_FACTOR": 10,             # ... and this many times the device's own usual busy hour
 }
 
 
@@ -278,6 +300,15 @@ def scan_logs(dns_lines, router_lines, wf_lines, threats, lan_nets, who=lambda i
             if len(by_serial) > 200000:
                 for k in list(by_serial)[:50000]:
                     del by_serial[k]
+            if ONION_RE.search(name):
+                ev.add(t, "ransomware", "Ransom note / Tor gateway site", "dns", client, "",
+                       f"{name} — ransom notes send victims to Tor sites like this", "high", user=who(client, t))
+            elif any(name == x or name.endswith("." + x) for x in EXFIL_TOOLS):
+                ev.add(t, "ransomware", "Data-copy tool rclone downloaded", "dns", client, "",
+                       f"{name} — rclone copies whole disks to the internet (often used to steal data)", "medium", user=who(client, t))
+            elif any(name == x or name.endswith("." + x) for x in EXFIL_SITES):
+                ev.add(t, "ransomware", "Anonymous file-upload site", "dns", client, "",
+                       f"{name} — used to steal data before encrypting (also by normal people)", "low", user=who(client, t))
             src = threats.domain(name)
             if src:
                 cat = "Crypto mining" if "mining" in src.lower() else "Phishing site" if "phishing" in src.lower() else "Malware site"
@@ -390,6 +421,74 @@ def db_checks(cnf, db, since, th=None):
     return ev
 
 
+def unusual_uploads(rows, since, th=None):
+    """rows: (client_ip, user, hour_start_epoch, bytes_up) for ~8 days. -> Events: hours since SINCE in which a
+    device sent far more than its own usual busy hour (95th percentile of the 7 days before), and at least
+    EXFIL_HOUR_MB — ransomware steals the data first."""
+    th = th or thresholds()
+    ev = Events()
+    per = defaultdict(list)
+    for ip, user, hour, b in rows:
+        per[ip].append((float(hour), int(b), user))
+    floor = th["EXFIL_HOUR_MB"] * 1e6
+    for ip, hours in per.items():
+        hours.sort()
+        for i, (h, b, user) in enumerate(hours):
+            if h < since or b < floor:
+                continue
+            past = sorted(x[1] for x in hours[:i] if h - 7 * 86400 <= x[0] < h and x[1] > 0)
+            usual = past[int(len(past) * 0.95) - 1] if len(past) >= 24 else 0     # too little history: the floor only
+            if usual and b < th["EXFIL_FACTOR"] * usual:
+                continue
+            night = time.localtime(h).tm_hour < 6
+            ev.add(h, "ransomware", "Unusual upload (much more than this device's usual)", "log", ip, "",
+                   f"{b / 1e9:.1f} GB sent in one hour" + (f", usual busy hour {usual / 1e6:.0f} MB" if usual else ", no usual yet")
+                   + (" — at night" if night else ""), "high" if night or b >= 5 * floor else "medium", user=user if user != "NULL" else "")
+    return ev
+
+
+# what each signal says about ransomware (points), and its stage: in, contact, spread, steal, lock
+RISK = [
+    ("Ransom note / Tor gateway site", 45, "contact"), ("Mass file changes on a file server", 45, "lock"),
+    ("Spreading inside the LAN", 40, "spread"), ("Scanning the local network", 25, "spread"),
+    ("Unusual upload", 30, "steal"), ("Big upload to the internet", 25, "steal"), ("Data-copy tool rclone", 20, "steal"),
+    ("Anonymous file-upload site", 10, "steal"), ("Tor network", 20, "contact"), ("Talked to a botnet", 25, "contact"),
+    ("Random names that do not exist", 20, "contact"), ("Malware site", 15, "in"), ("Phishing site", 10, "in"),
+]
+STAGES = ["in", "contact", "spread", "steal", "lock"]
+
+
+def ransom_risk(events):
+    """events: [{src_ip, username, type, severity, last_seen}] of the last 24 h (ransomware + virus).
+    -> [{ip, user, score 0-100, level, stages, signals}] worst first. Several stages together weigh more."""
+    dev = {}
+    for e in events:
+        ip = e.get("src_ip") or ""
+        if not ip:
+            continue
+        hit = next(((pts, st) for name, pts, st in RISK if e["type"].startswith(name)), None)
+        if not hit:
+            continue
+        pts, st = hit
+        if e.get("severity") == "high":
+            pts = int(pts * 1.2)
+        d = dev.setdefault(ip, {"ip": ip, "user": "", "points": {}, "stages": set(), "signals": [], "last": ""})
+        d["user"] = d["user"] or (e.get("username") or "")
+        key = next(name for name, _, _ in RISK if e["type"].startswith(name))
+        d["points"][key] = max(d["points"].get(key, 0), pts)
+        d["stages"].add(st)
+        d["signals"].append(e["type"])
+        d["last"] = max(d["last"], str(e.get("last_seen") or ""))
+    out = []
+    for d in dev.values():
+        score = sum(d["points"].values()) + 10 * max(0, len(d["stages"]) - 1)      # a chain of stages is the real danger
+        score = min(100, score)
+        out.append({"ip": d["ip"], "user": d["user"], "score": score,
+                    "level": "high" if score >= 70 else "medium" if score >= 40 else "low",
+                    "stages": [s for s in STAGES if s in d["stages"]], "signals": sorted(set(d["signals"])), "last": d["last"]})
+    return sorted(out, key=lambda x: (-x["score"], x["ip"]))
+
+
 def _lan_checker(lan_nets):
     nets = []
     for n in lan_nets or []:
@@ -425,7 +524,10 @@ class FlowWatch:
         self.scan_ports = defaultdict(set)           # ext src -> {(dst, port)}
         self.sweep = defaultdict(set)                # (ext src, port) -> {dst}
         self.brute = Counter()                       # (ext src, dst, port) -> flows
-        self.lan_out = defaultdict(lambda: {"smtp": set(), "worm": defaultdict(set), "lan": set(), "mining": set()})
+        self.lan_out = defaultdict(lambda: {"smtp": set(), "worm": defaultdict(set), "lan": set(), "mining": set(),
+                                            "lateral": defaultdict(set), "tor": set()})
+        self.smb = Counter()                         # (client, file server) -> bytes over SMB
+        self.upload = Counter()                      # (lan src, internet dst) -> bytes sent
         self.bot = Counter()                         # (lan src, dst) -> small flows
         self.c2 = {}                                 # (lan src, remote) -> list
         self.attackers = {}                          # ext src -> list
@@ -451,9 +553,16 @@ class FlowWatch:
             lst = self.threats.ip(dst)
             if lst:
                 self.c2[(src, dst)] = lst
+            self.upload[(src, dst)] += nbytes
+            if proto == 6 and dport in TOR_PORTS:
+                o["tor"].add(dst)
         elif s_lan and d_lan:                        # inside the LAN
             if not (dst.endswith(".255") or dst.endswith(".1")):
                 self.lan_out[src]["lan"].add(dst)
+                if proto == 6 and dport in LATERAL_PORTS:
+                    self.lan_out[src]["lateral"][dport].add(dst)
+            if proto == 6 and 445 in (dport, sport):
+                self.smb[(src, dst) if dport == 445 else (dst, src)] += nbytes
         elif not s_lan:                              # from the internet (to the router or a LAN host)
             d = self.to_dst[dst]
             if len(d["srcs"]) < 5000:
@@ -544,6 +653,27 @@ class FlowWatch:
             if o["mining"]:
                 ev.add(t, "virus", "Possible crypto mining (stratum port)", "flow", src, "", ", ".join(sorted(o["mining"])[:3]), "low",
                        len(o["mining"]), user=u)
+        # ransomware: spreading inside the LAN, Tor, a big upload, mass file changes on a file server
+        night = time.localtime(t).tm_hour < 6
+        for src, o in self.lan_out.items():
+            u = users.get(src, "")
+            for port, dsts in o["lateral"].items():
+                if len(dsts) >= th["LATERAL_HOSTS"]:
+                    ev.add(t, "ransomware", f"Spreading inside the LAN ({LATERAL_PORTS[port]})", "flow", src, "",
+                           f"{len(dsts)} LAN devices on port {port} in {interval:.0f}s — how ransomware reaches other PCs", "high", len(dsts), user=u)
+            if o["tor"]:
+                ev.add(t, "ransomware", "Tor network (hidden servers)", "flow", src, sorted(o["tor"])[0],
+                       f"{len(o['tor'])} Tor relay(s) — ransomware talks to its owner over Tor", "medium", len(o["tor"]), user=u)
+        for (src, dst), b in self.upload.items():
+            if b >= th["EXFIL_MB"] * 1e6:
+                ev.add(t, "ransomware", "Big upload to the internet", "flow", src, dst,
+                       f"{b / 1e6:.0f} MB sent to {dst} in {interval:.0f}s" + (" at night" if night else "") + " — data is stolen before it is locked",
+                       "high" if night else "medium", 1, user=users.get(src, ""))
+        for (client, server), b in self.smb.items():
+            if b >= th["SMB_BURST_MB"] * 1e6:
+                ev.add(t, "ransomware", "Mass file changes on a file server (SMB)", "flow", client, server,
+                       f"{b / 1e9:.1f} GB with {server} over SMB in {interval:.0f}s — files may be being encrypted", "high", 1,
+                       user=users.get(client, ""))
         for (src, dst), n in self.bot.items():
             if n >= th["BOT_FLOWS"]:
                 ev.add(t, "virus", "Device is flooding someone (DDoS bot)", "flow", src, dst, f"{n} small connections to {dst}",
@@ -585,10 +715,35 @@ def sql(events, since_day):
     return "\n".join(out) + "\n"
 
 
+def _rows(cnf, db, q):
+    try:
+        out = subprocess.run(["mysql", f"--defaults-extra-file={cnf}", "-N", "-B", db, "-e", q],
+                             capture_output=True, text=True, timeout=120, check=True).stdout
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"warning: {e}", file=sys.stderr)
+        return []
+    return [l.split("\t") for l in out.splitlines()]
+
+
+def upload_rows(cnf, db):
+    """(client_ip, user, hour start, bytes up) per device and hour, 8 days (traffic collector)."""
+    return [r for r in _rows(cnf, db, "SELECT client_ip, MAX(username), UNIX_TIMESTAMP(DATE_FORMAT(bucket, '%Y-%m-%d %H:00:00')), SUM(bytes_up) "
+                                      "FROM traffic_site WHERE bucket >= NOW() - INTERVAL 8 DAY GROUP BY client_ip, 3") if len(r) == 4]
+
+
 def main():
     args = sys.argv[1:]
     if args[:1] == ["update"]:
         return update()
+    if args[:1] == ["risk"]:                              # ransomware risk per device, last 24 h
+        opt = lambda k, d: args[args.index(k) + 1] if k in args else d  # noqa: E731
+        rows = _rows(opt("--cnf", "/etc/mikrotiklover-radius/my.cnf"), opt("--db", "radius"),
+                     "SELECT src_ip, username, type, severity, last_seen FROM ml_security_event WHERE category IN ('ransomware','virus') "
+                     "AND last_seen >= NOW() - INTERVAL 1 DAY AND src_ip <> ''")
+        ev = [dict(zip(("src_ip", "username", "type", "severity", "last_seen"), r)) for r in rows if len(r) == 5]
+        for d in ransom_risk(ev):
+            print("\t".join([d["ip"], d["user"] or "-", str(d["score"]), d["level"], ",".join(d["stages"]), "; ".join(d["signals"])[:200]]))
+        return
     if args[:1] != ["sql"]:
         print(__doc__)
         sys.exit(1)
@@ -619,9 +774,11 @@ def main():
     ev = scan_logs(dns, router, wf, Threats(), lan, who, th)
     if cnf:
         ev.ev.update(db_checks(cnf, opt("--db", "radius"), since, th).ev)
+        ev.ev.update(unusual_uploads(upload_rows(cnf, opt("--db", "radius")), since, th).ev)
     sys.stdout.write(sql(ev, day_of(since)))
     cats = Counter(k[1] for k in ev.ev)
-    print(f"security: {len(ev.ev)} events — virus {cats['virus']}, attack {cats['attack']}, ddos {cats['ddos']}", file=sys.stderr)
+    print(f"security: {len(ev.ev)} events — virus {cats['virus']}, attack {cats['attack']}, ddos {cats['ddos']}, "
+          f"ransomware {cats['ransomware']}", file=sys.stderr)
 
 
 if __name__ == "__main__":

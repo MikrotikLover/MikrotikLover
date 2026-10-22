@@ -326,6 +326,10 @@ try {
     await page.locator(".tile").first().waitFor({ timeout: 15000 });
   }
   await shot(page, "42-security");
+  await go(page, "#/security/ransomware", "Security");
+  await page.locator(".health-hero").waitFor({ timeout: 15000 });
+  for (const t of ["Devices with signs", "What to do", "Protection", "Ransomware signs"]) await page.locator(".card h2", { hasText: t }).first().waitFor({ timeout: 15000 });
+  await shot(page, "42b-ransomware");
   ok("security: all alerts, virus, hacker attacks, DDoS, protection & lists");
   await go(page, "#/domains", "Website names");
   await page.locator(".tile").first().waitFor({ timeout: 15000 });

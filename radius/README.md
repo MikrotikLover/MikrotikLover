@@ -1003,6 +1003,26 @@ Koi LAN mein ghar wala router laga de ya "fake DHCP" chala de to phones ko ghala
 - **Tested** (nakli router logs UDP 514 par): fake DHCP → high event + Telegram alert; 24 addresses wala MAC aur 4 addresses le lene wala MAC → ARP spoofing high; aik address change → low. `tests/test-sentinel.py` (4 naye checks), `tests/lint-rsc.py`.
 - **Isi kaam mein 3 purane bugs mile aur theek hue:** (1) server ka rsyslog router ki DHCP / script lines phenk deta tha; (2) alerts woh security events chhor dete the jo scan baad mein purane waqt ke saath likhta hai; (3) `radius-admin` database mein latin1 se likhta tha, is liye "—" aur Urdu jaise huroof toot jate the (ab utf8mb4).
 
+## 7h2. Ransomware detective
+
+Dashboard → **Security → Ransomware** (CLI: `radius-admin security ransomware`). Ransomware pehle andar aata hai, apne malik se baat karta hai, doosre PCs tak phailta hai, data churata (upload karta) hai, phir files lock karta hai. Har qadam network par nishan chhorta hai:
+
+| Qadam | Nishani | Kahan se |
+|---|---|---|
+| Andar aana | malware / phishing site | DNS (pehle se virus mein) |
+| Malik se baat | **Tor** relays (port 9001/9050 …), **ransom note / Tor gateway** site (`*.onion`, onion.ws / onion.ly, tor2web), botnet, DGA | traffic flow + DNS |
+| Phailna | ek PC minute mein **8+ LAN PCs** ko SMB 445 / RDP 3389 / RPC / WinRM par chhooe | traffic flow |
+| Data churana | **device ki apni aadat se 10 guna upload** (7 din ka busy ghanta; 1.5 GB/ghanta se kam par nahi; raat ko = high), **ek minute mein 300 MB+** ek server ko, anonymous upload sites (mega, gofile, transfer.sh …), **rclone** download | traffic collector + DNS |
+| Files lock | file server / NAS ke saath **SMB par minute mein 1 GB+** (dono taraf) | traffic flow |
+
+- Har device ka **risk 0–100** (24 ghante): nishaniyon ke points + jitne zyada qadam ek saath, utna zyada. **70+ = ACT NOW**, 40+ = watch. Table mein 5 qadam rang ke saath, nishaniyan, aur **Cut off now** (quarantine).
+- **Khud cut off** (Protection → "Cut off a device by itself at risk 70+", ya `radius-admin security ransomware-auto on`): 5 minute ke andar device ka network band, warning page. Pehle se **band** hai. Admin ne release kiya to us din dobara nahi.
+- **Alerts:** high nishani par "🔴 RANSOMWARE: …", aur jab kai chhoti nishaniyan mil kar 70+ banein: "🧨 RANSOMWARE RISK 85/100: PC (user) — contact, spread, steal … Cut it off now".
+- Monthly security PDF mein "Ransomware" tile, khulasa aur mashwara.
+- Hadein badalna: `radius.conf` mein `SEC_LATERAL_HOSTS`, `SEC_SMB_BURST_MB`, `SEC_EXFIL_MB`, `SEC_EXFIL_HOUR_MB`, `SEC_EXFIL_FACTOR`.
+- **Kya nahi dikhta:** PC ke andar ki cheezein. Ek hi switch par do PCs (ya PC + NAS) router se guzre baghair baat karte hain — un ke liye NAS ko alag VLAN / subnet mein rakhein, ya bridge par `use-ip-firewall`. Upload ke checks ke liye traffic collector zaroori. Ye antivirus ki jagah nahi — antivirus aur **unplugged / off-site backup** zaroor rakhein.
+- Tests: `tests/test-sentinel.py` (+13), `tests/test-ransomware.sh` (DNS → scan → database → risk → auto cut-off → API), `tests/test-alerts.py` (+3), `tests/test-secreport.py`.
+
 ## 7i. Reports aur samajh (Insights)
 
 Dashboard → **Insights (samajh)**: numbers ke bajaye seedhi baatein —

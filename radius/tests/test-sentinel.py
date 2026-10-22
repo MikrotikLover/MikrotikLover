@@ -141,6 +141,66 @@ to = find(ev2, "ARP spoofing (one device took")
 check("one MAC took over 4 addresses: ARP spoofing, high", len(to) == 4 and all(e["severity"] == "high" for _, e in to) and "00:0C:29:DE:AD:02" in to[0][1]["detail"], types(ev2))
 mv = find(ev2, "Address moved to another device")
 check("a single address change (phone reconnect): low only", len(mv) == 1 and mv[0][1]["severity"] == "low" and mv[0][0][4] == "192.168.88.90", types(ev2))
+# ---- ransomware: flow signs
+w = sentinel.FlowWatch(LAN, threats)
+for i in range(12):
+    w.feed(flow("192.168.88.50", f"192.168.88.{100 + i}", 50000 + i, 445))              # SMB to 12 PCs in a minute
+for i in range(3):
+    w.feed(flow("192.168.88.51", f"192.168.88.{100 + i}", 50000 + i, 3389))             # RDP to 3 PCs: normal admin work
+w.feed(flow("192.168.88.52", "185.220.101.7", 50001, 9001))                              # Tor relay
+w.feed(flow("192.168.88.53", "198.51.100.200", 50002, 443, 6, 400_000_000, 300000))      # 400 MB up in a minute
+w.feed(flow("192.168.88.54", "198.51.100.201", 50003, 443, 6, 50_000_000, 40000))        # 50 MB: normal
+w.feed(flow("192.168.88.55", "192.168.88.10", 50004, 445, 6, 900_000_000, 600000))       # SMB to the NAS ...
+w.feed(flow("192.168.88.10", "192.168.88.55", 445, 50004, 6, 700_000_000, 500000))       # ... and back: 1.6 GB in a minute
+w.feed(flow("192.168.88.56", "192.168.88.10", 50005, 445, 6, 200_000_000, 150000))       # 200 MB copy: normal
+rv = w.evaluate(time.time(), 60, {"192.168.88.50": "pc-accounts"})
+lat = find(rv, "Spreading inside the LAN (SMB)")
+check("ransomware: SMB to 12 LAN PCs in a minute = spreading, high, user", lat and lat[0][0][1] == "ransomware" and lat[0][1]["severity"] == "high"
+      and lat[0][1]["user"] == "pc-accounts", types(rv))
+check("  ... RDP to 3 PCs is normal", not any(k[4] == "192.168.88.51" for k in rv.ev))
+check("ransomware: Tor relay", find(rv, "Tor network") and find(rv, "Tor network")[0][0][4] == "192.168.88.52", types(rv))
+up = find(rv, "Big upload to the internet")
+check("ransomware: 400 MB up in a minute, 50 MB is not", len(up) == 1 and up[0][0][4] == "192.168.88.53" and "400 MB" in up[0][1]["detail"], types(rv))
+smb = find(rv, "Mass file changes on a file server")
+check("ransomware: 1.6 GB with the NAS over SMB in a minute (both ways), 200 MB copy is not",
+      len(smb) == 1 and smb[0][0][4] == "192.168.88.55" and smb[0][0][5] == "192.168.88.10" and smb[0][1]["severity"] == "high", types(rv))
+# ---- ransomware: DNS signs
+dns2, serial[0] = [], 900
+def look2(t, client, name, answer="203.0.113.250"):
+    serial[0] += 1
+    dns2.append(f"{iso(t)} 192.168.88.1 dnsmasq[1]: {serial[0]} {client}/5000 query[A] {name} from {client}")
+    dns2.append(f"{iso(t)} 192.168.88.1 dnsmasq[1]: {serial[0]} {client}/5000 reply {name} is {answer}")
+look2(T0, "192.168.88.60", "lockbitxyzabc.onion.ws"); look2(T0 + 1, "192.168.88.61", "abcdefgh234567.onion")
+look2(T0 + 2, "192.168.88.62", "downloads.rclone.org"); look2(T0 + 3, "192.168.88.63", "g.api.mega.co.nz")
+look2(T0 + 4, "192.168.88.64", "www.onionring-shop.com"); look2(T0 + 5, "192.168.88.65", "drive.google.com")
+rd = sentinel.scan_logs(dns2, [], [], threats, LAN)
+on = find(rd, "Ransom note / Tor gateway site")
+check("ransomware: onion gateway and .onion names, high", sorted(k[4] for k, _ in on) == ["192.168.88.60", "192.168.88.61"] and all(e["severity"] == "high" for _, e in on), types(rd))
+check("ransomware: rclone downloaded (medium), mega upload site (low)", find(rd, "Data-copy tool rclone")[0][1]["severity"] == "medium"
+      and find(rd, "Anonymous file-upload site")[0][1]["severity"] == "low", types(rd))
+check("  ... a shop with 'onion' in its name and Google Drive are not signs", not any(k[4] in ("192.168.88.64", "192.168.88.65") for k in rd.ev))
+# ---- ransomware: much more upload than the device's own usual (traffic collector, per hour)
+H0 = time.mktime((2026, 10, 10, 0, 0, 0, 0, 0, -1))
+rows = [("192.168.88.70", "ali", H0 + i * 3600, 50_000_000) for i in range(7 * 24)]                  # usual: 50 MB an hour
+rows.append(("192.168.88.70", "ali", H0 + 7 * 86400 + 3 * 3600, 3_000_000_000))                       # 3 GB at 03:00
+rows += [("192.168.88.71", "backup-pc", H0 + i * 3600, 2_500_000_000) for i in range(7 * 24 + 4)]     # always 2.5 GB: its normal
+rows.append(("192.168.88.72", "new-pc", H0 + 7 * 86400 + 14 * 3600, 2_000_000_000))                   # no history: the floor only
+uv = sentinel.unusual_uploads(rows, H0 + 7 * 86400)
+check("unusual upload: 3 GB vs a usual 50 MB, at night -> high", [(k[4], e["severity"]) for k, e in uv.ev.items() if k[4] == "192.168.88.70"] == [("192.168.88.70", "high")], list(uv.ev))
+check("  ... a PC that always uploads 2.5 GB (backup) is not flagged", not any(k[4] == "192.168.88.71" for k in uv.ev))
+check("  ... a new device over the floor is flagged (medium, 'no usual yet')", any(k[4] == "192.168.88.72" and "no usual yet" in e["detail"] for k, e in uv.ev.items()))
+# ---- risk per device: more stages = more danger
+evs = [{"src_ip": "192.168.88.80", "username": "pc-hr", "type": "Malware site", "severity": "high", "last_seen": "2026-10-22 09:00"},
+       {"src_ip": "192.168.88.80", "username": "", "type": "Tor network (hidden servers)", "severity": "medium", "last_seen": "2026-10-22 09:10"},
+       {"src_ip": "192.168.88.80", "username": "", "type": "Spreading inside the LAN (SMB)", "severity": "high", "last_seen": "2026-10-22 09:20"},
+       {"src_ip": "192.168.88.81", "username": "", "type": "Anonymous file-upload site", "severity": "low", "last_seen": "2026-10-22 09:00"},
+       {"src_ip": "192.168.88.82", "username": "", "type": "Port scan", "severity": "high", "last_seen": "2026-10-22 09:00"}]
+rk = sentinel.ransom_risk(evs)
+check("risk: in + contact + spread = high (70+), worst first, user kept", rk[0]["ip"] == "192.168.88.80" and rk[0]["score"] >= 70 and rk[0]["level"] == "high"
+      and rk[0]["stages"] == ["in", "contact", "spread"] and rk[0]["user"] == "pc-hr", rk)
+check("risk: one upload site alone stays low", [r for r in rk if r["ip"] == "192.168.88.81"][0]["level"] == "low", rk)
+check("risk: signs that are not about ransomware are left out", not any(r["ip"] == "192.168.88.82" for r in rk), rk)
+
 q = sentinel.sql(ev, "2026-10-15")
 check("SQL: log/dns events re-built, flows kept", "DELETE FROM ml_security_event WHERE source IN ('dns','log')" in q)
 check("SQL: severity only goes up", "FIELD(VALUES(severity)" in q)

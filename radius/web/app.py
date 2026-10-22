@@ -2926,8 +2926,8 @@ def security():
     a = report_args()
     days = int(max(a.days, 1))
     cat = request.args.get("category", "")
-    if cat and cat not in ("virus", "attack", "ddos"):
-        abort(400, "category: virus | attack | ddos")
+    if cat and cat not in ("virus", "attack", "ddos", "ransomware"):
+        abort(400, "category: virus | attack | ddos | ransomware")
     w, args = ["last_seen >= NOW() - INTERVAL %s DAY"], [days]
     if cat:
         w.append("category=%s"); args.append(cat)
@@ -2943,19 +2943,28 @@ def security():
     devices = q(f"""SELECT src_ip, MAX(NULLIF(username,'')) AS username, GROUP_CONCAT(DISTINCT type ORDER BY type SEPARATOR ', ') AS types,
                            SUM(hits) AS hits, MAX(last_seen) AS last FROM ml_security_event WHERE {w} AND category='virus'
                     GROUP BY src_ip ORDER BY MAX(last_seen) DESC LIMIT 200""", args)
-    setting = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k IN ('security_autoblock','security_quarantine_auto','server_ip')")}
+    setting = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k IN ('security_autoblock','security_quarantine_auto','server_ip','ransomware_quarantine_auto')")}
     quarantine = q("""SELECT id, ip, username, reason, auto, since FROM ml_quarantine WHERE released_at IS NULL ORDER BY since DESC""")
     lists = {"threat_names": _count_lines(os.path.join(STATE_DIR, "threat-domains.txt")),
              "threat_networks": _count_lines(os.path.join(STATE_DIR, "threat-ips.txt")),
              "autoblock": setting.get("security_autoblock") == "1",
              "dns_block": os.path.exists("/etc/mikrotiklover-radius/dnsmasq-threats.conf"),
-             "quarantine_auto": setting.get("security_quarantine_auto") == "1", "server_ip": setting.get("server_ip", "")}
+             "quarantine_auto": setting.get("security_quarantine_auto") == "1", "server_ip": setting.get("server_ip", ""),
+             "ransomware_auto": setting.get("ransomware_quarantine_auto") == "1"}
     try:
         lists["updated"] = datetime.fromtimestamp(os.path.getmtime(os.path.join(STATE_DIR, "threat-domains.txt"))).strftime("%Y-%m-%d %H:%M")
     except OSError:
         lists["updated"] = ""
+    # ransomware: a 0-100 risk per device from its signals of the last 24 h (stages: in, contact, spread, steal, lock)
+    import sentinel
+    recent = q("""SELECT src_ip, username, type, severity, last_seen FROM ml_security_event WHERE category IN ('ransomware','virus')
+                  AND last_seen >= NOW() - INTERVAL 1 DAY AND src_ip <> ''""")
+    risk = sentinel.ransom_risk(jsonable(recent))
+    qset = {r["ip"] for r in quarantine if r["ip"]} | {r["username"] for r in quarantine if r["username"]}
+    for r in risk:
+        r["quarantined"] = r["ip"] in qset or (r["user"] and r["user"] in qset)
     return jsonify(events=jsonable(events), counts={c["category"]: jsonable([c])[0] for c in counts}, types=jsonable(types),
-                   devices=jsonable(devices), lists=lists, quarantine=jsonable(quarantine))
+                   devices=jsonable(devices), lists=lists, quarantine=jsonable(quarantine), risk=risk)
 
 
 @app.post("/api/security/<action>")
@@ -2966,7 +2975,7 @@ def security_action(action):
         return result(*radius_admin(["security", "scan"], timeout=300))
     if action == "update":
         return result(*radius_admin(["security", "update"], timeout=600))
-    if action in ("autoblock", "dns-block", "quarantine-auto"):
+    if action in ("autoblock", "dns-block", "quarantine-auto", "ransomware-auto"):
         return result(*radius_admin(["security", action, "on" if data.get("on") else "off"], timeout=300))
     target_re = re.compile(r"^([0-9]{1,3}\.){3}[0-9]{1,3}$|^[A-Za-z0-9._@+-]{1,64}$")
     if action == "quarantine":

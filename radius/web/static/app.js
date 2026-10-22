@@ -2742,7 +2742,7 @@ async function blockingLogs() {
 
 // ------------------------------------------------------------------ security detective: virus, hacker attacks, DDoS
 ROUTES.security = async (tab = "all") => {
-  const tabs = [["all", "All alerts"], ["virus", "Virus (infected devices)"], ["attack", "Hacker attacks"], ["ddos", "DDoS attacks"], ["setup", "Protection & lists"], ["reports", "Monthly reports"]];
+  const tabs = [["all", "All alerts"], ["ransomware", "Ransomware"], ["virus", "Virus (infected devices)"], ["attack", "Hacker attacks"], ["ddos", "DDoS attacks"], ["setup", "Protection & lists"], ["reports", "Monthly reports"]];
   if (tab === "reports") {
     const { reports } = await api("GET", "/api/security/reports");
     const now = new Date(); const last = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -2763,16 +2763,17 @@ ROUTES.security = async (tab = "all") => {
   const high = h("label", { class: "chip" }, h("input", { type: "checkbox" }), "only high");
   const holder = h("div", { class: "stack" });
   const sev = (s) => badge(s, s === "high" ? "bad" : s === "medium" ? "warn" : "info");
-  const catBadge = (c) => badge({ virus: "VIRUS", attack: "ATTACK", ddos: "DDoS" }[c] || c, c === "virus" ? "warn" : "bad");
+  const catBadge = (c) => badge({ virus: "VIRUS", attack: "ATTACK", ddos: "DDoS", ransomware: "RANSOMWARE" }[c] || c, c === "virus" ? "warn" : "bad");
   const who = (r) => r.src_ip ? h("span", {}, r.username ? h("a", { href: `#/users/${encodeURIComponent(r.username)}` }, r.username) : null,
     h("div", { class: r.username ? "muted" : "" }, h("code", {}, r.src_ip))) : r.username ? h("span", {}, r.username) : "—";
   const load = async () => {
-    const d = await api("GET", `/api/security?${new URLSearchParams({ days: days.value, category: ["virus", "attack", "ddos"].includes(tab) ? tab : "", high: high.querySelector("input").checked ? "1" : "", n: 500 })}`);
+    const d = await api("GET", `/api/security?${new URLSearchParams({ days: days.value, category: ["virus", "attack", "ddos", "ransomware"].includes(tab) ? tab : "", high: high.querySelector("input").checked ? "1" : "", n: 500 })}`);
     const c = (k) => d.counts[k] || { events: 0, high: 0 };
     const tiles = h("div", { class: "grid g-tiles" },
       tile("Virus alerts", num(c("virus").events), `${num(c("virus").high)} high · infected devices`),
       tile("Hacker attacks", num(c("attack").events), `${num(c("attack").high)} high · scans, password guessing`),
       tile("DDoS attacks", num(c("ddos").events), `${num(c("ddos").high)} high · floods by type`),
+      tile("Ransomware risk", num((d.risk || []).filter((r) => r.level === "high").length), `${num((d.risk || []).length)} device(s) with signs (24 h)`),
       tile("Threat lists", num(d.lists.threat_names), `names + ${num(d.lists.threat_networks)} networks · ${d.lists.updated || "not downloaded"}`));
     const qip = h("input", { placeholder: "e.g. 192.168.88.10", value: d.lists.server_ip || "" });
     if (tab === "setup") {
@@ -2793,8 +2794,9 @@ ROUTES.security = async (tab = "all") => {
           h("div", {}, h("span", {}, h("b", {}, "Router"), " — import mikrotik/security.rsc (port-scan, password-guessing and SYN-flood lists + threat lists) and webfilter-logging.rsc (sends the hits and login failures here). Traffic Flow (traffic-flow.rsc) feeds the flow checks.")))));
       return;
     }
-    const parts = [tiles];
     const inQ = new Set(d.quarantine.flatMap((x) => [x.ip, x.username].filter(Boolean)));
+    if (tab === "ransomware") { holder.replaceChildren(...ransomwareView(d, inQ, load)); return; }
+    const parts = [tiles];
     const quarantineBtn = (r) => !isAdmin() ? null : (inQ.has(r.src_ip) || (r.username && inQ.has(r.username))) ? badge("in quarantine", "bad")
       : h("button", { class: "small", onclick: async () => {
         const target = r.username || r.src_ip;
@@ -2827,6 +2829,53 @@ ROUTES.security = async (tab = "all") => {
     holder));
   await load();
 };
+
+// ------------------------------------------------------------------ ransomware: risk per device, the stages it went through
+const RANSOM_STAGES = [["in", "Got in", "malware / phishing site"], ["contact", "Talks to its owner", "Tor, ransom-note site, botnet, random names"],
+  ["spread", "Spreads in the LAN", "SMB / RDP to many PCs"], ["steal", "Steals data", "unusual upload, upload sites, rclone"], ["lock", "Locks files", "mass SMB data with a file server"]];
+function ransomwareView(d, inQ, reload) {
+  const risk = d.risk || [];
+  const level = (r) => badge(r.level === "high" ? "ACT NOW" : r.level === "medium" ? "watch" : "low", r.level === "high" ? "bad" : r.level === "medium" ? "warn" : "info");
+  const stages = (r) => h("div", { class: "rw-stages" }, RANSOM_STAGES.map(([k, l]) => h("span", { class: "rw-stage" + (r.stages.includes(k) ? " on" : ""), title: l }, l)));
+  const act1 = (r) => !isAdmin() ? null : (r.quarantined ? badge("cut off (quarantine)", "bad") : h("button", { class: r.level === "high" ? "small primary danger-fill" : "small", onclick: async () => {
+    const target = r.user || r.ip;
+    if (await confirmDlg("Cut off", `Cut ${target} off the network now? It only sees a warning page until you release it (Security → Virus → Quarantine).`, "Cut off")) {
+      await act(api("POST", "/api/security/quarantine", { target, reason: `ransomware risk ${r.score}: ${r.signals.slice(0, 2).join("; ")}`.slice(0, 110) })); reload();
+    } } }, "Cut off now"));
+  const top = risk[0];
+  const auto = h("label", { class: "check" + (d.lists.ransomware_auto ? " on" : "") }, h("input", { type: "checkbox", checked: d.lists.ransomware_auto, disabled: !isAdmin(),
+    onchange: async (e) => { await act(api("POST", "/api/security/ransomware-auto", { on: e.target.checked })); reload(); } }),
+    h("div", {}, h("b", {}, "Cut off a device by itself at risk 70+"), h("span", {}, "Within 5 minutes it loses the network (quarantine, warning page) — before it reaches the file server or the other PCs. You get an alert either way.")));
+  const cards = (el) => { const t = el.querySelector && el.querySelector("table"); if (t) t.classList.add("rw-table"); return el; };
+  return [
+    h("div", { class: `card health-hero ${!risk.length ? "ok" : top.level === "high" ? "fail" : "warn"}` },
+      h("div", { class: "hh-mark" }, !risk.length ? "✔" : top.level === "high" ? "✘" : "!"),
+      h("div", { class: "grow" }, h("div", { class: "hh-title" }, !risk.length ? "No ransomware signs (24 h)" : top.level === "high" ? `${risk.filter((r) => r.level === "high").length} device(s) — act now` : `${risk.length} device(s) to watch`),
+        h("div", { class: "muted" }, "Ransomware first gets in, talks to its owner, spreads to other PCs, steals data, then locks files. Each step leaves signs on the network — the more steps one device shows, the higher its risk."))),
+    card("Devices with signs", "last 24 hours, worst first", cards(table([
+      { label: "Device", render: (r) => h("span", {}, r.user ? h("a", { href: `#/users/${encodeURIComponent(r.user)}` }, r.user) : null, h("div", { class: r.user ? "muted" : "" }, h("code", {}, r.ip))) },
+      { label: "Risk", render: (r) => h("div", { class: "rw-score" }, h("b", {}, String(r.score)), meter(r.score, 40, 70)) },
+      { label: "", render: level }, { label: "Stages", render: stages },
+      { label: "Signs", render: (r) => h("span", { class: "small" }, r.signals.join(" · ")), wrap: true },
+      { label: "", render: act1 }], risk, "Nothing — no device shows ransomware signs."))),
+    card("What to do", null, h("ol", { class: "g-list" },
+      h("li", {}, h("b", {}, "Cut it off"), " (button above, or unplug the PC). Do not switch it off — the files it is locking may still be saved by IT."),
+      h("li", {}, "Check the file server / NAS: ", h("i", {}, "files with strange endings or a 'READ ME' note"), " = it started. Take the NAS off the network."),
+      h("li", {}, "Restore from a backup that was not connected (off-site / USB that was unplugged). Change passwords used on that PC."),
+      h("li", {}, "Stolen data (unusual upload): tell the people whose data it was; do not pay — paying does not get the data back from them."))),
+    card("Protection", null, h("div", { class: "checks" }, auto),
+      h("div", { class: "muted small" }, "Also on: alerts (Settings → Alerts → Security), quarantine warning page, off-site backup (Settings → Off-site copy). Thresholds: SEC_LATERAL_HOSTS, SEC_SMB_BURST_MB, SEC_EXFIL_MB, SEC_EXFIL_HOUR_MB, SEC_EXFIL_FACTOR in radius.conf.")),
+    card("Ransomware signs", "newest first", cards(table([{ label: "Last", render: (r) => String(r.last_seen).slice(5, 16) },
+      { label: "Severity", render: (r) => badge(r.severity, r.severity === "high" ? "bad" : r.severity === "medium" ? "warn" : "info") },
+      { label: "What", render: (r) => h("span", {}, h("b", {}, r.type), h("div", { class: "muted" }, r.detail)), wrap: true },
+      { label: "Device", render: (r) => h("span", {}, r.username || "", h("div", { class: r.username ? "muted" : "" }, h("code", {}, r.src_ip || "—"))) },
+      { label: "To", render: (r) => r.dst_ip ? h("code", {}, r.dst_ip) : "—" }], d.events, "No ransomware signs in this period."))),
+    hint("What it can and cannot see", h("ul", { class: "g-list" },
+      h("li", {}, "It sees the network: Tor, ransom-note sites, PCs touching many others on SMB / RDP, much more upload than usual, a sudden mass of file-server traffic."),
+      h("li", {}, "It cannot see inside a PC. Two PCs (or a PC and a NAS) on the same switch talk without the router — to see that, put the file server in its own VLAN / subnet, or let the bridge send its traffic through the router (use-ip-firewall)."),
+      h("li", {}, "Upload checks need the traffic collector; LAN checks need traffic flow for LAN traffic. It is not a virus scanner — keep antivirus and an unplugged / off-site backup."))),
+  ];
+}
 
 // ------------------------------------------------------------------ website names: every domain and subdomain ever seen
 ROUTES.domains = async () => {

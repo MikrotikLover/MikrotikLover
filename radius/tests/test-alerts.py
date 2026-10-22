@@ -266,6 +266,25 @@ check("  ... and 'fine again' when it is fixed", len(f) == 1 and "Fine again" in
 os.utime(hj, (time.time() - 5 * 3600, time.time() - 5 * 3600))
 check("health: an old saved check is not used", alerts.check({"EVENTS": "health"}, FakeDB(), {}) == [])
 
+# ransomware: several small signs of one device add up to one 'act now' alert; the other alerts still work
+class RansomDB(FakeDB):
+    def rows(self, q):
+        if "category IN ('ransomware','virus')" in q:
+            return [["10.0.0.90", "pc-hr", "Tor network (hidden servers)", "medium", "2026-10-22 09:00"],
+                    ["10.0.0.90", "", "Spreading inside the LAN (SMB)", "high", "2026-10-22 09:05"],
+                    ["10.0.0.90", "", "Unusual upload (much more than this device's usual)", "medium", "2026-10-22 09:10"]]
+        return super().rows(q)
+
+
+dbr, str_ = RansomDB(), {"security_init": 1, "quarantine_id": 0}
+dbr.quar = [["9", "10.0.0.91", "", "virus: x", "1"]]
+f = alerts.check({"EVENTS": "security,quarantine"}, dbr, str_)
+rw = [l for k, l in f if "RANSOMWARE RISK" in l]
+check("ransomware: signs of one device add up to one 'act now' alert (score, stages, user)", len(rw) == 1 and "10.0.0.90 (pc-hr)" in rw[0]
+      and "contact, spread, steal" in rw[0], f)
+check("  ... the quarantine alert in the same check still comes", any(k == "quarantine" for k, _ in f), f)
+check("  ... the ransomware alert once a day", not any("RANSOMWARE RISK" in l for _, l in alerts.check({"EVENTS": "security"}, dbr, str_)))
+
 # security events are written by the hourly scan with the time they happened (before the last check)
 db3, st3 = FakeDB(), {"last_check": time.time()}
 db3.sec = [["attack", "Old event", "10.0.0.8", "", "x", "3", "2026-10-17"]]

@@ -64,6 +64,7 @@ streams = [zlib.decompress(x) for x in re.findall(rb"stream\n(.*?)\nendstream", 
 alltext = b"".join(streams)
 check("text is in the pages", b"Security report \x97 October 2026" in alltext and b"Infected devices" in alltext and b"What to do" in alltext)
 check("emoji dropped, not '?'", minipdf._enc("🛡 ok") == b" ok" and minipdf._enc("a—b") == b"a\x97b" and minipdf._enc("(x)") == b"\\(x\\)")
+check("arrow shown as ->, not ?", minipdf._enc("Security → Ransomware") == b"Security -> Ransomware")
 check("wrap respects the width", all(minipdf.width(l, 10) <= 200 for l in minipdf.wrap("word " * 80, 10, 200)))
 empty = secreport.gather(lambda q: [], "2026-10")
 check("empty month: 'network saaf raha', valid PDF", "saaf" in empty["words"][0] and secreport.make_pdf(empty).startswith(b"%PDF"))

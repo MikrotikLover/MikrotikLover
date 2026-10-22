@@ -24,7 +24,7 @@ _WIN = {"—": 0x97, "–": 0x96, "‘": 0x91, "’": 0x92, "“": 0x93, "”": 
 
 def _enc(s):
     out = bytearray()
-    for ch in str(s):
+    for ch in str(s).replace("→", "->").replace("←", "<-").replace("✔", "OK").replace("✘", "X"):   # not in the PDF font
         o = ord(ch)
         if ch in _WIN:
             out.append(_WIN[ch])

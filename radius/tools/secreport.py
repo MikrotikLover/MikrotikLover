@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import minipdf, insights  # noqa: E402
 
 OUT = "/var/lib/mikrotiklover/reports"
-CAT_COLORS = {"virus": (0.86, 0.15, 0.15), "attack": (0.92, 0.55, 0.05), "ddos": (0.45, 0.25, 0.75)}
+CAT_COLORS = {"virus": (0.86, 0.15, 0.15), "attack": (0.92, 0.55, 0.05), "ddos": (0.45, 0.25, 0.75), "ransomware": (0.55, 0.05, 0.10)}
 MONTHS = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 
 
@@ -97,6 +97,10 @@ def words(d):
         out.append(f"Sab se aam masla: {t[0]} ({t[2]} alerts).")
     if d["lan"]:
         out.append(f"LAN ke andar khatra: {len(d['lan'])} nakli router / ARP spoofing ki koshish.")
+    r = d["cats"].get("ransomware", {})
+    if r.get("now"):
+        out.append(f"Ransomware ki {r['now']} nishaniyan ({r.get('high', 0)} high): Tor / ransom-note sites, LAN mein phailna, "
+                   "aam se zyada upload ya file server par achanak bahut data — Security → Ransomware.")
     if d["quarantine"]:
         out.append(f"{len(d['quarantine'])} devices quarantine kiye gaye.")
     if d["vpn"]:
@@ -114,6 +118,9 @@ def advice(d):
         a.append("Jin users ke password par guessing hui unke password badlein.")
     if d["lan"]:
         a.append("Nakli router / ARP spoofing: report mein diye MAC wala device dhoond kar network se hatayein; lan-guard.rsc ki 'hard protection' par ghaur karein.")
+    if d["cats"].get("ransomware", {}).get("now"):
+        a.append("Ransomware: jis PC par nishaniyan hain usay network se alag karein (Security → Ransomware → Cut off), file server / NAS check karein, "
+                 "aur off-site backup chalta rakhein; 'Cut off a device by itself at risk 70+' on karne par ghaur karein.")
     if d["cats"]["ddos"]["now"]:
         a.append("DDoS: ISP se baat karein agar internet band hota raha; security.rsc ke SYN-flood rules lage hon.")
     if not a:
@@ -129,6 +136,7 @@ def make_pdf(d):
     doc.tiles([("Virus alerts", str(c["virus"]["now"]), f"{c['virus']['high']} high · {ch('virus')}", CAT_COLORS["virus"]),
                ("Hacker attacks", str(c["attack"]["now"]), f"{c['attack']['high']} high · {ch('attack')}", CAT_COLORS["attack"]),
                ("DDoS", str(c["ddos"]["now"]), f"{c['ddos']['high']} high · {ch('ddos')}", CAT_COLORS["ddos"]),
+               ("Ransomware", str(c["ransomware"]["now"]), f"{c['ransomware']['high']} high · {ch('ransomware')}", CAT_COLORS["ransomware"]),
                ("Quarantined", str(len(d["quarantine"])), "devices cut off", (0.15, 0.39, 0.92))])
     doc.h2("In short")
     for w in d["words"]:
@@ -158,6 +166,7 @@ def make_pdf(d):
 def text(d):
     c = d["cats"]
     lines = [f"Security report {d['title']}: virus {c['virus']['now']}, attacks {c['attack']['now']}, DDoS {c['ddos']['now']}, "
+             f"ransomware {c.get('ransomware', {}).get('now', 0)}, "
              f"quarantined {len(d['quarantine'])}."] + [f"• {w}" for w in d["words"]] + ["", "What to do:"] + [f"• {a}" for a in d["advice"]]
     return "\n".join(lines)
 

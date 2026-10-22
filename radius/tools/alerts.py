@@ -401,6 +401,19 @@ def check(c, db, state, now=None, ping_fn=ping, running_fn=running, updates=UPDA
                 who = f"{src}" + (f" ({user})" if user and user != "NULL" else "")
                 found.append(("security", f"🔴 {cat.upper()}: {typ} — {who}, {hits} hits. {detail}".strip()))
         state["security_init"] = 1
+        # ransomware: several small signs of one device together (contact + spread + steal …) = act now
+        try:
+            import sentinel
+            sigs = [dict(zip(("src_ip", "username", "type", "severity", "last_seen"), r)) for r in db.rows(
+                "SELECT src_ip, username, type, severity, last_seen FROM ml_security_event WHERE category IN ('ransomware','virus') "
+                "AND last_seen >= NOW() - INTERVAL 1 DAY AND src_ip <> ''") if len(r) == 5]
+            for d in sentinel.ransom_risk(sigs):
+                if d["score"] >= 70 and once(state, f"ransom:{d['ip']}:{time.strftime('%Y-%m-%d')}", 86400):
+                    who = d["ip"] + (f" ({d['user']})" if d["user"] and d["user"] != "NULL" else "")
+                    found.append(("security", f"🧨 RANSOMWARE RISK {d['score']}/100: {who} — {', '.join(d['stages'])}: "
+                                              f"{'; '.join(d['signals'][:3])}. Cut it off now: Security → Ransomware → Quarantine"))
+        except Exception:                          # noqa: BLE001 — never stop the other alerts
+            pass
     if "quarantine" in ev:
         last = int(state.get("quarantine_id", 0))
         rows = db.rows(f"SELECT id, ip, username, reason, auto FROM ml_quarantine WHERE id > {last} ORDER BY id LIMIT 50")

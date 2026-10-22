@@ -1471,6 +1471,7 @@ cmd_subscription() { # user plan|renew|expiry|quota|status NAME ...
 # their quota on a FUP plan. Needed for PPPoE (no Total-Limit there) and running sessions.
 cmd_enforce() {
     quarantine_auto || true
+    ransomware_auto || true
     local verbose=${1:-} rows u uid c rate n_cut=0 n_fup=0
     rows=$(echo "SELECT DISTINCT r.username, r.acctuniqueid, ml_check(r.username)
                  FROM radacct r JOIN ml_account a ON a.username=r.username
@@ -2464,7 +2465,7 @@ setting_set() { echo "INSERT INTO ml_setting (k, v) VALUES ($(q "$1"), $(q "$2")
 
 cmd_security() {
     local sub=list days=7 cat="" top=200 sev=""
-    case ${1:-} in list|scan|update|autoblock|dns-block|summary|quarantine|release|quarantined|quarantine-auto|quarantine-server|report|reports) sub=$1; shift ;; esac
+    case ${1:-} in list|scan|update|autoblock|dns-block|summary|quarantine|release|quarantined|quarantine-auto|quarantine-server|report|reports|ransomware|ransomware-auto) sub=$1; shift ;; esac
     case $sub in
     quarantine)
         local t=${1:-}; [ -n "$t" ] || die "usage: radius-admin security quarantine IP|USER [reason ...]"; shift
@@ -2478,6 +2479,20 @@ cmd_security() {
             on)  setting_set security_quarantine_auto 1; ok "Devices with a high virus alert are quarantined automatically (checked every 5 minutes)" ;;
             off) setting_set security_quarantine_auto 0; ok "Automatic quarantine off" ;;
             *)   echo "auto-quarantine: $( [ "$(setting_get security_quarantine_auto)" = 1 ] && echo on || echo off)" ;;
+        esac; return ;;
+    ransomware)
+        # risk per device (last 24 h): score 0-100, stages (in, contact, spread, steal, lock), signals
+        local out; out=$(python3 -I /usr/local/lib/mikrotiklover/sentinel.py risk --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME")
+        if [ -z "$out" ]; then ok "No ransomware signs in the last 24 hours"; return; fi
+        printf '%-15s %-14s %5s  %-6s  %-28s %s\n' DEVICE USER RISK LEVEL STAGES SIGNALS
+        awk -F'\t' '{ printf "%-15s %-14s %5s  %-6s  %-28s %s\n", $1, $2, $3, $4, $5, $6 }' <<<"$out"
+        echo "auto-quarantine at risk 70+: $( [ "$(setting_get ransomware_quarantine_auto)" = 1 ] && echo on || echo off)  (radius-admin security ransomware-auto on)"
+        return ;;
+    ransomware-auto)
+        case ${1:-status} in
+            on)  setting_set ransomware_quarantine_auto 1; ok "Devices with a ransomware risk of 70+ are cut off automatically (quarantine, checked every 5 minutes)" ;;
+            off) setting_set ransomware_quarantine_auto 0; ok "Automatic ransomware quarantine off" ;;
+            *)   echo "ransomware auto-quarantine: $( [ "$(setting_get ransomware_quarantine_auto)" = 1 ] && echo on || echo off)" ;;
         esac; return ;;
     report)
         # radius-admin security report [--month YYYY-MM] [--send]
@@ -2530,7 +2545,7 @@ cmd_security() {
     while [ $# -gt 0 ]; do
         case $1 in
             --days) days=${2:-}; valid_int "$days" days; shift 2 ;;
-            --type|--category) cat=${2:-}; [[ $cat =~ ^(virus|attack|ddos)$ ]] || die "--type virus|attack|ddos"; shift 2 ;;
+            --type|--category) cat=${2:-}; [[ $cat =~ ^(virus|attack|ddos|ransomware)$ ]] || die "--type virus|attack|ddos|ransomware"; shift 2 ;;
             --high) sev=high; shift ;;
             --top) top=${2:-}; valid_int "$top" top; shift 2 ;;
             *) die "usage: radius-admin security [--days N] [--type virus|attack|ddos] [--high] | summary | scan | update | autoblock on|off | dns-block on|off" ;;
@@ -2641,6 +2656,21 @@ quarantine_auto() { # every 5 minutes (enforce): devices with a HIGH virus alert
         n=$((n + 1))
     done <<<"$rows"
     if [ "$n" -gt 0 ]; then cmd_policy build >/dev/null 2>&1 || true; echo "quarantined $n infected device(s) automatically"; fi
+}
+
+ransomware_auto() { # every 5 minutes (enforce): cut off devices with a ransomware risk of 70+ (if the admin turned it on)
+    [ "$(setting_get ransomware_quarantine_auto)" = 1 ] || return 0
+    local ip user score level stages signals n=0
+    while IFS=$'\t' read -r ip user score level stages signals; do
+        [ -n "$ip" ] && [ "${score:-0}" -ge 70 ] 2>/dev/null || continue
+        [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+        [ -z "$(echo "SELECT 1 FROM ml_quarantine WHERE (ip=$(q "$ip") OR ($(q "$user")<>'-' AND username=$(q "$user")))
+                     AND (released_at IS NULL OR released_at >= NOW() - INTERVAL 1 DAY) LIMIT 1" | db)" ] || continue
+        if [ "$user" != - ] && user_exists "$user"; then quarantine_add "$user" "auto: ransomware risk $score ($stages)" 1 >/dev/null </dev/null
+        else quarantine_add "$ip" "auto: ransomware risk $score ($stages)" 1 >/dev/null </dev/null; fi
+        n=$((n + 1))
+    done < <(python3 -I /usr/local/lib/mikrotiklover/sentinel.py risk --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" 2>/dev/null)
+    if [ "$n" -gt 0 ]; then cmd_policy build >/dev/null 2>&1 || true; echo "cut off $n device(s) with a high ransomware risk"; fi
 }
 
 cmd_quarantine() {
@@ -2988,7 +3018,7 @@ VPN & proxy watch
   vpn ignore NAME|IP                    not a VPN (e.g. your office VPN): never list or block it
 
 Security detective (virus, hacker attacks, DDoS)
-  security [--days 7] [--type virus|attack|ddos] [--high]
+  security [--days 7] [--type virus|attack|ddos|ransomware] [--high]
                                         security detective: infected devices, hacker attacks, DDoS (by type)
   security summary                      counts per type
   security scan | update                read the logs now (hourly) | download threat lists (weekly)
@@ -2998,6 +3028,8 @@ Security detective (virus, hacker attacks, DDoS)
   security release IP|USER              end the quarantine
   security quarantined [history]        who is in quarantine
   security quarantine-auto on|off       quarantine devices with a HIGH virus alert automatically (every 5 min)
+  security ransomware                   ransomware risk per device (24 h): score, stages, signals
+  security ransomware-auto on|off       cut off devices with a ransomware risk of 70+ automatically (every 5 min)
   security quarantine-server IP         this server's IP as the routers see it (warning page on port 8081)
 
 Backup, restore, automatic updates

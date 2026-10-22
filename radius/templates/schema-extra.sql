@@ -240,6 +240,8 @@ CREATE TABLE IF NOT EXISTS ml_security_event (
   KEY idx_last (last_seen),
   KEY idx_src (src_ip)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+-- ransomware (Security → Ransomware): the category added later, also on servers installed before
+ALTER TABLE ml_security_event MODIFY category ENUM('virus','attack','ddos','ransomware') NOT NULL;
 
 -- Quarantine: infected devices cut off from the internet (they only see a warning page)
 CREATE TABLE IF NOT EXISTS ml_quarantine (
