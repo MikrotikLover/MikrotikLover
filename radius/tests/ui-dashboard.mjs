@@ -338,6 +338,38 @@ try {
   for (const t of ["Open doors on the routers", "Who came in from outside", "Outside addresses"]) await page.locator(".card h2", { hasText: t }).first().waitFor({ timeout: 15000 });
   await shot(page, "42c-from-outside");
   ok("security: from outside (open doors, who came in, outside addresses)");
+
+  // firewall: a policy made in the dialog (country source picked by search), seen in the router order, looked up, deleted
+  await go(page, "#/firewall", "Firewall");
+  await page.locator(".health-hero").waitFor({ timeout: 15000 });
+  await page.locator(".card h2", { hasText: "Quick start" }).waitFor();
+  await go(page, "#/firewall/policies", "Firewall");
+  await page.getByRole("button", { name: "+ New policy" }).click();
+  const fd = page.locator("dialog[open]");
+  await fd.locator("input[name=name]").fill("ui-fw-test");
+  await fd.locator("select").first().selectOption("wan");
+  await fd.locator("input[type=search]").first().fill("north korea");
+  await fd.locator("button.chip", { hasText: "KP · North Korea" }).first().click();
+  await fd.locator(".seg button", { hasText: "Reject" }).click();
+  await dlgButton(page, "Save policy").click();
+  const fwRow = page.locator("tbody tr", { hasText: "ui-fw-test" });
+  await fwRow.waitFor({ timeout: 30000 });
+  if (!(await fwRow.textContent()).includes("KP") || !(await fwRow.textContent()).includes("REJECT")) throw new Error("firewall policy row wrong");
+  ok("firewall: new policy from the dialog (country picked by search, reject)");
+  await go(page, "#/firewall/lookup", "Firewall");
+  await page.locator(".fw-lookup select").first().selectOption("router");
+  await page.fill(".fw-lookup input >> nth=0", "175.45.176.9");
+  await page.fill(".fw-lookup input >> nth=1", "203.0.113.1");
+  await page.locator(".fw-lookup button.primary").click();
+  await page.locator(".hh-title").waitFor({ timeout: 15000 });
+  ok("firewall: policy lookup answers");
+  await go(page, "#/firewall/policies", "Firewall");
+  await page.locator("tbody tr", { hasText: "ui-fw-test" }).getByRole("button", { name: "delete" }).click();
+  await dlgButton(page, "Yes").click();
+  await page.locator("tbody tr", { hasText: "ui-fw-test" }).waitFor({ state: "detached", timeout: 30000 });
+  for (const t of ["addresses", "services", "schedules", "vips", "countries", "logs"]) { await go(page, `#/firewall/${t}`, "Firewall"); await page.locator(".card").first().waitFor(); }
+  await shot(page, "42d-firewall");
+  ok("firewall: policy deleted; addresses, services, schedules, port forwards, countries, logs pages");
   ok("security: all alerts, virus, hacker attacks, DDoS, protection & lists");
   await go(page, "#/domains", "Website names");
   await page.locator(".tile").first().waitFor({ timeout: 15000 });

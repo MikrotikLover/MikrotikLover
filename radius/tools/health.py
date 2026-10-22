@@ -17,7 +17,7 @@ STATE_DIR = "/var/lib/mikrotiklover"
 BACKUP_DIR = "/var/backups/mikrotiklover"
 UPDATES = f"{STATE_DIR}/updates.txt"
 TABLES = ("radcheck", "radreply", "radacct", "nas", "ml_plan", "ml_account", "ml_setting", "ml_app", "ml_domain",
-          "ml_security_event", "ml_quarantine", "ml_alert", "web_admin")
+          "ml_security_event", "ml_quarantine", "ml_alert", "web_admin", "ml_fw_rule", "ml_fw_vip")
 
 
 def sh(cmd, timeout=15):
@@ -376,8 +376,32 @@ class Checks:
             except (RuntimeError, ValueError, IndexError):
                 pass
 
+    def firewall(self):
+        """Firewall: the country lists its policies need, and port forwards that open risky doors to everyone."""
+        g = "Blocking & data"
+        n = self.sql("SELECT COUNT(*) FROM ml_fw_rule WHERE enabled=1")[0][0]
+        vips = self.sql("SELECT name, port, src FROM ml_fw_vip WHERE enabled=1")
+        if n == "0" and not vips:
+            return
+        try:
+            ver = open("/var/lib/mikrotiklover/router/geo.version").read().split()
+        except OSError:
+            ver = []
+        missing = next((x[8:] for x in ver if x.startswith("missing:")), "")
+        risky = {3389: "RDP", 445: "SMB", 23: "Telnet", 5900: "VNC", 3306: "MySQL", 1433: "MS-SQL", 8291: "Winbox", 21: "FTP"}
+        open_all = [f"{v[0]} ({risky[int(v[1])]})" for v in vips if v[2] in ("", "all") and v[1].isdigit() and int(v[1]) in risky]
+        status = "warn" if missing or open_all else "ok"
+        detail = f"{n} policies on, {len(vips)} port forward(s)"
+        if missing:
+            detail += f" — no country list yet for {missing}"
+        if open_all:
+            detail += f" — open to the whole internet: {', '.join(open_all)}"
+        self.add("firewall", g, "Firewall", status, detail,
+                 ("Firewall → Countries → Download now (sudo radius-admin firewall geo update). " if missing else "")
+                 + ("Firewall → Port forwards → Edit → Allowed from: only the addresses / countries that need it, or use a VPN." if open_all else ""))
+
     def run(self):
-        for f in (self.services, self.jobs, self.system, self.routers, self.blocking):
+        for f in (self.services, self.jobs, self.system, self.routers, self.blocking, self.firewall):
             try:
                 f()
             except Exception as e:  # noqa: BLE001 — one broken check must not hide the others

@@ -51,6 +51,7 @@ const ICONS = {
   print: "M6 9V3h12v6M6 18H4v-7h16v7h-2M7 14h10v7H7z",
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14m10 3-5.2-5.2",
   block: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M5.6 5.6l12.8 12.8",
+  wall: "M3 5h18v14H3zM3 9.7h18M3 14.3h18M9 5v4.7M15 9.7v4.6M9 14.3V19",
   shield: "M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6zM12 8v5m0 3h.01",
   pulse: "M3 12h4l2-6 4 12 2-6h6",
   bulb: "M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.8.8 1 1.5 1 2.5h6c0-1 .2-1.7 1-2.5A6 6 0 0 0 12 3",
@@ -224,7 +225,7 @@ const NAV = [
   ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], ["speed", "Speed schedule", "clock"], ["hotspot", "Hotspot page", "brush"], ["social", "Social WiFi", "phone"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["insights", "Insights (samajh)", "bulb"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
   ["traffic", "Traffic graphs", "graph"], ["data", "Data usage", "data"], ["apps", "Apps on network", "apps"], ["ports", "Ports & protocols", "ports"], "-",
-  ["blocking", "Blocking", "block"], ["vpn", "VPN & proxy watch", "vpn"], ["security", "Security", "shield"], ["domains", "Website names", "globe"], "-", ["health", "Health check", "pulse"], ["settings", "Settings", "settings"],
+  ["firewall", "Firewall", "wall"], ["blocking", "Blocking", "block"], ["vpn", "VPN & proxy watch", "vpn"], ["security", "Security", "shield"], ["domains", "Website names", "globe"], "-", ["health", "Health check", "pulse"], ["settings", "Settings", "settings"],
 ];
 
 function shell(title, content, actions) {
@@ -3102,3 +3103,338 @@ ROUTES.ports = async (by = "port") => {
     holder));
   await load();
 };
+
+// ------------------------------------------------------------------ Firewall (FortiGate / Untangle style): objects, policies, port forwards, countries
+const FW_TABS = [["overview", "Overview"], ["policies", "Policies"], ["addresses", "Addresses"], ["services", "Services"], ["schedules", "Schedules"],
+  ["vips", "Port forwards"], ["countries", "Countries"], ["lookup", "Policy lookup"], ["logs", "Logs"]];
+const fwActionBadge = (a, log) => h("span", { class: "chips" }, badge({ allow: "ALLOW", deny: "DENY", reject: "REJECT" }[a] || a, a === "allow" ? "ok" : a === "deny" ? "bad" : "warn"),
+  log ? h("span", { class: "fw-log", title: "every hit is logged (Firewall → Logs)" }, "log") : null);
+const fwHits = (x) => x && (x[0] || x[1]) ? h("span", {}, num(x[0]), h("div", { class: "muted small" }, bytes(x[1]))) : h("span", { class: "muted" }, "0");
+function fwRef(d, ref) {
+  if (ref === "all" || ref === "ALL") return h("span", { class: "muted" }, "all");
+  if (ref.startsWith("geo:")) { const cc = ref.slice(4); return h("span", { class: "fw-ref geo", title: d.countries[cc] || cc }, cc, " ", h("small", {}, (d.countries[cc] || "").slice(0, 16))); }
+  const a = d.addrs.find((x) => x.name === ref), s = d.services.find((x) => x.name === ref);
+  return h("span", { class: "fw-ref", title: (a ? a.entries : s ? s.entries : []).join("\n") }, ref);
+}
+const fwRefs = (d, list) => h("div", { class: "fw-refs" }, list.map((r) => fwRef(d, r)));
+
+// pick several: address objects + countries, or services. Nothing picked = all.
+function fwPicker(options, selected, allLabel = "all", allValue = "all") {
+  const sel = new Set((selected || []).filter((x) => x !== allValue));
+  const allCb = h("input", { type: "checkbox" });
+  const chosen = h("div", { class: "chips" }), list = h("div", { class: "chips fw-pick-list" });
+  const q = h("input", { type: "search", placeholder: "Search to add (e.g. a country)…", "aria-label": "search" });
+  const draw = () => {
+    allCb.checked = !sel.size;
+    chosen.replaceChildren(...(sel.size ? [...sel].map((v) => {
+      const o = options.find((x) => x.value === v) || { label: v };
+      return h("span", { class: "chip on" }, o.label, h("button", { type: "button", class: "chip-x", title: "remove", onclick: () => { sel.delete(v); draw(); } }, "×"));
+    }) : [h("span", { class: "muted small" }, `${allLabel} — or add from the list below`)]));
+    const term = q.value.trim().toLowerCase();
+    list.replaceChildren(...options.filter((o) => !sel.has(o.value) && (term ? `${o.value} ${o.label} ${o.sub || ""}`.toLowerCase().includes(term) : o.pop !== false)).slice(0, term ? 60 : 30)
+      .map((o) => h("button", { type: "button", class: "chip small", title: o.sub || "", onclick: () => { sel.add(o.value); q.value = ""; draw(); } }, "+ ", o.label)));
+  };
+  q.addEventListener("input", draw);
+  allCb.addEventListener("change", () => { if (allCb.checked) sel.clear(); draw(); });
+  draw();
+  return { el: h("div", { class: "fw-pick" }, h("div", { class: "toolbar" }, h("label", { class: "chip small" }, allCb, allLabel), chosen), q, list), value: () => (sel.size ? [...sel] : [allValue]) };
+}
+// countries shown before searching (where most attacks come from + common ones here); the rest by search
+const FW_POP = ["PK", "CN", "RU", "KP", "IR", "IN", "US", "BR", "VN", "NL", "DE", "UA", "RO", "AE", "SA", "GB"];
+const fwCountryOptions = (d) => [...FW_POP.filter((cc) => d.countries[cc]), ...Object.keys(d.countries).filter((cc) => !FW_POP.includes(cc)).sort((a, b) => d.countries[a].localeCompare(d.countries[b]))]
+  .map((cc) => ({ value: `geo:${cc}`, label: `${cc} · ${d.countries[cc]}`, sub: `country ${d.countries[cc]}${d.geo.counts[cc] ? ` — ${d.geo.counts[cc]} networks` : ""}`, pop: FW_POP.includes(cc) }));
+const fwAddrOptions = (d) => [...d.addrs.map((a) => ({ value: a.name, label: a.name, sub: a.entries.slice(0, 6).join(", ") })), ...fwCountryOptions(d)];
+
+function fwPolicyDialog(d, r) {
+  r = r || { dir: "out", src: ["all"], dst: ["all"], service: ["ALL"], schedule: "always", action: "deny", log: true, enabled: 1 };
+  const name = h("input", { name: "name", required: true, maxlength: 48, value: r.name || "", placeholder: "e.g. Block RDP from the internet" });
+  const dir = h("select", {}, Object.entries(d.dirs).map(([k, l]) => h("option", { value: k, selected: k === r.dir }, l)));
+  const src = fwPicker(fwAddrOptions(d), r.src), dst = fwPicker(fwAddrOptions(d), r.dst);
+  const svc = fwPicker(d.services.map((s) => ({ value: s.name, label: s.name, sub: `${s.entries.join(" ")} — ${s.comment}` })), r.service, "every service", "ALL");
+  const sched = h("select", {}, d.schedules.map((s) => h("option", { value: s.name, selected: s.name === r.schedule }, `${s.name} — ${s.comment || s.days.join(",") + " " + s.start + "-" + s.end}`)));
+  let action = r.action;
+  const actSeg = h("div", { class: "seg" });
+  const drawAct = () => actSeg.replaceChildren(...Object.entries(d.actions).map(([k, l]) => h("button", { type: "button", class: k === action ? "on" : "", onclick: () => { action = k; drawAct(); } }, l)));
+  drawAct();
+  const log = h("input", { type: "checkbox", checked: !!r.log }), on = h("input", { type: "checkbox", checked: r.enabled !== 0 });
+  const top = h("input", { type: "checkbox" });
+  const comment = h("input", { maxlength: 200, value: r.comment || "", placeholder: "why this policy exists (optional)" });
+  const form = h("form", { class: "form fw-form" },
+    h("label", { class: "field" }, "Name", name),
+    h("label", { class: "field" }, "Direction", dir),
+    h("div", { class: "field" }, "Source (who starts the connection)", src.el),
+    h("div", { class: "field" }, "Destination", dst.el),
+    h("div", { class: "field" }, "Service", svc.el),
+    h("label", { class: "field" }, "Schedule", sched),
+    h("div", { class: "field" }, "Action", actSeg),
+    h("div", { class: "toolbar" }, h("label", { class: "chip" }, log, "Log every hit"), h("label", { class: "chip" }, on, "Policy on"), r.id ? null : h("label", { class: "chip" }, top, "Put it first")),
+    h("label", { class: "field" }, "Comment", comment),
+    hint("How policies work", h("ul", { class: "g-list" }, h("li", {}, "Top to bottom; the first policy that fits a new connection decides."),
+      h("li", {}, h("b", {}, "Allow"), " = stop checking firewall policies (the web filter, security and the router's own rules still apply)."),
+      h("li", {}, h("b", {}, "Deny"), " drops silently; ", h("b", {}, "Reject"), " tells the app at once (faster error, no waiting)."),
+      h("li", {}, "Nothing fits → the router's own rules decide (normally: allowed)."))));
+  dialog(r.id ? `Edit policy #${r.id}` : "New firewall policy", form, [{ label: "Cancel" }, { label: "Save policy", class: "primary", action: async () => {
+    if (!form.reportValidity()) return false;
+    const res = await act(api("POST", "/api/firewall/rule", { id: r.id || "", name: name.value.trim(), dir: dir.value, src: src.value(), dst: dst.value(), service: svc.value(),
+      schedule: sched.value, action, log: log.checked, enabled: on.checked, comment: comment.value.trim(), where: top.checked ? "top" : "" }));
+    if (!res) return false;
+    route();
+  } }]);
+}
+
+function fwObjectDialog(kind, o) {
+  const isSched = kind === "schedule";
+  o = o || { name: "", entries: [], comment: "", days: ["mon", "tue", "wed", "thu", "fri", "sat"], start: "09:00", end: "17:00" };
+  const name = h("input", { required: true, maxlength: 32, pattern: "[A-Za-z0-9][A-Za-z0-9._\\-]{0,31}", value: o.name, readonly: !!o.name, placeholder: kind === "addr" ? "office" : kind === "service" ? "my-app" : "lunch" });
+  const comment = h("input", { maxlength: 200, value: o.comment || "" });
+  let body, value;
+  if (isSched) {
+    const days = DAY_NAMES.map((dd) => h("label", { class: "chip small" }, h("input", { type: "checkbox", value: dd, checked: (o.days || []).includes(dd) }), dd));
+    const start = h("input", { type: "time", value: o.start || "09:00", required: true }), end = h("input", { type: "time", value: o.end || "17:00", required: true });
+    body = [h("div", { class: "field" }, "Days", h("div", { class: "chips" }, days)), h("div", { class: "toolbar" }, h("label", { class: "field" }, "From", start), h("label", { class: "field" }, "To", end)),
+      h("div", { class: "muted small" }, "To earlier than From = over midnight (e.g. 22:00 → 06:00).")];
+    value = () => ({ days: days.map((l) => l.querySelector("input")).filter((c) => c.checked).map((c) => c.value), start: start.value, end: end.value });
+  } else {
+    const ta = h("textarea", { rows: 7, required: true, spellcheck: false, placeholder: kind === "addr" ? "192.168.88.0/24\n10.0.0.5\n10.0.0.20-10.0.0.40\nmail.example.com\ngeo:PK" : "tcp/8080,8443\nudp/5000-5100\nicmp" }, (o.entries || []).join("\n"));
+    body = [h("label", { class: "field" }, kind === "addr" ? "Entries (one per line)" : "Protocol / ports (one per line)", ta),
+      h("div", { class: "muted small" }, kind === "addr" ? "An IP, a network (10.0.0.0/24), a range (a-b), a website name (the router looks it up), or a country (geo:PK)." : "tcp/80,443 · udp/5000-5100 · icmp · gre · esp — up to 15 ports per line.")];
+    value = () => ({ entries: ta.value.split("\n").map((x) => x.trim()).filter(Boolean) });
+  }
+  const form = h("form", { class: "form" }, h("label", { class: "field" }, "Name", name), ...body, h("label", { class: "field" }, "Comment", comment));
+  dialog(`${o.name ? "Edit" : "New"} ${kind === "addr" ? "address" : kind}`, form, [{ label: "Cancel" }, { label: "Save", class: "primary", action: async () => {
+    if (!form.reportValidity()) return false;
+    if (!(await act(api("POST", `/api/firewall/${kind}`, { name: name.value.trim(), comment: comment.value.trim(), ...value() })))) return false;
+    route();
+  } }]);
+}
+
+function fwVipDialog(d, v) {
+  v = v || { proto: "tcp", src: ["all"], enabled: 1 };
+  const name = h("input", { required: true, maxlength: 32, pattern: "[A-Za-z0-9][A-Za-z0-9._\\-]{0,31}", value: v.name || "", placeholder: "DVR" });
+  const proto = h("select", {}, ["tcp", "udp", "both"].map((p) => h("option", { value: p, selected: p === v.proto }, p.toUpperCase())));
+  const port = h("input", { required: true, value: v.port || "", placeholder: "37777 or 5000-5100", pattern: "\\d{1,5}(-\\d{1,5})?" });
+  const to = h("input", { required: true, value: v.to_ip || "", placeholder: "192.168.88.20", pattern: "\\d{1,3}(\\.\\d{1,3}){3}" });
+  const toPort = h("input", { value: v.to_port || "", placeholder: "same as outside", pattern: "\\d{1,5}(-\\d{1,5})?" });
+  const wan = h("input", { value: v.wan || "", placeholder: "empty = every internet side (e.g. ether1)" });
+  const src = fwPicker(fwAddrOptions(d), v.src, "the whole internet");
+  const on = h("input", { type: "checkbox", checked: v.enabled !== 0 }), comment = h("input", { maxlength: 200, value: v.comment || "" });
+  const form = h("form", { class: "form fw-form" }, h("label", { class: "field" }, "Name", name),
+    h("div", { class: "toolbar" }, h("label", { class: "field" }, "Protocol", proto), h("label", { class: "field" }, "Outside port", port)),
+    h("div", { class: "toolbar" }, h("label", { class: "field" }, "Inside address", to), h("label", { class: "field" }, "Inside port", toPort)),
+    h("div", { class: "field" }, "Allowed from", src.el), h("label", { class: "field" }, "Outside interface", wan),
+    h("div", { class: "toolbar" }, h("label", { class: "chip" }, on, "On")), h("label", { class: "field" }, "Comment", comment),
+    hint("Safer port forwards", h("ul", { class: "g-list" }, h("li", {}, "Open a port only to the addresses or countries that need it (Allowed from)."),
+      h("li", {}, "Never forward RDP (3389), SMB (445), Telnet or databases to the whole internet — use a VPN."))));
+  dialog(v.id ? `Edit port forward · ${v.name}` : "New port forward", form, [{ label: "Cancel" }, { label: "Save", class: "primary", action: async () => {
+    if (!form.reportValidity()) return false;
+    if (!(await act(api("POST", "/api/firewall/vip", { id: v.id || "", name: name.value.trim(), proto: proto.value, port: port.value.trim(), to: to.value.trim(),
+      to_port: toPort.value.trim() || port.value.trim(), src: src.value(), wan: wan.value.trim(), enabled: on.checked, comment: comment.value.trim() })))) return false;
+    route();
+  } }]);
+}
+
+const fwDo = async (path, confirmText) => {
+  if (confirmText && !(await confirmDlg("Firewall", confirmText, "Yes"))) return;
+  if (await act(api("POST", path, {}))) route();
+};
+const FW_TEMPLATES = [
+  ["Block RDP, SMB, Telnet, VNC from the internet", "the doors ransomware and hackers use", { name: "Block risky doors from the internet", dir: "in", service: ["RDP", "SMB", "TELNET", "VNC"], action: "deny", log: true }],
+  ["Router login only from the LAN", "Winbox / SSH / API refused from the internet", { name: "Router login only from LAN", dir: "wan", service: ["WINBOX", "SSH", "TELNET", "MIKROTIK-API"], action: "reject", log: true }],
+  ["No torrents in office hours", "BitTorrent default ports, Mon-Sat 9-17", { name: "No torrents in office hours", dir: "out", service: ["TORRENT"], schedule: "office-hours", action: "reject" }],
+  ["Everyone uses the router's DNS", "stops DNS bypass (8.8.8.8, DoT) around the web filter", { name: "Only the router's DNS", dir: "out", service: ["DNS", "DOT"], action: "reject", log: true }],
+  ["Block outgoing mail servers (spam bots)", "PCs sending mail directly = usually a virus", { name: "No direct mail sending", dir: "out", service: ["SMTP"], action: "reject", log: true }],
+];
+
+ROUTES.firewall = async (tab = "overview", ...rest) => {
+  const d = await api("GET", "/api/firewall");
+  const counts = { policies: d.rules.length, addresses: d.addrs.length, vips: d.vips.length };
+  const tabs = h("div", { class: "tabs" }, FW_TABS.map(([k, l]) => h("a", { href: `#/firewall/${k}`, class: k === tab ? "active" : "" }, l,
+    k === "overview" && d.warnings.length ? h("span", { class: "count" }, d.warnings.length) : counts[k] ? h("small", { class: "muted" }, ` ${counts[k]}`) : null)));
+  const add = (label, fn) => isAdmin() ? h("button", { class: "primary", onclick: fn }, label) : null;
+  let body;
+  if (tab === "policies") {
+    const q = h("input", { type: "search", placeholder: "Search policies…" });
+    let dirF = "";
+    const dirSeg = h("select", { "aria-label": "direction" }, [["", "Every direction"], ...Object.entries(d.dirs)].map(([k, l]) => h("option", { value: k }, l)));
+    dirSeg.addEventListener("change", () => { dirF = dirSeg.value; draw(); });
+    const drawSeg = () => {};
+    const holder = h("div");
+    const sw = (r) => { const cb = h("input", { type: "checkbox", checked: !!r.enabled, disabled: !isAdmin(), "aria-label": `policy ${r.id} on` });
+      cb.addEventListener("change", () => fwDo(`/api/firewall/rule/${r.id}/${cb.checked ? "on" : "off"}`)); return h("label", { class: "switch" }, cb, h("span", { class: "track" })); };
+    const draw = () => {
+      const term = q.value.trim().toLowerCase();
+      const rows = d.rules.filter((r) => (!dirF || r.dir === dirF) && (!term || JSON.stringify([r.name, r.src, r.dst, r.service, r.comment, r.id]).toLowerCase().includes(term)));
+      holder.replaceChildren(table([
+        { label: "", render: sw },
+        { label: "#", render: (r) => h("span", { class: "muted" }, r.seq) },
+        { label: "Policy", render: (r) => h("div", { class: "fw-name" }, h("b", {}, r.name), h("div", { class: "muted small" }, d.dirs[r.dir], ` · ID ${r.id}`),
+          r.comment ? h("div", { class: "muted small" }, r.comment) : null), wrap: true },
+        { label: "Source", render: (r) => fwRefs(d, r.src) }, { label: "Destination", render: (r) => fwRefs(d, r.dst) },
+        { label: "Service / when", render: (r) => h("div", {}, fwRefs(d, r.service), r.schedule !== "always" ? h("div", { class: "muted small" }, "⏱ ", r.schedule) : null) },
+        { label: "Action", render: (r) => fwActionBadge(r.action, r.log) }, { label: "Hits", num: true, render: (r) => fwHits(r.hits) },
+        { label: "", render: (r) => isAdmin() ? h("div", { class: "row-actions fw-acts" },
+          h("button", { class: "small", title: "move up", "aria-label": "move up", disabled: r.seq === 1, onclick: () => fwDo(`/api/firewall/rule/${r.id}/up`) }, "↑"),
+          h("button", { class: "small", title: "move down", "aria-label": "move down", disabled: r.seq === d.rules.length, onclick: () => fwDo(`/api/firewall/rule/${r.id}/down`) }, "↓"),
+          h("button", { class: "small", onclick: () => fwPolicyDialog(d, r) }, "Edit"),
+          h("button", { class: "small danger", title: "delete", "aria-label": "delete", onclick: () => fwDo(`/api/firewall/rule/${r.id}/del`, `Delete policy #${r.id} "${r.name}"?`) }, "✕")) : null }],
+        rows.map((r) => r), "No policies yet — everything goes to the router's own rules. Start with Overview → Quick start."),
+      h("div", { class: "fw-implicit" }, h("b", {}, "Implicit"), " — a connection no policy fits: the router's own rules decide (normally allowed). Web filter and security always apply."));
+      holder.querySelectorAll("table").forEach((t) => t.classList.add("rw-table"));
+      holder.querySelectorAll("tbody tr").forEach((tr, i) => { if (!rows[i].enabled) tr.classList.add("off"); });
+    };
+    drawSeg(); q.addEventListener("input", draw); draw();
+    body = [card("Firewall policies", "top to bottom — the first that fits decides", h("div", { class: "toolbar" }, add("+ New policy", () => fwPolicyDialog(d)), q, dirSeg), holder)];
+  } else if (tab === "addresses") {
+    body = [card("Address objects", "named groups: IPs, networks, ranges, website names, countries", h("div", { class: "toolbar" }, add("+ New address", () => fwObjectDialog("addr"))),
+      table([{ label: "Name", render: (a) => h("b", {}, a.name) }, { label: "Type", render: (a) => h("span", { class: "chips" }, a.kind.map((k) => badge({ net: "IP / network", range: "range", fqdn: "website name", geo: "country" }[k], k === "geo" ? "info" : ""))) },
+        { label: "Entries", render: (a) => h("span", { class: "small" }, a.entries.slice(0, 4).join(", "), a.entries.length > 4 ? h("span", { class: "muted" }, ` +${a.entries.length - 4} more`) : null), wrap: true },
+        { label: "Used by", render: (a) => a.used.length ? h("span", { class: "small" }, a.used.join(", ")) : h("span", { class: "muted" }, "not used") },
+        { label: "", render: (a) => isAdmin() ? h("div", { class: "row-actions" }, h("button", { class: "small", onclick: () => fwObjectDialog("addr", a) }, "Edit"),
+          h("button", { class: "small danger", disabled: a.used.length > 0, title: a.used.length ? "used — change those first" : "", onclick: () => fwDo(`/api/firewall/addr/${encodeURIComponent(a.name)}/del`, `Delete address "${a.name}"?`) }, "Delete")) : null }],
+      d.addrs, "No address objects yet."))];
+  } else if (tab === "services" || tab === "schedules") {
+    const kind = tab === "services" ? "service" : "schedule", list = tab === "services" ? d.services : d.schedules;
+    body = [card(tab === "services" ? "Services" : "Schedules", tab === "services" ? "protocol + ports; built-in ones cannot change" : "when a policy works",
+      h("div", { class: "toolbar" }, add(`+ New ${kind}`, () => fwObjectDialog(kind))),
+      table([{ label: "Name", render: (s) => h("span", {}, h("b", {}, s.name), s.builtin ? h("span", {}, " ", badge("built-in")) : null) },
+        { label: tab === "services" ? "Protocol / ports" : "When", render: (s) => tab === "services" ? h("code", {}, s.entries.join("  ")) : s.start ? `${s.days.join(",")}  ${s.start}–${s.end}` : "always" },
+        { label: "What", render: (s) => h("span", { class: "small muted" }, s.comment || ""), wrap: true },
+        { label: "Used by", render: (s) => s.used.length ? h("span", { class: "small" }, s.used.join(", ")) : h("span", { class: "muted" }, "—") },
+        { label: "", render: (s) => isAdmin() && !s.builtin ? h("div", { class: "row-actions" }, h("button", { class: "small", onclick: () => fwObjectDialog(kind, s) }, "Edit"),
+          h("button", { class: "small danger", disabled: s.used.length > 0, onclick: () => fwDo(`/api/firewall/${kind}/${encodeURIComponent(s.name)}/del`, `Delete ${kind} "${s.name}"?`) }, "Delete")) : null }],
+      list))];
+  } else if (tab === "vips") {
+    const sw = (v) => { const cb = h("input", { type: "checkbox", checked: !!v.enabled, disabled: !isAdmin(), "aria-label": `port forward ${v.name} on` });
+      cb.addEventListener("change", () => fwDo(`/api/firewall/vip/${v.id}/${cb.checked ? "on" : "off"}`)); return h("label", { class: "switch" }, cb, h("span", { class: "track" })); };
+    body = [card("Port forwards (virtual IPs)", "outside port → a device inside", h("div", { class: "toolbar" }, add("+ New port forward", () => fwVipDialog(d)),
+      h("a", { href: "#/security/inbound" }, "Who came in from outside →")),
+      table([{ label: "", render: sw }, { label: "Name", render: (v) => h("b", {}, v.name) },
+        { label: "Outside", render: (v) => h("code", {}, `${v.proto.toUpperCase()} ${v.port}`) }, { label: "→ Inside", render: (v) => h("code", {}, `${v.to_ip}:${v.to_port}`) },
+        { label: "Allowed from", render: (v) => v.open_all ? badge("the whole internet", v.risk ? "bad" : "warn") : fwRefs(d, v.src) },
+        { label: "Risk", render: (v) => v.risk ? badge(v.risk, "bad") : h("span", { class: "muted" }, "—") }, { label: "Hits", num: true, render: (v) => fwHits(v.hits) },
+        { label: "", render: (v) => isAdmin() ? h("div", { class: "row-actions" }, h("button", { class: "small", onclick: () => fwVipDialog(d, v) }, "Edit"),
+          h("button", { class: "small danger", onclick: () => fwDo(`/api/firewall/vip/${v.id}/del`, `Delete port forward "${v.name}"? The device is no longer reachable from outside.`) }, "Delete")) : null }],
+      d.vips, "No port forwards made here. (Ones made on the router by hand show in Security → From outside.)"))];
+  } else if (tab === "countries") {
+    body = await fwCountries(d);
+  } else if (tab === "lookup") {
+    body = fwLookup(d, rest);
+  } else if (tab === "logs") {
+    body = await fwLogs(d, rest[0]);
+  } else {
+    body = await fwOverview(d);
+  }
+  shell("Firewall", h("div", { class: "stack" }, tabs, ...[].concat(body)));
+  document.querySelectorAll(".content table").forEach((t) => t.classList.add("rw-table"));
+};
+
+async function fwOverview(d) {
+  const on = d.rules.filter((r) => r.enabled), deny = on.filter((r) => r.action !== "allow");
+  const hits = d.rules.reduce((s, r) => s + Number(r.hits[0] || 0), 0);
+  const openAll = d.vips.filter((v) => v.enabled && v.open_all).length;
+  const logs = await api("GET", "/api/firewall/logs?days=1").catch(() => ({ rows: [], by_rule: [], top_sources: [] }));
+  const status = d.warnings.length ? "warn" : "ok";
+  const busiest = [...d.rules].filter((r) => r.hits[0]).sort((a, b) => b.hits[0] - a.hits[0]).slice(0, 6);
+  return [
+    h("div", { class: `card health-hero ${status}` }, h("div", { class: "hh-mark" }, d.warnings.length ? "!" : "✔"),
+      h("div", { class: "grow" }, h("div", { class: "hh-title" }, d.warnings.length ? `${d.warnings.length} thing(s) to look at` : on.length ? "Firewall is working" : "No firewall policies yet"),
+        h("div", { class: "muted" }, `${on.length} of ${d.rules.length} policies on (${deny.length} blocking) · ${d.vips.length} port forward(s) · ${d.geo.used.length} countries in use · routers took the rules ${d.built || "—"}`))),
+    h("div", { class: "grid g-tiles" }, tile("Policies on", `${on.length} / ${d.rules.length}`, `${deny.length} deny / reject`),
+      tile("Hits", num(hits), d.routers.length ? `${d.routers.length} router(s) reporting` : "routers not reporting yet (auto-sync script)"),
+      tile("Blocked today (logged)", num(logs.rows.length), logs.top_sources[0] ? `most: ${logs.top_sources[0].ip} ${logs.top_sources[0].country || ""}` : "nothing logged"),
+      tile("Port forwards", num(d.vips.length), openAll ? `${openAll} open to the whole internet` : "none open to everyone"),
+      tile("Countries", num(d.geo.used.length), d.geo.updated ? `lists from ${d.geo.updated.slice(0, 10)}` : "lists not downloaded")),
+    d.warnings.length ? card("Needs attention", null, h("ul", { class: "g-list" }, d.warnings.map((w) => h("li", {}, w.text, " ",
+      h("a", { href: w.kind === "geo" ? "#/firewall/countries" : "#/firewall/vips" }, "Open →"))))) : null,
+    h("div", { class: "grid g-2" },
+      card("Quick start", "common policies — check, then save", h("div", { class: "stack" }, FW_TEMPLATES.map(([t, sub, preset]) => h("div", { class: "fw-tpl" },
+        h("div", {}, h("b", {}, t), h("div", { class: "muted small" }, sub)),
+        isAdmin() ? h("button", { class: "small", onclick: () => fwPolicyDialog(d, { src: ["all"], dst: ["all"], schedule: "always", enabled: 1, ...preset }) }, "Set up") : null)),
+        h("div", { class: "fw-tpl" }, h("div", {}, h("b", {}, "Block whole countries"), h("div", { class: "muted small" }, "attacks from abroad, or LAN to some countries")), h("button", { class: "small", onclick: () => { location.hash = "#/firewall/countries"; } }, "Open")))),
+      card("Busiest policies", "hits since the routers last took new rules", busiest.length ? h("div", { class: "fw-bars" }, busiest.map((r) => {
+        const bar = h("i"); bar.style.width = `${Math.max(2, (r.hits[0] / busiest[0].hits[0]) * 100)}%`;
+        return h("a", { class: "fw-bar", href: "#/firewall/policies" }, h("span", { class: "fw-bar-name" }, `#${r.id} ${r.name}`), h("span", { class: "fw-bar-track" }, bar),
+          h("span", { class: "fw-bar-n" }, num(r.hits[0]), " ", fwActionBadge(r.action)));
+      })) : h("div", { class: "empty" }, "No hits reported yet."))),
+    card("Last blocked (logged)", h("a", { href: "#/firewall/logs" }, "all logs →"), table([{ label: "Time", render: (r) => r.time.slice(5) }, { label: "Policy", render: (r) => `#${r.rule} ${r.policy}` },
+      { label: "From", render: (r) => h("span", {}, h("code", {}, r.src), r.country ? h("span", { class: "muted" }, ` ${r.country}`) : null) },
+      { label: "To", render: (r) => h("code", {}, `${r.dst}${r.port ? ":" + r.port : ""}`) }, { label: "Proto", key: "proto" }], logs.rows.slice(0, 8), "Nothing logged today (turn on 'Log every hit' in a policy).")),
+  ];
+}
+
+async function fwCountries(d) {
+  const find = (n) => d.rules.find((r) => r.name === n);
+  const inRule = find("Country block (in)"), outRule = find("Country block (out)");
+  const pick = (r, key) => fwPicker(fwCountryOptions(d), r ? r[key] : [], "none");
+  const pIn = pick(inRule, "src"), pOut = pick(outRule, "dst");
+  const save = async (name, rule, p, dir, key) => {
+    const v = p.value().filter((x) => x !== "all");
+    if (!v.length) { if (rule) await fwDo(`/api/firewall/rule/${rule.id}/del`); else toast("Pick at least one country"); return; }
+    if (await act(api("POST", "/api/firewall/rule", { id: rule ? rule.id : "", name, dir, src: key === "src" ? v : ["all"], dst: key === "dst" ? v : ["all"], service: ["ALL"],
+      schedule: "always", action: "deny", log: true, enabled: true, where: "top" }))) route();
+  };
+  const total = Object.values(d.geo.counts).reduce((a, b) => a + b, 0);
+  return [
+    card("Country lists (Geo-IP)", d.geo.updated ? `updated ${d.geo.updated}` : "not downloaded yet",
+      h("div", { class: "toolbar" }, h("span", {}, d.geo.updated ? `${Object.keys(d.geo.counts).length} countries, ${num(total)} networks — ${d.geo.source}` : "Download the lists once; they refresh every week by themselves."),
+        isAdmin() ? h("button", { class: d.geo.updated ? "small" : "primary", onclick: async (e) => { e.target.disabled = true; e.target.textContent = "Downloading… (1-2 min)";
+          if (await act(api("POST", "/api/firewall/geo-update", {}))) route(); else { e.target.disabled = false; e.target.textContent = "Download now"; } } }, "Download now") : null),
+      h("div", { class: "muted small" }, "From the five regional internet registries (who gives each country its addresses). Routers get only the countries you use, and only when they change.")),
+    h("div", { class: "grid g-2" },
+      card("Block FROM these countries", "internet → your LAN and the routers (attacks, scans, logins)", pIn.el,
+        isAdmin() ? h("div", { class: "toolbar" }, h("button", { class: "primary", onclick: () => save("Country block (in)", inRule, pIn, "wan", "src") }, "Save"), inRule ? h("span", { class: "muted small" }, `policy #${inRule.id}, first in the list`) : null) : null),
+      card("Block TO these countries", "your LAN → websites / servers in these countries", pOut.el,
+        isAdmin() ? h("div", { class: "toolbar" }, h("button", { class: "primary", onclick: () => save("Country block (out)", outRule, pOut, "out", "dst") }, "Save"), outRule ? h("span", { class: "muted small" }, `policy #${outRule.id}`) : null) : null)),
+    card("Countries in use", "by policies, address objects and port forwards", table([{ label: "Country", render: (cc) => h("span", {}, h("b", {}, cc), ` ${d.countries[cc]}`) },
+      { label: "Networks", num: true, render: (cc) => d.geo.counts[cc] ? num(d.geo.counts[cc]) : badge("no list yet", "warn") }], d.geo.used, "No country used yet.")),
+    hint("Good to know", h("ul", { class: "g-list" }, h("li", {}, "A big country (US, CN) is thousands of networks: the router takes a minute to load it the first time."),
+      h("li", {}, "Allow your own country in a port forward: Port forwards → Allowed from → PK."), h("li", {}, "VPN users abroad come from their VPN's country, not where they are."))),
+  ];
+}
+
+function fwLookup(d, pre) {
+  const dir = h("select", {}, Object.entries(d.lookup_dirs).map(([k, l]) => h("option", { value: k, selected: k === (pre[0] || "in") }, l)));
+  const src = h("input", { required: true, placeholder: "e.g. 1.2.3.4", value: pre[1] || "", pattern: "\\d{1,3}(\\.\\d{1,3}){3}" });
+  const dst = h("input", { required: true, placeholder: "e.g. 192.168.88.20", value: pre[2] || "", pattern: "\\d{1,3}(\\.\\d{1,3}){3}" });
+  const proto = h("select", {}, ["tcp", "udp", "icmp"].map((p) => h("option", { value: p }, p.toUpperCase())));
+  const port = h("input", { type: "number", min: 0, max: 65535, placeholder: "443", value: pre[3] || "" });
+  const out = h("div");
+  const form = h("form", { class: "toolbar fw-lookup", onsubmit: async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api("GET", `/api/firewall/lookup?${new URLSearchParams({ dir: dir.value, src: src.value.trim(), dst: dst.value.trim(), proto: proto.value, port: port.value || 0 })}`);
+      const v = r.verdict;
+      out.replaceChildren(h("div", { class: `card health-hero ${v === "allow" ? "ok" : v === "no-policy" ? "" : "fail"}` }, h("div", { class: "hh-mark" }, v === "allow" ? "✔" : v === "no-policy" ? "–" : "✘"),
+        h("div", { class: "grow" }, h("div", { class: "hh-title" }, v === "no-policy" ? "No firewall policy fits" : `${v.toUpperCase()} by policy #${r.rule} "${r.name}"`),
+          h("div", { class: "muted" }, `from ${src.value} (${r.countries[0] || "?"}) to ${dst.value} (${r.countries[1] || "?"})`, v === "no-policy" ? " — the router's own rules decide (normally allowed)." : ""))),
+        card("Checked in order", null, table([{ label: "#", render: (x) => `#${x.id}` }, { label: "Policy", key: "name" },
+          { label: "", render: (x) => x.match ? badge("FITS", "ok") : h("span", { class: "muted" }, "—") }, { label: "Why", key: "why", wrap: true }], r.steps, "No policies.")));
+    } catch (err) { toast(err.message, true); }
+  } }, h("label", { class: "field" }, "Direction", dir), h("label", { class: "field" }, "Source IP", src), h("label", { class: "field" }, "Destination IP", dst),
+    h("label", { class: "field" }, "Protocol", proto), h("label", { class: "field" }, "Port", port), h("button", { class: "primary", type: "submit" }, "Check"));
+  return [card("Policy lookup", "which policy takes a connection — test before you change", form,
+    h("div", { class: "muted small" }, "Uses the saved policies and country lists; website names in address objects are not looked up here.")), out];
+}
+
+async function fwLogs(d, rule = "") {
+  const days = h("select", {}, [["1", "Today"], ["7", "7 days"], ["30", "30 days"]].map(([v, l]) => h("option", { value: v }, l)));
+  const pol = h("select", {}, h("option", { value: "" }, "All policies"), d.rules.map((r) => h("option", { value: r.id, selected: String(r.id) === String(rule) }, `#${r.id} ${r.name}`)));
+  const holder = h("div", { class: "stack" });
+  const load = async () => {
+    const r = await api("GET", `/api/firewall/logs?${new URLSearchParams({ days: days.value, rule: pol.value })}`);
+    holder.replaceChildren(
+      h("div", { class: "grid g-2" },
+        card("By policy", null, table([{ label: "Policy", render: (x) => `#${x.rule} ${x.policy}` }, { label: "Hits", key: "count", num: true }], r.by_rule, "Nothing.")),
+        card("Top sources", null, table([{ label: "Address", render: (x) => h("code", {}, x.ip) }, { label: "Country", render: (x) => x.country ? `${x.country} ${d.countries[x.country] || ""}` : "—" },
+          { label: "Hits", key: "count", num: true }], r.top_sources, "Nothing."))),
+      card("Log", `${r.rows.length} newest`, table([{ label: "Time", key: "time" }, { label: "Policy", render: (x) => `#${x.rule} ${x.policy}` },
+        { label: "Action", render: (x) => fwActionBadge(x.action) }, { label: "Proto", key: "proto" },
+        { label: "From", render: (x) => h("span", {}, h("code", {}, x.src), x.country ? h("span", { class: "muted" }, ` ${x.country}`) : null) },
+        { label: "To", render: (x) => h("code", {}, `${x.dst}${x.port ? ":" + x.port : ""}`) }, { label: "Router", key: "router" }], r.rows,
+        "Nothing logged. Only policies with 'Log every hit' write here.")));
+    holder.querySelectorAll("table").forEach((t) => t.classList.add("rw-table"));
+  };
+  days.addEventListener("change", load); pol.addEventListener("change", load);
+  await load();
+  return [card(null, null, h("div", { class: "toolbar" }, days, pol)), holder];
+}

@@ -414,3 +414,31 @@ details.card > summary { font-weight: 700; }
   .rw-table td[data-l]::before { content: attr(data-l) ": "; color: var(--muted); font-size: 12px; }
   .rw-table td.num > span > div { display: inline-flex; margin-left: 6px; }
 }
+
+/* firewall */
+.fw-pick { display: grid; gap: 6px; }
+.fw-pick-list { max-height: 132px; overflow-y: auto; padding: 2px 0; }
+.fw-pick input[type=search] { max-width: 280px; }
+.fw-refs { display: flex; flex-wrap: wrap; gap: 4px; }
+.fw-ref { display: inline-block; font-size: 12px; padding: 1px 7px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-weight: 600; white-space: nowrap; }
+.fw-ref.geo { background: var(--warn-soft); color: var(--warn); }
+.fw-ref.geo small { font-weight: 400; opacity: .85; }
+.fw-log { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+.fw-implicit { padding: 10px 16px; font-size: 12.5px; color: var(--muted); border-top: 1px dashed var(--border); }
+.fw-tpl { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.fw-tpl:last-child { border-bottom: 0; }
+.fw-form .toolbar > .field { flex: 1 1 140px; }
+.fw-lookup { align-items: flex-end; }
+.fw-lookup .field { flex: 1 1 140px; }
+.content tr.off td:not(:first-child) { opacity: .5; }
+.fw-name { min-width: 150px; max-width: 240px; }
+.fw-acts { flex-wrap: nowrap; }
+.fw-acts button { padding: 4px 8px; }
+.fw-bars { display: grid; gap: 10px; }
+.fw-bar { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(60px, 1fr) auto; gap: 10px; align-items: center; color: var(--text); font-size: 13px; }
+.fw-bar:hover { text-decoration: none; }
+.fw-bar-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.fw-bar-track { height: 8px; border-radius: 999px; background: var(--border); overflow: hidden; }
+.fw-bar-track i { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+.fw-bar-n { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.table-wrap + .fw-implicit { margin: 18px -18px -18px; }
