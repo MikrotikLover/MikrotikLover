@@ -442,3 +442,5 @@ details.card > summary { font-weight: 700; }
 .fw-bar-track i { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
 .fw-bar-n { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .table-wrap + .fw-implicit { margin: 18px -18px -18px; }
+.ips-opts { margin-top: 12px; align-items: flex-end; }
+.ips-opts .field { flex: 1 1 180px; }

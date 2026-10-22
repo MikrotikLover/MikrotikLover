@@ -1866,6 +1866,7 @@ cmd_ips() { # intrusion prevention: Suricata on a copy of the routers' internet 
             setting_set ips_on 0; ips_svc stop
             cmd_policy build >/dev/null || die "router rules not built"
             ok "IPS off (routers stop sending the copy within 15 minutes; blocked addresses run out by themselves)" ;;
+        json) ips_py status ;;
         restart) [ "$(setting_get ips_on)" = 1 ] || die "IPS is off (radius-admin ips on)"; ips_py config >/dev/null; ips_svc start; ok "IPS restarted" ;;
         scan) [ "$(setting_get ips_on)" = 1 ] || [ "${1:-}" = --force ] || return 0; ips_py scan ;;
         update) local out rc=0; out=$(ips_py update 2>&1) || rc=$?; [ $rc = 0 ] && ok "$out" || { warn "$out"; return 1; } ;;

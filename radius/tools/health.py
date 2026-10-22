@@ -400,8 +400,33 @@ class Checks:
                  ("Firewall → Countries → Download now (sudo radius-admin firewall geo update). " if missing else "")
                  + ("Firewall → Port forwards → Edit → Allowed from: only the addresses / countries that need it, or use a VPN." if open_all else ""))
 
+    def ips(self):
+        """Intrusion prevention: Suricata running, the routers' copy arriving, signatures downloaded."""
+        r = self.sql("SELECT v FROM ml_setting WHERE k='ips_on'")
+        if not r or r[0][0] != "1":
+            return
+        g = "Security"
+        rc, out = sh([sys.executable, "-I", "/usr/local/lib/mikrotiklover/ips.py", "status"], 30)
+        try:
+            st = json.loads(out)
+        except ValueError:
+            self.add("ips", g, "Intrusion prevention", "warn", f"could not check: {out[:120]}")
+            return
+        cp = st.get("copy", {})
+        if not st.get("running"):
+            self.add("ips", g, "Intrusion prevention", "fail", "Suricata is not running",
+                     "sudo radius-admin ips restart ; if it stops again: see /var/log/suricata/suricata.log")
+        elif not cp.get("receiving"):
+            self.add("ips", g, "Intrusion prevention", "warn", "running, but no traffic copy from the routers for 5 minutes",
+                     "Re-import the auto-sync script on the router; the server IP (Security → Protection & lists) must be right; UDP 37008 to this server must not be blocked")
+        elif st.get("rules", 0) < 1000:
+            self.add("ips", g, "Intrusion prevention", "warn", f"running, only {st.get('rules', 0)} signatures (Emerging Threats not downloaded)",
+                     "sudo radius-admin ips update  (the server needs internet to rules.emergingthreats.net)")
+        else:
+            self.add("ips", g, "Intrusion prevention", "ok", f"running, {st['rules']} signatures, copy from {', '.join(cp.get('routers', []))}")
+
     def run(self):
-        for f in (self.services, self.jobs, self.system, self.routers, self.blocking, self.firewall):
+        for f in (self.services, self.jobs, self.system, self.routers, self.blocking, self.firewall, self.ips):
             try:
                 f()
             except Exception as e:  # noqa: BLE001 — one broken check must not hide the others

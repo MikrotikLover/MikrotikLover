@@ -3107,6 +3107,90 @@ def inbound_detail():
     return jsonify(rows=jsonable(rows))
 
 
+# ------------------------------------------------------------------ intrusion prevention (Suricata): tools/ips.py
+@app.get("/api/ips")
+@login_required()
+def ips_get():
+    a = report_args()
+    days = int(max(a.days, 1))
+    ok, out = radius_admin(["ips", "json"], log=False, timeout=30)
+    try:
+        st = json.loads(out) if ok else {}
+    except ValueError:
+        st = {}
+    sett = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k LIKE 'ips%%' OR k='server_ip'")}
+    import ips as ipsmod
+    counts = q("""SELECT severity, SUM(hits) AS hits, COUNT(DISTINCT src_ip) AS sources FROM ml_ips_alert
+                  WHERE last_seen >= NOW() - INTERVAL %s DAY GROUP BY severity""", (days,))
+    top = q("""SELECT sid, MAX(signature) AS signature, MAX(category) AS category, MAX(severity) AS severity, MAX(kind) AS kind,
+                      SUM(hits) AS hits, COUNT(DISTINCT src_ip) AS sources, COUNT(DISTINCT dst_ip) AS targets, MAX(last_seen) AS last
+               FROM ml_ips_alert WHERE last_seen >= NOW() - INTERVAL %s DAY GROUP BY sid ORDER BY hits DESC LIMIT 30""", (days,))
+    rows = q("""SELECT sid, src_ip, dst_ip, dst_port, proto, MAX(signature) AS signature, MAX(category) AS category, MAX(severity) AS severity,
+                       MAX(kind) AS kind, MAX(direction) AS direction, SUM(hits) AS hits, MIN(first_seen) AS first, MAX(last_seen) AS last,
+                       MAX(blocked) AS blocked
+                FROM ml_ips_alert WHERE last_seen >= NOW() - INTERVAL %s DAY
+                GROUP BY sid, src_ip, dst_ip, dst_port, proto ORDER BY last DESC LIMIT 400""", (days,))
+    blocks = q("SELECT ip, reason, sid, hits, auto, created, until FROM ml_ips_block WHERE until > NOW() ORDER BY created DESC LIMIT 500")
+    allow = q("SELECT ip, comment, created FROM ml_ips_allow ORDER BY created DESC")
+    who = {}
+    for r in q("""SELECT framedipaddress AS ip, username FROM radacct WHERE acctstoptime IS NULL AND framedipaddress <> ''
+                  AND acctupdatetime >= NOW() - INTERVAL 1 DAY"""):
+        who[r["ip"]] = r["username"]
+    disabled = set(st.get("disabled_sids", []))
+    import firewall as fwmod
+    cc = {}
+    for r in rows + blocks:
+        for k in ("src_ip", "dst_ip", "ip"):
+            ip = r.get(k)
+            if ip and ip not in cc:
+                try:
+                    cc[ip] = "LAN" if ipaddress.ip_address(ip).is_private else fwmod.lookup(ip)
+                except ValueError:
+                    cc[ip] = ""
+    for r in rows:
+        r["words"] = ipsmod.plain(r["category"], r["signature"])[0]
+        r["user"] = who.get(r["src_ip"]) or who.get(r["dst_ip"]) or ""
+        r["src_cc"], r["dst_cc"] = cc.get(r["src_ip"], ""), cc.get(r["dst_ip"], "")
+    for r in top:
+        r["words"] = ipsmod.plain(r["category"], r["signature"])[0]
+        r["off"] = int(r["sid"]) in disabled
+    for r in blocks:
+        r["cc"] = cc.get(r["ip"], "")
+    return jsonify(status=st, settings={"on": sett.get("ips_on") == "1", "autoblock": sett.get("ips_autoblock", "1") != "0",
+                                        "level": sett.get("ips_block_level") or "high", "hours": int(sett.get("ips_block_hours") or 24),
+                                        "mirror": sett.get("ips_mirror") or "first", "server_ip": sett.get("server_ip", "")},
+                   counts={r["severity"]: {"hits": int(r["hits"]), "sources": int(r["sources"])} for r in counts},
+                   top=jsonable(top), rows=jsonable(rows), blocks=jsonable(blocks), allow=jsonable(allow), days=days,
+                   disabled=sorted(disabled), countries=fwmod.COUNTRIES)
+
+
+@app.post("/api/ips/<action>")
+@login_required("admin")
+def ips_action(action):
+    if action not in ("on", "off", "update", "restart", "install", "autoblock", "level", "hours", "mirror", "rule", "block", "unblock", "allow", "disallow"):
+        abort(404)
+    data = body()
+    ip_re = re.compile(r"^[0-9a-fA-F.:]{3,45}$")
+    if action in ("on", "off", "update", "restart", "install"):
+        return result(*radius_admin(["ips", action], timeout=900))
+    if action == "autoblock":
+        return result(*radius_admin(["ips", "autoblock", "on" if data.get("on") else "off"]))
+    if action == "level":
+        return result(*radius_admin(["ips", "level", field(data, "level", re.compile(r"^(high|medium)$"), required=True)]))
+    if action == "hours":
+        return result(*radius_admin(["ips", "hours", field(data, "hours", re.compile(r"^\d{1,3}$"), required=True)]))
+    if action == "mirror":
+        return result(*radius_admin(["ips", "mirror", field(data, "mirror", re.compile(r"^(first|all)$"), required=True)], timeout=300))
+    if action == "rule":
+        sid = field(data, "sid", re.compile(r"^\d{1,10}$"), required=True)
+        return result(*radius_admin(["ips", "rule", "on" if data.get("on") else "off", sid], timeout=120))
+    if action in ("block", "unblock", "allow", "disallow"):
+        ip = field(data, "ip", ip_re, required=True)
+        reason = field(data, "reason", re.compile(r"^[\x20-\x7e]{0,120}$")) or f"by {session.get('user', 'admin')} (dashboard)"
+        return result(*radius_admin(["ips", action, ip] + ([reason] if action in ("block", "allow") else [])))
+    abort(404)
+
+
 # ------------------------------------------------------------------ firewall (FortiGate / Untangle style): tools/firewall.py
 def fw_state():
     """Firewall objects straight from the database (the same shape firewall.load() gives)."""

@@ -339,6 +339,12 @@ try {
   await shot(page, "42c-from-outside");
   ok("security: from outside (open doors, who came in, outside addresses)");
 
+  // intrusion prevention page (works with or without Suricata installed)
+  await go(page, "#/security/ips", "Security");
+  await page.locator(".health-hero").waitFor({ timeout: 30000 });
+  await page.locator(".card h2", { hasText: "Protection" }).waitFor();
+  ok("security: intrusion prevention (status, protection, alerts)");
+
   // firewall: a policy made in the dialog (country source picked by search), seen in the router order, looked up, deleted
   await go(page, "#/firewall", "Firewall");
   await page.locator(".health-hero").waitFor({ timeout: 15000 });

@@ -299,7 +299,8 @@ def decide(alerts, autoblock, block_level, never, lan=None):
     for a in alerts:
         if a["severity"] not in want or a["kind"] == "info":
             continue
-        ip = a["src"] if a["direction"] == "in" else a["dst"] if a["direction"] == "out" and a["kind"] == "infected" else None
+        # a spam bot writes to thousands of mail servers: blocking one is no help (quarantine the device instead)
+        ip = a["src"] if a["direction"] == "in" else a["dst"] if a["direction"] == "out" and a["kind"] == "infected" and a["dport"] not in (25, 465, 587) else None
         if not ip or ip in never or not blockable(ip, lan or LAN_DEFAULT.split(",")):
             continue
         out.setdefault(ip, a)
@@ -342,10 +343,10 @@ def store(db, alerts, blocks, hours):
             [(ip, a["signature"][:200], a["sid"], int(hours)) for ip, a in blocks.items()])
 
 
-def disabled_sids(path=DISABLE):
+def disabled_sids(path=None):
     out = set()
     try:
-        for line in open(path):
+        for line in open(path or DISABLE):
             m = re.match(r"^\s*(?:1:)?(\d+)\s*(?:#.*)?$", line)
             if m:
                 out.add(int(m.group(1)))
@@ -488,6 +489,7 @@ def status(db=None):
         upd = ""
     st = {"installed": bool(subprocess.run(["sh", "-c", "command -v suricata"], capture_output=True).returncode == 0),
           "running": bool(suricata_pid()), "rules": rule_count(), "rules_updated": upd, "disabled": len(disabled_sids()),
+          "disabled_sids": sorted(disabled_sids()),
           "copy": {"packets": tz.get("packets", 0), "bytes": tz.get("bytes", 0), "routers": sorted(tz.get("routers", {})),
                    "fresh": bool(tz.get("at")) and time.time() - tz.get("at", 0) < 60,
                    "last_packet": max(tz.get("routers", {}).values() or [0])}}

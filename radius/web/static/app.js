@@ -2758,8 +2758,9 @@ async function blockingLogs() {
 
 // ------------------------------------------------------------------ security detective: virus, hacker attacks, DDoS
 ROUTES.security = async (tab = "all") => {
-  const tabs = [["all", "All alerts"], ["inbound", "From outside"], ["ransomware", "Ransomware"], ["virus", "Virus (infected devices)"], ["attack", "Hacker attacks"], ["ddos", "DDoS attacks"], ["setup", "Protection & lists"], ["reports", "Monthly reports"]];
+  const tabs = [["all", "All alerts"], ["ips", "Intrusion prevention"], ["inbound", "From outside"], ["ransomware", "Ransomware"], ["virus", "Virus (infected devices)"], ["attack", "Hacker attacks"], ["ddos", "DDoS attacks"], ["setup", "Protection & lists"], ["reports", "Monthly reports"]];
   if (tab === "inbound") return inboundPage(tabs);
+  if (tab === "ips") return ipsPage(tabs);
   if (tab === "reports") {
     const { reports } = await api("GET", "/api/security/reports");
     const now = new Date(); const last = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -3437,4 +3438,80 @@ async function fwLogs(d, rule = "") {
   days.addEventListener("change", load); pol.addEventListener("change", load);
   await load();
   return [card(null, null, h("div", { class: "toolbar" }, days, pol)), holder];
+}
+
+// ------------------------------------------------------------------ intrusion prevention (Suricata on the routers' traffic copy)
+async function ipsPage(tabs) {
+  const days = h("select", {}, [["1", "Today"], ["7", "7 days"], ["30", "30 days"]].map(([v, l]) => h("option", { value: v }, l)));
+  const holder = h("div", { class: "stack" });
+  const sevBadge = (s) => badge(s === "high" ? "HIGH" : s === "medium" ? "medium" : "low", s === "high" ? "bad" : s === "medium" ? "warn" : "");
+  const doIt = async (action, data, confirmText) => {
+    if (confirmText && !(await confirmDlg("Intrusion prevention", confirmText, "Yes", false))) return;
+    if (await act(api("POST", `/api/ips/${action}`, data || {}))) load();
+  };
+  const where = (ip, cc, d) => h("span", {}, h("code", {}, ip), cc && cc !== "LAN" ? h("span", { class: "muted small" }, ` ${cc}`) : cc === "LAN" ? h("span", { class: "muted small" }, " LAN") : null);
+  const load = async () => {
+    const d = await api("GET", `/api/ips?days=${days.value}`);
+    const st = d.status || {}, cp = st.copy || {}, se = d.settings;
+    const high = (d.counts.high || {}).hits || 0, med = (d.counts.medium || {}).hits || 0;
+    let state, title, sub;
+    if (!st.installed) { state = "warn"; title = "Suricata is not installed"; sub = "Install it once (button below or: sudo radius-admin ips install). 4 GB RAM or more is best."; }
+    else if (!se.on) { state = "warn"; title = "Intrusion prevention is off"; sub = "Turn it on: the routers start sending a copy of internet traffic to this server."; }
+    else if (!st.running) { state = "fail"; title = "Suricata is not running"; sub = "Restart it below; if it stops again see /var/log/suricata/suricata.log."; }
+    else if (!cp.receiving) { state = "warn"; title = "Waiting for the routers' traffic copy"; sub = `Routers send it after the next auto-sync (15 min). Needs the server IP (${se.server_ip || "not set"}) and UDP 37008 open to this server.`; }
+    else { state = high ? "fail" : "ok"; title = high ? `${num(high)} high-level attack(s) seen` : "Watching — no high-level attack"; sub = `${num(st.rules)} signatures · copy from ${cp.routers.join(", ")} · ${num(d.blocks.length)} address(es) blocked now`; }
+    const sw = (label, help, on, action, extra) => h("label", { class: "check" + (on ? " on" : "") }, h("input", { type: "checkbox", checked: on, disabled: !isAdmin(),
+      onchange: (e) => doIt(action, { on: e.target.checked, ...(extra || {}) }) }), h("div", {}, h("b", {}, label), h("span", {}, help)));
+    const lvl = h("select", { disabled: !isAdmin(), onchange: (e) => doIt("level", { level: e.target.value }) }, [["high", "high only"], ["medium", "high + medium"]].map(([v, l]) => h("option", { value: v, selected: v === se.level }, l)));
+    const hrs = h("select", { disabled: !isAdmin(), onchange: (e) => doIt("hours", { hours: e.target.value }) }, [1, 6, 24, 72, 168, 720].map((v) => h("option", { value: v, selected: v === se.hours }, v < 24 ? `${v} h` : `${v / 24} day(s)`)));
+    const mir = h("select", { disabled: !isAdmin(), onchange: (e) => doIt("mirror", { mirror: e.target.value }) }, [["first", "first 256 KB of each connection (light)"], ["all", "all internet traffic (heavy)"]].map(([v, l]) => h("option", { value: v, selected: v === se.mirror }, l)));
+    holder.replaceChildren(
+      h("div", { class: `card health-hero ${state}` }, h("div", { class: "hh-mark" }, state === "ok" ? "✔" : "!"),
+        h("div", { class: "grow" }, h("div", { class: "hh-title" }, title), h("div", { class: "muted" }, sub)),
+        isAdmin() ? h("div", { class: "toolbar" },
+          !st.installed ? h("button", { class: "primary", onclick: (e) => { e.target.disabled = true; e.target.textContent = "Installing… (a few minutes)"; doIt("install"); } }, "Install Suricata")
+          : !se.on ? h("button", { class: "primary", onclick: () => doIt("on") }, "Turn on")
+          : h("button", { class: "small", onclick: () => doIt("off", {}, "Turn intrusion prevention off? Blocked addresses run out by themselves.") }, "Turn off"),
+          st.installed && se.on && !st.running ? h("button", { class: "small", onclick: () => doIt("restart") }, "Restart") : null) : null),
+      h("div", { class: "grid g-tiles" }, tile("High level", num(high), `${num((d.counts.high || {}).sources || 0)} source(s)`), tile("Medium", num(med), "watch"),
+        tile("Blocked now", num(d.blocks.length), se.autoblock ? `auto: ${se.level === "high" ? "high" : "high + medium"}, ${se.hours < 24 ? se.hours + " h" : se.hours / 24 + " day(s)"}` : "auto-block off"),
+        tile("Signatures", num(st.rules || 0), st.rules_updated ? `updated ${st.rules_updated.slice(0, 10)}` : "not downloaded"),
+        tile("Traffic copy", cp.receiving ? "receiving" : "—", cp.packets ? `${num(cp.packets)} packets` : "nothing yet")),
+      card("Protection", null, h("div", { class: "checks" },
+        sw("Block attackers by itself", "An outside address that attacks is dropped on every router within a minute; for an infected device inside, the server it talks to.", se.autoblock, "autoblock")),
+        h("div", { class: "toolbar ips-opts" }, h("label", { class: "field" }, "Block level", lvl), h("label", { class: "field" }, "Block for", hrs), h("label", { class: "field" }, "Routers copy", mir),
+          isAdmin() ? h("button", { class: "small", onclick: (e) => { e.target.disabled = true; doIt("update"); } }, "Update signatures now") : null)),
+      card("What it saw", "by signature — switch one off if it is a false alarm", table([
+        { label: "Level", render: (r) => sevBadge(r.severity) }, { label: "What", render: (r) => h("span", {}, h("b", {}, r.words), h("div", { class: "muted small" }, r.signature)), wrap: true },
+        { label: "Hits", key: "hits", num: true }, { label: "Sources", key: "sources", num: true }, { label: "Last", render: (r) => String(r.last).slice(5, 16) },
+        { label: "", render: (r) => isAdmin() ? h("button", { class: "small", onclick: () => doIt("rule", { sid: r.sid, on: r.off }, r.off ? null : `Switch signature ${r.sid} off? It will not alert or block any more.`) }, r.off ? "Switch on" : "Switch off") : null }],
+        d.top, "Nothing seen in this period.")),
+      card("Alerts", `${d.rows.length} newest`, table([
+        { label: "Time", render: (r) => String(r.last).slice(5, 16) }, { label: "Level", render: (r) => sevBadge(r.severity) },
+        { label: "What", render: (r) => h("span", {}, h("b", {}, r.words), h("div", { class: "muted small" }, r.signature)), wrap: true },
+        { label: "From", render: (r) => where(r.src_ip, r.src_cc) }, { label: "To", render: (r) => h("span", {}, where(r.dst_ip, r.dst_cc), r.dst_port ? h("span", { class: "muted small" }, ` :${r.dst_port}`) : null, r.user ? h("div", { class: "muted small" }, r.user) : null) },
+        { label: "Hits", key: "hits", num: true }, { label: "", render: (r) => r.blocked ? badge("blocked", "ok") : null }], d.rows, "No alerts.")),
+      h("div", { class: "stack" },
+        card("Blocked now", "dropped on every router", table([{ label: "Address", render: (r) => where(r.ip, r.cc) }, { label: "Why", render: (r) => h("span", { class: "small" }, r.reason), wrap: true },
+          { label: "Until", render: (r) => String(r.until).slice(5, 16) }, { label: "", render: (r) => isAdmin() ? h("div", { class: "row-actions" },
+            h("button", { class: "small", onclick: () => doIt("unblock", { ip: r.ip }) }, "Unblock"),
+            h("button", { class: "small", title: "never block this address", onclick: () => doIt("allow", { ip: r.ip, reason: "false alarm" }, `Never block ${r.ip} again?`) }, "Never block")) : null }], d.blocks, "Nothing blocked.")),
+        card("Never blocked", "your partners, monitoring, own servers", h("div", { class: "stack" },
+          table([{ label: "Address", render: (r) => h("code", {}, r.ip) }, { label: "Note", key: "comment" },
+            { label: "", render: (r) => isAdmin() ? h("button", { class: "small", onclick: () => doIt("disallow", { ip: r.ip }) }, "Remove") : null }], d.allow, "None — routers and this server are never blocked anyway."),
+          isAdmin() ? (() => { const ip = h("input", { placeholder: "IP address", "aria-label": "IP" }); return h("div", { class: "toolbar" }, ip,
+            h("button", { class: "small", onclick: () => ip.value.trim() && doIt("allow", { ip: ip.value.trim(), reason: "added in the dashboard" }) }, "Add"),
+            h("button", { class: "small danger", onclick: () => ip.value.trim() && doIt("block", { ip: ip.value.trim() }, `Block ${ip.value.trim()} on every router for 30 days?`) }, "Block it")); })() : null))),
+      hint("How it works", h("ul", { class: "g-list" },
+        h("li", {}, "The routers send a copy of internet traffic (TZSP) to this server; Suricata checks it against tens of thousands of attack signatures (Emerging Threats, updated daily) and our own rules."),
+        h("li", {}, "It sees the copy, so the first packets of an attack get through; the attacker is blocked a few seconds to a minute later on every router."),
+        h("li", {}, "It cannot read inside HTTPS, but still knows bad servers, scans, password guessing, exploits and infected devices by their behaviour."),
+        h("li", {}, "Infected devices inside also show under Virus and can be cut off by quarantine."))));
+    holder.querySelectorAll("table").forEach((t) => t.classList.add("rw-table"));
+  };
+  days.addEventListener("change", load);
+  shell("Security", h("div", { class: "stack" },
+    h("div", { class: "tabs" }, tabs.map(([k, l]) => h("a", { href: `#/security/${k}`, class: k === "ips" ? "active" : "" }, l))),
+    card(null, null, h("div", { class: "toolbar" }, days)), holder));
+  await load();
 }
