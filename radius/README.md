@@ -95,8 +95,26 @@ sudo radius-admin mac list               # description, group, last seen
 sudo radius-admin mac disable AA-BB-CC-DD-EE-FF
 sudo radius-admin mac enable  AA-BB-CC-DD-EE-FF
 sudo radius-admin mac group   AA-BB-CC-DD-EE-FF guests
+sudo radius-admin mac policy  AA-BB-CC-DD-EE-FF no-video    # apni policy (group wali se upar); "-" = group wali
+sudo radius-admin mac add aa:bb:cc:dd:ee:01 -d "CCTV NVR" --policy whatsapp-hikconnect
 sudo radius-admin mac del     AA-BB-CC-DD-EE-FF
 ```
+
+Dashboard → **MAC devices**: Policy column (apni, ya "(group)"), **Policy** button, aur Add device mein policy chunna.
+
+### Login ke 4 tareeqe — har ek par policy kahan se aati hai
+
+| Login | Policy kahan se | Kaise dein |
+|---|---|---|
+| **MAC address** (printer, TV, CCTV — kuch type nahi) | MAC ki apni policy, warna us ke group ki | `mac add MAC --policy P` · `mac policy MAC P` · `mac group MAC G` |
+| **Username + password** | user ki apni policy, warna group ki | `user policy NAME P` · `group add G --policy P` |
+| **PIN voucher** (code hi user aur password) | voucher ke **plan** ki policy | `plan set PLAN --policy P` (us plan ke sab vouchers) |
+| **Guest** (Social WiFi, phone number) | `social-free` plan ki policy | `plan set social-free --policy guests` (Social WiFi settings badalne se nahi hatti) |
+
+- Hamesha: **apni policy > group / plan ki policy**. Policy badlo to agle login par lagti hai (online user ek dafa disconnect hota hai).
+- **Quarantine** har policy se upar hai; release ke baad purani policy wapas.
+- Login ke baghair poore network / IP range ko policy: Blocking → Give a policy → Network / IP (section 5h2).
+- Test: `tests/test-login-policies.sh` — chaaron tareeqon se asli FreeRADIUS login (radclient, hotspot jaisa) aur jawab mein sahi policy; ghalat password / PIN / doosre device se MAC rad; policy badalna; quarantine; routers par har list ke rules.
 
 - MikroTik MAC kisi bhi format mein bheje (`AA:BB:..`, `aabbcc..`), server khud `AA-BB-CC-DD-EE-FF` bana leta hai.
 - Har MAC entry sirf tab accept hoti hai jab request ka **Calling-Station-Id** (device ka asli MAC) bhi wohi ho. Is liye koi MAC address ko username bana kar hotspot ya WPA-Enterprise par login nahi kar sakta.

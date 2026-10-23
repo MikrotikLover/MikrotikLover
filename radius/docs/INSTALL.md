@@ -336,6 +336,8 @@ Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein
 | IPS block ~1 second mein (MikroTik API, api-ssl) | Security → Intrusion prevention → Instant blocks → + Add a router | `radius-admin ips api add 192.168.88.1` · `ips api test 192.168.88.1` · `ips api list` |
 | Inline IPS (pehla packet ruke) + khud bypass agar Suricata band / atke | Security → Intrusion prevention → Mode → Inline | `radius-admin ips inline on eth1 eth2` · `ips inline drop` · `ips bypass on|off` · `ips inline off` |
 | Mail server (MDaemon) ki hifazat: safe ports, password guessing band, spam bots, DNS / blacklist / certificate checks | Mail server | `radius-admin mail set ip 192.168.88.30 domain example.com` · `mail doors` · `mail status` |
+| MAC device (printer, TV, CCTV) ki apni policy | MAC devices → Policy | `radius-admin mac policy MAC no-video` · `mac add MAC --policy P` |
+| PIN vouchers / guests (Social WiFi) ki policy | Plans (plan ki policy) | `radius-admin plan set PLAN --policy guests` · `plan set social-free --policy guests` |
 | Policy poore network / IP range / ek PC ko (login ke baghair) | Blocking → Policies → Give a policy → Network / IP | `radius-admin policy net add staff 192.168.88.0/24 "Office LAN"` · `policy net list` · `policy net del ID` |
 | Sab blocking ek dam band / wapas (masla ho to) | Setup steps → 1 → If something goes wrong · Dashboard banner | `radius-admin policy pause` · `policy resume` |
 | Devices (SNMP): switch, UPS, printer, server, camera, MikroTik — jawab, CPU, ports, UPS battery, toner; alert foran | Devices (SNMP) → + Add device / Find devices | `radius-admin snmp add 192.168.88.5 community public` · `snmp find 192.168.88.0/24` · `snmp list` |

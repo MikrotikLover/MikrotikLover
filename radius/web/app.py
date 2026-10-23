@@ -554,6 +554,8 @@ def policies_list():
 def macs():
     rows = q("""SELECT c.username AS mac, COALESCE(MAX(d.description),'') AS description,
                   COALESCE(MAX(g.groupname),'') AS grp,
+                  COALESCE((SELECT REPLACE(value,'policy-','') FROM radreply r WHERE r.username=c.username AND r.attribute='Mikrotik-Address-List' LIMIT 1),'') AS policy,
+                  COALESCE((SELECT REPLACE(gr.value,'policy-','') FROM radgroupreply gr WHERE gr.groupname=MAX(g.groupname) AND gr.attribute='Mikrotik-Address-List' LIMIT 1),'') AS group_policy,
                   SUM(c.attribute='Auth-Type' AND c.value='Reject') > 0 AS disabled,
                   (SELECT MAX(authdate) FROM radpostauth p WHERE p.username=c.username AND p.reply='Access-Accept') AS last_seen,
                   (SELECT COUNT(*) FROM radacct a WHERE a.username=c.username AND a.acctstoptime IS NULL) AS online
@@ -573,7 +575,8 @@ def mac_add():
     mac = field(data, "mac", MAC_RE, required=True)
     group = field(data, "group", NAME_RE)
     desc = field(data, "description", re.compile(r"^[\x20-\x7e]{0,128}$"))
-    args = ["mac", "add", mac] + (["-g", group] if group else []) + (["-d", desc] if desc else [])
+    pol = field(data, "policy", re.compile(r"^[a-z0-9-]{1,40}$"))
+    args = ["mac", "add", mac] + (["-g", group] if group else []) + (["-d", desc] if desc else []) + (["--policy", pol] if pol else [])
     return result(*radius_admin(args))
 
 
@@ -582,9 +585,12 @@ def mac_add():
 def mac_action(mac, action):
     if not MAC_RE.match(mac):
         abort(400, "invalid MAC")
-    body()
+    data = body()
     if action in ("disable", "enable"):
         return result(*radius_admin(["mac", action, mac]))
+    if action == "policy":       # its own policy, or "" = follow its group
+        pol = field(data, "policy", re.compile(r"^[a-z0-9-]{1,40}$"))
+        return result(*radius_admin(["mac", "policy", mac, pol or "-"]))
     if action == "kick":
         return result(*radius_admin(["kick", mac]))
     abort(404)

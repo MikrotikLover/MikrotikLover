@@ -491,12 +491,21 @@ ROUTES.groups = async () => {
 
 // ------------------------------------------------------------------ MAC devices
 ROUTES.macs = async () => {
-  const [{ macs }, { groups }] = await Promise.all([api("GET", "/api/macs"), api("GET", "/api/groups")]);
+  const [{ macs }, { groups }, meta] = await Promise.all([api("GET", "/api/macs"), api("GET", "/api/groups"), api("GET", "/api/blocking").catch(() => ({ policies: [] }))]);
+  const polOptions = (sel, empty) => [h("option", { value: "" }, empty), ...meta.policies.map((p) => h("option", { value: p.name, selected: p.name === sel }, `${p.name} — ${p.description}`))];
+  const policyDlg = (m) => {
+    const sel = h("select", { name: "policy" }, polOptions(m.policy, m.grp ? `follow the group (${m.group_policy || "no policy"})` : "— none —"));
+    dialog(`Policy for ${m.mac}`, h("form", { class: "form", onsubmit: (e) => e.preventDefault() }, h("label", { class: "field" }, "Policy", sel,
+      h("span", { class: "help" }, "Its own policy beats the group's. Applies at the device's next login (it is logged out once now)."))),
+      [{ label: "Cancel" }, { label: "Save", class: "primary", action: async () => { if (!(await act(api("POST", `/api/macs/${m.mac}/policy`, { policy: sel.value })))) return false; route(); } }]);
+  };
   const add = () => {
     const form = h("form", { class: "form policy-editor", onsubmit: (e) => e.preventDefault() },
       h("label", { class: "field" }, "MAC address", h("span", { class: "help" }, "Any format: aa:bb:cc:dd:ee:ff, AABB.CCDD.EEFF"), h("input", { name: "mac", required: true, placeholder: "aa:bb:cc:dd:ee:ff" })),
       h("label", { class: "field" }, "Description", h("input", { name: "description", maxlength: 128, placeholder: "Reception printer" })),
-      h("label", { class: "field" }, "Group", h("select", { name: "group" }, h("option", { value: "" }, "— none —"), groups.map((g) => h("option", { value: g.name }, g.name)))));
+      h("label", { class: "field" }, "Group", h("select", { name: "group" }, h("option", { value: "" }, "— none —"), groups.map((g) => h("option", { value: g.name }, g.name)))),
+      h("label", { class: "field" }, "Policy (optional)", h("select", { name: "policy" }, polOptions("", "— the group's / none —")),
+        h("span", { class: "help" }, "e.g. a TV: no-video; a CCTV recorder: whatsapp-hikconnect; a POS: only its own site")));
     dialog("Add MAC device", form, [{ label: "Cancel" }, { label: "Add", class: "primary", action: async () => {
       if (!form.reportValidity()) return false;
       if (!(await act(api("POST", "/api/macs", formValues(form))))) return false;
@@ -509,9 +518,11 @@ ROUTES.macs = async () => {
     table([
       { label: "MAC", render: (m) => h("code", {}, m.mac) }, { label: "Description", key: "description", wrap: true },
       { label: "Group", render: (m) => m.grp || "—" },
+      { label: "Policy", render: (m) => m.policy ? badge(m.policy, "info") : m.group_policy ? h("span", {}, badge(m.group_policy, ""), h("span", { class: "muted small" }, " (group)")) : h("span", { class: "muted" }, "—") },
       { label: "Status", render: (m) => m.disabled ? badge("disabled", "bad") : m.online ? badge("online", "ok") : badge("offline") },
       { label: "Last seen", render: (m) => ago(m.last_seen) },
       { label: "", render: (m) => isAdmin() ? h("div", { class: "row-actions" },
+          h("button", { class: "small", onclick: () => policyDlg(m) }, "Policy"),
           h("button", { class: "small", onclick: () => act(api("POST", `/api/macs/${m.mac}/${m.disabled ? "enable" : "disable"}`, {})).then(route) }, m.disabled ? "Enable" : "Disable"),
           h("button", { class: "small danger", onclick: async () => {
             if (await confirmDlg("Remove device", `Remove ${m.mac}?`, "Remove"))

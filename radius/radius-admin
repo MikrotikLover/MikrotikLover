@@ -388,11 +388,12 @@ cmd_mac() {
     local sub=${1:-list}; shift || true
     case $sub in
     add)
-        local m=${1:-}; [ -n "$m" ] || die "usage: radius-admin mac add MAC [-g GROUP] [-d DESCRIPTION]"
+        local m=${1:-}; [ -n "$m" ] || die "usage: radius-admin mac add MAC [-g GROUP] [-d DESCRIPTION] [--policy NAME]"
         shift; m=$(norm_mac "$m")
-        local g="" d=""
+        local g="" d="" pol=""
         while [ $# -gt 0 ]; do
             case $1 in
+                --policy) pol=${2:-}; valid_policy "$pol"; policy_exists "$pol" || die "No policy '$pol' (radius-admin policy list)"; shift 2 ;;
                 -g|--group) g=${2:-}; valid_name "$g" group; shift 2 ;;
                 -d|--description) d=${2:-}; shift 2 ;;
                 *) die "Unknown option $1" ;;
@@ -408,8 +409,9 @@ cmd_mac() {
                   ($(q "$m"),'Auth-Type',':=','Accept');
                 REPLACE INTO macdevice (mac,description) VALUES ($(q "$m"),$(q "$d"));"
           [ -z "$g" ] || echo "INSERT INTO radusergroup (username,groupname,priority) VALUES ($(q "$m"),$(q "$g"),1);"
+          [ -z "$pol" ] || echo "INSERT INTO radreply (username,attribute,op,value) VALUES ($(q "$m"),'Mikrotik-Address-List',':=',$(q "policy-$pol"));"
           echo "COMMIT;"; } | db
-        ok "MAC $m allowed${g:+ (group '$g')}${d:+ — $d}"
+        ok "MAC $m allowed${g:+ (group '$g')}${pol:+ (policy '$pol')}${d:+ — $d}"
         ;;
     del|delete|rm)
         local m; m=$(norm_mac "${1:-}")
@@ -423,9 +425,15 @@ cmd_mac() {
         cmd_user "$sub" "$(norm_mac "${1:-}")" ;;
     group)
         cmd_user group "$(norm_mac "${1:-}")" "${2:-}" ;;
+    policy)
+        # its own policy (beats the group's), or - to follow the group again
+        local m; m=$(norm_mac "${1:-}"); [ -n "${2:-}" ] || die "usage: radius-admin mac policy MAC POLICY|-"
+        user_exists "$m" || die "No such MAC $m (radius-admin mac add $m)"
+        cmd_user policy "$m" "$2" ;;
     list|ls)
         echo "SELECT c.username AS mac, COALESCE(MAX(d.description),'') AS description,
                      COALESCE(MAX(g.groupname),'-') AS \`group\`,
+                     COALESCE((SELECT REPLACE(value,'policy-','') FROM radreply r WHERE r.username=c.username AND r.attribute='Mikrotik-Address-List' LIMIT 1),'-') AS policy,
                      IF(SUM(c.attribute='Auth-Type' AND c.value='Reject'),'DISABLED','active') AS status,
                      (SELECT MAX(authdate) FROM radpostauth p WHERE p.username=c.username AND p.reply='Access-Accept') AS last_seen
               FROM radcheck c
@@ -434,7 +442,7 @@ cmd_mac() {
               WHERE c.username IN (SELECT username FROM radcheck WHERE attribute='Calling-Station-Id')
               GROUP BY c.username ORDER BY c.username;" | dbt
         ;;
-    *) die "Unknown: mac $sub (add|del|disable|enable|group|list)" ;;
+    *) die "Unknown: mac $sub (add|del|disable|enable|group|policy|list)" ;;
     esac
 }
 
@@ -3760,8 +3768,8 @@ Web dashboard (https://SERVER:8443)
   IP range / single device: on the router — see README "Policies"
 
 MAC authentication (devices without username/password: printers, CCTV, TVs, POS)
-  mac add MAC [-g GROUP] [-d "Reception printer"]   any format: aa:bb:.., AABB.CCDD.EEFF
-  mac del|disable|enable MAC | mac group MAC GROUP|- | mac list
+  mac add MAC [-g GROUP] [-d "Reception printer"] [--policy NAME]   any format: aa:bb:.., AABB.CCDD.EEFF
+  mac del|disable|enable MAC | mac group MAC GROUP|- | mac policy MAC POLICY|- | mac list
 
 Routers (MikroTik = NAS)
   nas add IP[/PREFIX] [SECRET] [NAME]   (no SECRET: random one is generated)
