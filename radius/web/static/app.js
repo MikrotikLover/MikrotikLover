@@ -1549,7 +1549,7 @@ ROUTES.social = async () => {
 };
 
 ROUTES.plans = async () => {
-  const { plans, currency } = await api("GET", "/api/plans");
+  const [{ plans, currency }, meta] = await Promise.all([api("GET", "/api/plans"), api("GET", "/api/blocking").catch(() => ({ policies: [] }))]);
   const edit = (p) => {
     const toDur = (s) => { s = Number(s) || 0; return !s ? "" : s % 86400 === 0 ? `${s / 86400}d` : s % 3600 === 0 ? `${s / 3600}h` : `${Math.round(s / 60)}m`; };
     const toSize = (b) => { b = Number(b) || 0; return !b ? "" : b % (1 << 30) === 0 ? `${b / (1 << 30)}G` : `${Math.round(b / (1 << 20))}M`; };
@@ -1564,6 +1564,8 @@ ROUTES.plans = async () => {
       h("label", { class: "field" }, "Online time per day", h("span", { class: "help" }, "e.g. 2h — empty = unlimited"), h("input", { name: "daily_time", value: toDur(p?.daily_seconds), placeholder: "2h" })),
       h("label", { class: "field" }, "Speed", h("span", { class: "help" }, "MikroTik rx/tx, e.g. 5M/5M"), h("input", { name: "rate", value: p?.rate || "", placeholder: "5M/5M" })),
       h("label", { class: "field" }, "Devices at once", h("input", { name: "devices", type: "number", min: 1, value: p?.devices || "1" })),
+      h("label", { class: "field" }, "Blocking policy", h("span", { class: "help" }, "every voucher / PIN / guest of this plan gets it"),
+        h("select", { name: "policy" }, h("option", { value: "" }, "— none —"), meta.policies.map((x) => h("option", { value: x.name, selected: x.name === p?.policy }, `${x.name} — ${x.description}`)))),
       h("label", { class: "field full" }, "Description (printed on vouchers)", h("input", { name: "description", maxlength: 128, value: p?.description || "", placeholder: "1 day, 1 GB, 4 Mbps" })));
     dialog(p ? `Edit plan ${p.name}` : "New plan", f, [{ label: "Cancel" }, { label: "Save", class: "primary", action: async () => {
       if (!f.reportValidity()) return false;
@@ -1581,6 +1583,7 @@ ROUTES.plans = async () => {
       { label: "Data", render: (p) => Number(p.quota_bytes) ? h("span", {}, `${bytes(p.quota_bytes)} / ${p.quota_period}`, h("div", { class: "muted" }, p.fup_rate ? `then ${p.fup_rate}` : "then cut off")) : "Unlimited" },
       { label: "Per day", render: (p) => dur(p.daily_seconds) },
       { label: "Speed", render: (p) => p.rate || "—" }, { label: "Devices", render: (p) => p.devices || "—" },
+      { label: "Policy", render: (p) => p.policy ? badge(p.policy, "info") : h("span", { class: "muted" }, "—") },
       { label: "Active / total", num: true, render: (p) => `${p.active} / ${p.accounts}` },
       { label: "", render: (p) => isAdmin() ? h("div", { class: "row-actions" },
           h("button", { class: "small", onclick: () => edit(p) }, "Edit"),

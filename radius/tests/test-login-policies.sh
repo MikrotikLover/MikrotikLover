@@ -100,6 +100,7 @@ if [ -n "${URL:-}" ]; then
     t "API: add a MAC with a policy" "$(api POST /api/macs '{"mac":"aa:bb:cc:10:00:05","policy":"kids","description":"lp api"}')$(login AA:BB:CC:10:00:05 x AA:BB:CC:10:00:05)" "200Access-Accept|policy-kids"
     t "API: MAC list shows own and group policy" "$(api GET /api/macs)$(python3 -c "import json; d=json.load(open('/tmp/lp.json')); m={x['mac']:x for x in d['macs']}; print(m['AA-BB-CC-10-00-05']['policy'], m['AA-BB-CC-10-00-01']['policy'] or '-', m['AA-BB-CC-10-00-01']['group_policy'])")" "200kids - students"
     t "API: change it; empty = follow the group / none" "$(api POST /api/macs/AA-BB-CC-10-00-05/policy '{"policy":"no-vpn"}')$(login AA:BB:CC:10:00:05 x AA:BB:CC:10:00:05) $(api POST /api/macs/AA-BB-CC-10-00-05/policy '{"policy":""}')$(login AA:BB:CC:10:00:05 x AA:BB:CC:10:00:05)" "200Access-Accept|policy-no-vpn 200Access-Accept|"
+    t "API: plan policy from the Plans page (all PINs of the plan)" "$(api POST /api/plans '{"name":"lp-plan","policy":"kids","edit":true}')$(login "$PIN" "$PIN") $(api GET /api/plans)$(python3 -c "import json; print([p['policy'] for p in json.load(open('/tmp/lp.json'))['plans'] if p['name']=='lp-plan'][0])")" "200Access-Accept|policy-kids 200kids"
     t "API: unknown policy refused" "$(api POST /api/macs/AA-BB-CC-10-00-05/policy '{"policy":"nosuch"}')" "400"
     rm -f "$jar" /tmp/lp.json
 fi

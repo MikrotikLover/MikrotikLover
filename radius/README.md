@@ -106,10 +106,10 @@ Dashboard → **MAC devices**: Policy column (apni, ya "(group)"), **Policy** bu
 
 | Login | Policy kahan se | Kaise dein |
 |---|---|---|
-| **MAC address** (printer, TV, CCTV — kuch type nahi) | MAC ki apni policy, warna us ke group ki | `mac add MAC --policy P` · `mac policy MAC P` · `mac group MAC G` |
-| **Username + password** | user ki apni policy, warna group ki | `user policy NAME P` · `group add G --policy P` |
-| **PIN voucher** (code hi user aur password) | voucher ke **plan** ki policy | `plan set PLAN --policy P` (us plan ke sab vouchers) |
-| **Guest** (Social WiFi, phone number) | `social-free` plan ki policy | `plan set social-free --policy guests` (Social WiFi settings badalne se nahi hatti) |
+| **MAC address** (printer, TV, CCTV — kuch type nahi) | MAC ki apni policy, warna us ke group ki | Dashboard: **MAC devices → Policy** · CLI: `mac add MAC --policy P` · `mac policy MAC P` |
+| **Username + password** | user ki apni policy, warna group ki | Dashboard: **Blocking → Give a policy → One user / A whole group** · CLI: `user policy NAME P` · `group add G --policy P` |
+| **PIN voucher** (code hi user aur password) | voucher ke **plan** ki policy | Dashboard: **Plans → Edit → Blocking policy** · CLI: `plan set PLAN --policy P` |
+| **Guest** (Social WiFi, phone number) | `social-free` plan ki policy | Dashboard: **Plans → social-free → Edit → Blocking policy** · CLI: `plan set social-free --policy guests` |
 
 - Hamesha: **apni policy > group / plan ki policy**. Policy badlo to agle login par lagti hai (online user ek dafa disconnect hota hai).
 - **Quarantine** har policy se upar hai; release ke baad purani policy wapas.

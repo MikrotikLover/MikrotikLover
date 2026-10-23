@@ -1504,6 +1504,7 @@ def plans():
                   COALESCE((SELECT value FROM radgroupreply WHERE groupname=p.name AND attribute='Framed-Pool' LIMIT 1),'') AS pool,
                   COALESCE((SELECT value FROM radgroupreply WHERE groupname=p.name AND attribute='Mikrotik-Rate-Limit' LIMIT 1),'') AS rate,
                   COALESCE((SELECT value FROM radgroupcheck WHERE groupname=p.name AND attribute='Simultaneous-Use' LIMIT 1),'') AS devices,
+                  COALESCE((SELECT REPLACE(value,'policy-','') FROM radgroupreply WHERE groupname=p.name AND attribute='Mikrotik-Address-List' LIMIT 1),'') AS policy,
                   (SELECT COUNT(*) FROM ml_account a WHERE a.plan=p.name) AS accounts,
                   (SELECT COUNT(*) FROM ml_account a WHERE a.plan=p.name AND a.first_login IS NOT NULL
                       AND (a.expires_at IS NULL OR a.expires_at > NOW())) AS active
@@ -1522,6 +1523,7 @@ def plan_save():
             "daily_time": ("--daily-time", DUR_RE), "rate": ("--rate", re.compile(r"^[0-9A-Za-z/ ]{1,64}$|^-$")),
             "fup": ("--fup", re.compile(r"^[0-9A-Za-z/ ]{1,64}$|^-$")), "pool": ("--pool", re.compile(r"^[A-Za-z0-9._@+-]{1,64}$|^-$")),
             "devices": ("--devices", re.compile(r"^[0-9]{1,4}$|^-$")),
+            "policy": ("--policy", re.compile(r"^[a-z0-9-]{1,40}$|^-$")),
             "description": ("--description", re.compile(r"^[\x20-\x7e]{0,128}$"))}
     for key, (opt, rx) in spec.items():
         if key in data:
