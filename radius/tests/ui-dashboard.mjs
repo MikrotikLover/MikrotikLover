@@ -369,6 +369,33 @@ try {
   if (await ncard.locator("tr", { hasText: "10.124.3.0/24" }).count()) throw new Error("network policy not removed");
   ok("setup steps page (5 steps, checks) + policy for a network: given in the dialog, removed");
 
+  // devices (SNMP): list, add dialog with a test against an address that does not answer, traps and settings tabs, a device page
+  await go(page, "#/devices", "Devices");
+  await page.locator(".health-hero").waitFor({ timeout: 15000 });
+  await page.getByRole("button", { name: "+ Add device" }).click();
+  const dd = page.locator("dialog[open]");
+  await dd.locator("input[name=ip]").fill("127.0.0.250");
+  await dd.locator("select[name=version]").selectOption("3");
+  if (!(await dd.locator("input[name=authpass]").isVisible()) || await dd.locator("input[name=community]").isVisible()) throw new Error("devices: v3 fields not shown");
+  await dd.locator("select[name=version]").selectOption("2c");
+  await dd.locator("input[name=community]").fill("nobody-here");
+  await dlgButton(page, "Test").click();
+  await dd.locator(".badge", { hasText: "no answer" }).waitFor({ timeout: 20000 });
+  await shot(page, "46-device-add");
+  await dlgButton(page, "Cancel").click();
+  await go(page, "#/devices/traps", "Devices");
+  await page.locator(".card h2", { hasText: "Traps" }).waitFor();
+  await go(page, "#/devices/settings", "Devices");
+  await page.locator(".card h2", { hasText: "Trap receiver" }).waitFor();
+  if ((await page.locator(".card", { hasText: "When to alert" }).locator("input[type=number]").count()) !== 5) throw new Error("devices: 5 alert limits expected");
+  const firstDev = await page.evaluate(async () => { const r = await fetch("/api/devices"); const d = await r.json(); return d.devices.length ? d.devices[0].id : null; });
+  if (firstDev) {
+    await go(page, `#/devices/${firstDev}`, "Devices");
+    await page.locator(".card h2", { hasText: "What happened" }).waitFor();
+    await shot(page, "47-device");
+  }
+  ok("devices (SNMP): list, add dialog (v2c / v3 fields, test: no answer), traps, settings (5 limits), device page");
+
   // firewall: a policy made in the dialog (country source picked by search), seen in the router order, looked up, deleted
   await go(page, "#/firewall", "Firewall");
   await page.locator(".health-hero").waitFor({ timeout: 15000 });

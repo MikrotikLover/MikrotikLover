@@ -1360,6 +1360,7 @@ ROUTES.setup = async (preset = "blocking") => {
     autosync: "Policies, block lists, hotspot pages and router health — every 15 min by itself",
     security: "Stops port scans, password guessing, SYN flood",
     languard: "Warns about a fake DHCP router or ARP spoofing on the LAN",
+    snmp: "Devices page: the router's CPU, temperature, ports and traffic; traps (port down, restart) to the server — read only, for this server only",
   };
   const extra = {};
   const fld = (label, name, attrs = {}, help) => h("label", { class: "field" }, label, help ? h("span", { class: "help" }, help) : null, h("input", { name, ...attrs }));
@@ -3749,7 +3750,7 @@ function deviceAddDialog(kinds, pre = {}) {
   dialog("Add a device", form, [{ label: "Cancel" },
     { label: "Test", action: async () => {
       out.textContent = "asking the device…";
-      try { const r = await api("POST", "/api/devices/test", vals()); out.replaceChildren(badge("answers", "ok"), ` ${r.info.sys.name || r.info.ip}: ${DEV_KIND[r.info.kind]} — ${r.info.line} (${r.info.rtt} ms)`); }
+      try { const r = await api("POST", "/api/devices/test", vals()); if (!r.ok) throw new Error(r.error); out.replaceChildren(badge("answers", "ok"), ` ${r.info.sys.name || r.info.ip}: ${DEV_KIND[r.info.kind]} — ${r.info.line} (${r.info.rtt} ms)`); }
       catch (e) { out.replaceChildren(badge("no answer", "bad"), " ", e.message); }
       return false; } },
     { label: "Add", class: "primary", action: async () => { if (!(await act(api("POST", "/api/devices/add", vals()), "Device added"))) return false; route(); } }]);
@@ -3844,24 +3845,27 @@ async function deviceDetail(id, hours = "24") {
     const inn = g.graphs[`if:${i.ifindex}:in`] || [], out = Object.fromEntries((g.graphs[`if:${i.ifindex}:out`] || []).map((p) => [p[0], p[1]]));
     ifGraph.replaceChildren(card(`Port ${i.name}${i.alias ? " — " + i.alias : ""}`, "traffic (every 5 minutes)",
       inn.length > 1 ? lineChart(inn.map((p) => ({ t: tsEpoch(p[0]), rx_bps: p[1], tx_bps: out[p[0]] || 0 })), 300, ["In", "Out"]) : h("div", { class: "empty" }, "No traffic numbers yet (every 5 minutes, ports that are up)."),
-      legend()));
+      h("div", { class: "legend" }, h("span", {}, h("i", { class: "down" }), "In"), h("span", {}, h("i", { class: "up" }), "Out"))));
     ifGraph.scrollIntoView({ behavior: "smooth", block: "nearest" });
   };
   const sup = (inf.supplies || []);
   shell("Devices", h("div", { class: "stack" }, devTabs(""),
-    h("div", { class: "card health-hero " + (x.status === "up" ? (inf.ups && inf.ups.source === "battery" ? "fail" : "ok") : x.status === "down" ? "fail" : "warn") },
-      h("div", { class: "hh-mark" }, x.status === "up" ? "✔" : "!"),
+    (() => {
+      const bad = x.status === "down" || (inf.ups && (inf.ups.source === "battery" || inf.ups.battery === "low"));
+      const look = (inf.printer && (inf.printer.errors || []).length) || (inf.ups && inf.ups.replace) || sup.some((s) => s.pct !== null && s.pct <= 10);
+      const st = bad ? "fail" : x.status !== "up" || look ? "warn" : "ok";
+      return h("div", { class: "card health-hero " + st }, h("div", { class: "hh-mark" }, st === "ok" ? "✔" : "!"),
       h("div", { class: "grow" }, h("div", { class: "hh-title" }, `${x.name} `, devStatus(x)),
         h("div", { class: "muted" }, `${DEV_KIND[x.kind] || x.kind} · ${x.ip}${x.port !== 161 ? ":" + x.port : ""} · SNMP v${x.version}${x.location ? " · " + x.location : ""}`),
         h("div", { class: "muted small" }, x.status === "down" ? `Last error: ${x.last_error}` : x.sysdescr.slice(0, 160)),
         x.status === "up" ? h("div", { class: "small" }, x.line, x.uptime ? ` · up ${duration(x.uptime)}` : "") : null),
-      h("div", { class: "toolbar" }, ranges, isAdmin() ? h("button", { class: "small", onclick: () => doIt("poll", {}, "Checked") }, icon("refresh"), "Check now") : null)),
+      h("div", { class: "toolbar" }, ranges, isAdmin() ? h("button", { class: "small", onclick: () => doIt("poll", {}, "Checked") }, icon("refresh"), "Check now") : null)); })(),
     tiles.length ? h("div", { class: "grid g-tiles" }, tiles) : null,
     sup.length ? card("Toner / ink / drums", null, h("div", { class: "stack" }, sup.map((s) => h("div", { class: "dev-sup" }, h("span", { class: "grow" }, s.name),
       s.pct === null ? h("span", { class: "muted small" }, s.level === -3 ? "some left" : "not told") : tonerMeter(s.pct), s.pct !== null ? h("b", { class: s.pct <= 10 ? "bad-text" : "" }, `${s.pct}%`) : null)))) : null,
-    graphs.length ? h("div", { class: "grid g-2" }, graphs) : null,
+    graphs.length ? h("div", { class: graphs.length > 1 ? "grid g-2" : "stack" }, graphs) : null,
     d.ifs.length ? card("Ports", `${d.ifs.filter((i) => i.oper === "up").length} of ${d.ifs.length} up · Watch = alert when it goes down`, table([
-      { label: "Port", render: (i) => h("a", { href: "javascript:void 0", onclick: () => showIf(i) }, h("b", {}, i.name), i.alias ? h("div", { class: "muted small" }, i.alias) : null) },
+      { label: "Port", render: (i) => h("button", { type: "button", class: "dev-port", title: "show its traffic", onclick: () => showIf(i) }, h("b", {}, i.name), i.alias ? h("div", { class: "muted small" }, i.alias) : null) },
       { label: "State", render: (i) => i.admin === "down" ? badge("switched off", "") : i.oper === "up" ? badge("up", "ok") : badge(i.oper, "warn") },
       { label: "Speed", render: (i) => i.speed ? (i.speed >= 1000 ? `${i.speed / 1000} G` : `${i.speed} M`) : "—" },
       { label: "In now", render: (i) => bps(i.in_bps), num: true }, { label: "Out now", render: (i) => bps(i.out_bps), num: true },

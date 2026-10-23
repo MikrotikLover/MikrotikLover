@@ -1151,6 +1151,47 @@ Dashboard → **Mail server**. Mail server ka LAN IP aur domain likhein (`radius
 - CLI: `radius-admin mail status | doors | guard on|off | smtp-out on|off | rate 30 | trusted OBJECT | logs | checklist KEY on|off`.
 - Tests: `tests/test-mailsec.py` (nakli DNS server + asal TLS server: DNS records, blacklists, certificates, doors, volume, logs), `tests/test-mail.sh` (router rules + lint, doors, checklist, API).
 
+## 7h5. Devices (SNMP) — switch, UPS, printer, server, camera, MikroTik
+
+Dashboard → **Devices (SNMP)**. Server har minute har device se SNMP par poochta hai (sirf parhna, kuch badalta nahi):
+
+| Device | Kya nazar aata hai | Alert kab |
+|---|---|---|
+| **UPS** (APC, Eaton … network card ke saath) | mains / **battery**, charge %, kitne minute baqi, load, input volt | **bijli gayi (on battery)**, battery low, bijli wapas, load 90%+, battery badlo |
+| **Printer** | toner / ink / drum % (bars), paper jam, door open, kitne page | **toner 10% se kam**, paper jam / no paper / door open |
+| **Switch** | har port: up/down, speed, abhi ka traffic, errors, kab badla; port ka graph | **watch** kiya hua port down / wapas up |
+| **MikroTik** | CPU, temperature, voltage, ports, traffic | CPU 90% 5 minute, 70°C se garam, port down (traps) |
+| **Server** (Windows / Linux / NAS) | CPU, memory, disks | disk 90% full, CPU high |
+| **Sab** | jawab deta hai ya nahi, uptime, jawab ka time | **2 minute jawab nahi** → alert, wapas aaye to ✅; restart hua (bijli?) |
+
+Alerts Telegram / WhatsApp / email par **foran** jate hain (5 minute ka intezar nahi). Settings → Alerts → "Devices (SNMP)" se band kar sakte hain. Limits (toner %, CPU, disk, temperature, UPS load): Devices → Settings.
+
+**Device add karna:**
+1. Device par SNMP on karein — read only, community (password), sirf is server ka IP allowed.
+2. Devices → **+ Add device** → IP + community → **Test** → **Add**. Kis qisam ka hai (UPS / printer / switch …) server khud pehchanta hai.
+3. Ya **Find devices** → `192.168.88.0/24` → jo jawab dein unki list → Add.
+4. MikroTik: **Router setup → SNMP** tick (router ko apni secret read-only community milti hai, sirf is server ke liye, aur traps server ko), ya Devices → **Add my MikroTik routers**.
+5. SNMP **v3** (user + password + AES encryption) bhi chalta hai — jahan device mein ho wahi behtar hai.
+
+**Traps** (device khud foran batata hai): Devices → Settings → **Receive traps** on (UDP 162). Device par trap receiver = is server ka IP, v2c, wohi community (ya `radius-admin snmp trap-community SECRET`). UPS on battery (UPS-MIB, APC), port down/up, restart, printer alert, ghalat community — sab saaf alfaz mein; switch ke port down par alert sirf **watched** port ka (PC band hone par shor nahi). Ghalat community wale traps phenk diye jate hain; ek device minute mein 60 se zyada bheje to baqi chhor diye.
+
+```bash
+sudo radius-admin snmp add 192.168.88.5 community MyRead0nly name "UPS server room"
+sudo radius-admin snmp add 192.168.88.20 v3 monitor SHA "auth-pass-123" AES "priv-pass-123" name "Core switch"
+sudo radius-admin snmp find 192.168.88.0/24 community public
+sudo radius-admin snmp list            # sab devices aur unka haal
+sudo radius-admin snmp show 3          # ek device + ports
+sudo radius-admin snmp watch 3 1 on    # port 1 (uplink) down ho to alert
+sudo radius-admin snmp trapd on        # traps receive karna
+sudo radius-admin snmp router-script 192.168.88.1   # MikroTik ki lines
+sudo radius-admin snmp limit toner 15
+```
+
+- Community / v3 passwords sirf `/etc/mikrotiklover-radius/snmp-secrets.json` (root, 600) mein — database ya dashboard mein nahi; v3 password command line par bhi nahi jata.
+- Graphs: CPU, memory, temperature, UPS charge / minutes / load, jawab ka time, har port ka traffic — har 5 minute, 30 din (ports 7 din).
+- Health check mein "Devices (SNMP)" group: har minute wala check chal raha hai, kaun jawab nahi de raha, trap receiver.
+- Tests: `tests/test-snmp.py` (44: wire format, nakli device, v1 / bulk, traps ke alfaz, events, counters, v3 output), `tests/test-snmp.sh` (asli net-snmp agent v2c + v3, snmptrap / snmpinform, bijli jana / port down / device band, alerts, router lines lint, health, API).
+
 ## 7h3. Bahar se network mein kya aa raha hai (From outside)
 
 Dashboard → **Security → From outside**. Teen sawaal, teen jawab:

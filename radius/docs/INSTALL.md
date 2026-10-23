@@ -163,6 +163,8 @@ sudo ufw allow from 10.0.0.0/8 to any port 8081 proto tcp       # quarantine war
 sudo ufw allow from 192.168.0.0/16 to any port 8081 proto tcp
 sudo ufw allow from 10.0.0.0/8 to any port 8082 proto tcp       # block page (radius-admin blockpage on)
 sudo ufw allow from 192.168.0.0/16 to any port 8082 proto tcp
+sudo ufw allow from 192.168.0.0/16 to any port 162 proto udp    # SNMP traps from devices (radius-admin snmp trapd on)
+sudo ufw allow from 10.0.0.0/8 to any port 162 proto udp
 sudo ufw enable
 ```
 
@@ -336,6 +338,8 @@ Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein
 | Mail server (MDaemon) ki hifazat: safe ports, password guessing band, spam bots, DNS / blacklist / certificate checks | Mail server | `radius-admin mail set ip 192.168.88.30 domain example.com` · `mail doors` · `mail status` |
 | Policy poore network / IP range / ek PC ko (login ke baghair) | Blocking → Policies → Give a policy → Network / IP | `radius-admin policy net add staff 192.168.88.0/24 "Office LAN"` · `policy net list` · `policy net del ID` |
 | Sab blocking ek dam band / wapas (masla ho to) | Setup steps → 1 → If something goes wrong · Dashboard banner | `radius-admin policy pause` · `policy resume` |
+| Devices (SNMP): switch, UPS, printer, server, camera, MikroTik — jawab, CPU, ports, UPS battery, toner; alert foran | Devices (SNMP) → + Add device / Find devices | `radius-admin snmp add 192.168.88.5 community public` · `snmp find 192.168.88.0/24` · `snmp list` |
+| SNMP traps (device khud batata hai) | Devices → Settings → Trap receiver | `radius-admin snmp trapd on` · `snmp trap-community SECRET` · `snmp traps` |
 | Ye connection kaun si policy le gi? | Firewall → Policy lookup | `radius-admin firewall lookup router 1.2.3.4 203.0.113.1 tcp 8291` |
 | Bahar se kya andar aa raha hai: khule darwaze (port forward, UPnP, router services), kis IP ne kis andar ke IP:port ko chhua | Security → From outside → Who? | naya auto-sync script import + traffic collector |
 | Microsoft Windows Update band / sirf office hours mein band / on | Blocking → Overview → Windows Update | `radius-admin winupdate off` · `winupdate office` · `winupdate on` |
@@ -492,6 +496,8 @@ Log files: `/var/log/mikrotik/` (`dns.log`, `webfilter.log`, `router.log`, `traf
 | TCP 8443 | Browser / router → server | Dashboard, connect guide, router auto-sync |
 | TCP 8081 | Quarantined device → server | Warning page for infected devices (plain HTTP) |
 | TCP 8082 | Users with a policy → server | Block page proxy for http:// (radius-admin blockpage on) |
+| UDP 161 | Server → devices | SNMP: server har minute switch / UPS / printer / router se poochta hai (Devices) |
+| UDP 162 | Devices → server | SNMP traps: UPS on battery, port down, printer jam (radius-admin snmp trapd on) |
 | TCP 22 (ya jo port diya) | Server → backup server | Off-site backup (SSH), sirf jab set ho |
 | TCP 443 / 587 | Server → internet | Alerts: Telegram, CallMeBot (WhatsApp), SMTP email |
 

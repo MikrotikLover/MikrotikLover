@@ -470,3 +470,5 @@ details.card > summary { font-weight: 700; }
 .dev-sup .grow { min-width: 0; overflow-wrap: anywhere; }
 .dev-sup .meter { flex: 0 0 min(180px, 35%); }
 .bad-text { color: var(--bad); }
+.dev-port { background: none; border: 0; padding: 0; text-align: left; color: var(--accent, #2563eb); cursor: pointer; font: inherit; }
+.dev-port b { text-decoration: underline; text-underline-offset: 2px; }

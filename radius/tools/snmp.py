@@ -1301,8 +1301,9 @@ def main():
         r = db.q("SELECT name, ip FROM ml_snmp_device WHERE id=%s", (did,))
         if not r:
             sys.exit(f"ERROR: no device #{did}")
-        for t in ("ml_snmp_if", "ml_snmp_sample"):
+        for t in ("ml_snmp_if", "ml_snmp_sample", "ml_snmp_event"):
             db.q(f"DELETE FROM {t} WHERE device_id=%s", (did,))
+        db.q("UPDATE ml_snmp_trap SET device_id=NULL WHERE device_id=%s", (did,))     # its traps stay, as 'not in the list'
         db.q("DELETE FROM ml_snmp_device WHERE id=%s", (did,))
         s = load_secrets()
         s.get("devices", {}).pop(str(did), None)

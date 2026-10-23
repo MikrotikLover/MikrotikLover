@@ -3356,6 +3356,8 @@ def devices_action(action):
             kind = field(data, "kind", re.compile(r"^(" + "|".join(SNMP_KINDS) + ")$"))
             args += (["name", nm] if nm else []) + (["kind", kind] if kind else []) + (["--no-check"] if data.get("nocheck") else [])
         ok, out = radius_admin(args, stdin=sec, timeout=90, action=" ".join(a for a in args if a != "--stdin"))
+        if not ok and action == "test":
+            return jsonify(ok=False, error=out or "no answer")       # a test result, not a bad request
         if not ok:
             return result(ok, out)
         try:
