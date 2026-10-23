@@ -1333,8 +1333,10 @@ Dashboard → **IP binding** → "Every user keeps the first address DHCP gives 
 - Admin **Change** se koi bhi IP de sakta hai (`ipbind set USER IP`) — yeh "set by admin" ho jata hai aur kabhi khud nahi badalta. Jo IP kisi aur ka ho ya abhi kisi aur ke paas ho, woh mana.
 - Automatic IP itne din login na ho to azad (default 7, `ipbind days N`, 0 = kabhi nahi) — cafe mein voucher walon se pool khatam na ho.
 - **Random (private) MAC:** binding MAC ki nahi, **user** ki hai. Phone naye random MAC se aaye to login ke baad lease naye MAC par chali jati hai, IP wahi rehta hai. Dashboard par "random MAC" nishan. Ek hi phone par doosra user login kare to device naye user ke paas chala jata hai.
-- PPPoE users par nahi (un ke liye `user ip USER IP` — Framed-IP-Address).
-- Tests: `tests/test-ipbind.sh` (34 checks: auto, random MAC, takraao, admin, din, lint, API).
+- **Kis ko pakka IP:** default sirf **password wale users aur MAC devices** ko. PIN vouchers aur Social WiFi guests ko normal DHCP IP milta hai (woh aate jaate hain — har ek ka IP ruka rahe to pool khatam). Sab ko chahiye to: IP binding → "Also PIN vouchers and Social WiFi guests" (`ipbind scope all`). Admin ka haath se diya IP (`ipbind set`) har kisi ke liye chalta hai.
+- **Pehle login se pehle IP tay karna:** `ipbind set ali 192.168.88.50` — pehle login par device (MAC) pehchana jata hai, router ko lease milti hai, agli DHCP renewal se .50.
+- PPPoE users par nahi (un ke liye `user ip USER IP` — Framed-IP-Address, pehle login se hi).
+- Tests: `tests/test-ipbind.sh` (35 checks: auto, random MAC, takraao, admin, din, lint, API), `tests/test-lan-logins.sh` (ek LAN par MAC device + password user + PIN + guest ek saath asli FreeRADIUS login aur accounting se: har ek ka IP, policy, kis ko pakka IP, chhoda hua IP doosre ko, pehle login se pehle tay IP, PPPoE static IP, router leases lint).
 
 ## 7o. Traffic graphs aur Departments (shared speed)
 

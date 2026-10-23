@@ -88,5 +88,6 @@ if [ -n "${URL:-}" ]; then
     t "API: settings days 0" "$(api POST /api/ipbind/settings '{"days":0}')$(db "SELECT v FROM ml_setting WHERE k='ipbind_days'")" "2000"
     t "API: remove" "$(api POST /api/ipbind/del '{"user":"ib-c"}')$(bind ib-c)" "200"
     t "API: unknown action 404" "$(api POST /api/ipbind/reboot '{}')" "404"
+    t "API: scope all / users (vouchers and guests keep an address or not)" "$(api POST /api/ipbind/settings '{"scope":"all"}')$(db "SELECT v FROM ml_setting WHERE k='ipbind_scope'") $(api POST /api/ipbind/settings '{"scope":"users"}')$(db "SELECT v FROM ml_setting WHERE k='ipbind_scope'") $(api GET /api/ipbind)$(python3 -c "import json; print(json.load(open('/tmp/ib.out'))['scope'])")" "200all 200users 200users"
 fi
 [ "$fails" = 0 ] && echo "all IP binding tests passed" || { echo "$fails FAILED"; exit 1; }

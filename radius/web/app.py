@@ -2641,8 +2641,8 @@ def ipbind_list():
                 FROM ml_ip_bind b ORDER BY INET_ATON(b.ip)""")
     for r in rows:
         r["random"] = bool(r["mac"]) and r["mac"][1:2].upper() in "26AE"
-    st = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k IN ('ipbind_auto','ipbind_days')")}
-    return jsonify(bindings=jsonable(rows), auto=st.get("ipbind_auto") == "1", days=int(st.get("ipbind_days") or 7))
+    st = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k IN ('ipbind_auto','ipbind_days','ipbind_scope')")}
+    return jsonify(bindings=jsonable(rows), auto=st.get("ipbind_auto") == "1", days=int(st.get("ipbind_days") or 7), scope=st.get("ipbind_scope") or "users")
 
 
 @app.post("/api/ipbind")
@@ -2662,6 +2662,10 @@ def ipbind_action(action):
         if "auto" in data:
             ok, msg = radius_admin(["ipbind", "auto", "on" if data.get("auto") else "off"])
             if not ok:
+                return result(ok, msg)
+        if "scope" in data:
+            ok, msg = radius_admin(["ipbind", "scope", "all" if data.get("scope") == "all" else "users"])
+            if not ok or "days" not in data:
                 return result(ok, msg)
         if "days" in data:
             d = str(data.get("days")).strip()

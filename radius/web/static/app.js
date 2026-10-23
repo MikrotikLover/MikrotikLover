@@ -1309,6 +1309,10 @@ ROUTES.ipbind = async () => {
     onchange: async (e) => { await act(api("POST", "/api/ipbind/settings", { auto: e.target.checked })); route(); } }),
     h("div", {}, h("b", {}, "Every user keeps the first address DHCP gives them"),
       h("span", {}, "Checked every 5 minutes. The routers get a DHCP static lease (auto-sync, 15 min); the device gets it at its next DHCP renewal or Wi-Fi off/on. PPPoE users: static IP on the user (Users → user → IP).")));
+  const scope = h("label", { class: "check" + (d.scope === "all" ? " on" : "") }, h("input", { type: "checkbox", checked: d.scope === "all", disabled: !isAdmin() || !d.auto,
+    onchange: async (e) => { await act(api("POST", "/api/ipbind/settings", { scope: e.target.checked ? "all" : "users" })); route(); } }),
+    h("div", {}, h("b", {}, "Also PIN vouchers and Social WiFi guests"),
+      h("span", {}, "Off (advised): only users with a password and MAC devices keep their address. Guests come and go — each would keep an address for the days above and the DHCP pool can run out.")));
   const days = h("input", { type: "number", min: 0, max: 3650, value: d.days, class: "w-num" });
   const settings = h("div", { class: "toolbar wrap" }, h("span", {}, "Free an automatic address after"), days, h("span", {}, "days without a login (0 = never)"),
     isAdmin() ? h("button", { class: "small", onclick: async () => { if (await act(api("POST", "/api/ipbind/settings", { days: days.value }))) route(); } }, "Save") : null);
@@ -1320,10 +1324,10 @@ ROUTES.ipbind = async () => {
     holder.replaceChildren(table([
       { label: "User", render: (b) => h("b", {}, b.username) },
       { label: "Address", render: (b) => h("code", {}, b.ip) },
-      { label: "Device", render: (b) => b.mac ? h("span", {}, h("code", {}, b.mac), " ", b.random ? badge("random MAC", "warn") : null) : h("span", { class: "muted" }, "known at the next login") },
+      { label: "Device", render: (b) => b.mac ? h("span", {}, h("code", {}, b.mac), b.random ? h("div", {}, badge("random MAC", "warn")) : null) : h("span", { class: "muted" }, "known at the next login") },
       { label: "How", render: (b) => b.locked ? badge("set by admin", "ok") : badge("auto") },
       { label: "Now", render: (b) => !b.ip_now ? h("span", { class: "muted" }, "offline") : b.ip_now === b.ip ? badge("online on it", "ok")
-          : h("span", {}, h("code", {}, b.ip_now), " ", badge("moves at the next DHCP renewal", "warn")) },
+          : h("span", {}, h("code", {}, b.ip_now), h("div", { class: "muted small" }, "moves at the next DHCP renewal")) },
       { label: "Last seen", render: (b) => ago(b.last_seen) },
       { label: "", render: (b) => isAdmin() ? h("div", { class: "row-actions" },
           h("button", { class: "small", onclick: () => edit(b) }, "Change"),
@@ -1338,7 +1342,7 @@ ROUTES.ipbind = async () => {
   draw();
   const nRandom = d.bindings.filter((b) => b.random).length;
   shell("IP binding", h("div", { class: "stack" },
-    card("Fixed address per user", `${d.bindings.length} bound · ${d.bindings.filter((b) => b.locked).length} by the admin`, auto, settings),
+    card("Fixed address per user", `${d.bindings.length} bound · ${d.bindings.filter((b) => b.locked).length} by the admin`, auto, scope, settings),
     card(null, null, h("div", { class: "toolbar" }, search, isAdmin() ? h("button", { class: "primary", onclick: () => edit(null) }, icon("plus"), "Bind a user") : null), holder),
     card("Random (private) MAC addresses", nRandom ? `${nRandom} device(s) here use one` : null,
       h("ul", { class: "tips" },

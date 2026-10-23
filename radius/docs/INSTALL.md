@@ -323,7 +323,7 @@ Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein
 | Feature | Dashboard | CLI (server par `sudo`) |
 |---|---|---|
 | Server ka IP (routers ki nazar se) — quarantine page aur social WiFi ke liye | Security → Protection & lists | `radius-admin security quarantine-server 192.168.88.10` |
-| Har user ka pakka IP (DHCP walon ke liye; admin badal sakta hai) | IP binding | `radius-admin ipbind auto on` · `ipbind set ali 192.168.88.50` · `ipbind days 7` |
+| Har user ka pakka IP (DHCP walon ke liye; admin badal sakta hai) | IP binding | `radius-admin ipbind auto on` · `ipbind set ali 192.168.88.50` · `ipbind days 7` · `ipbind scope users` (vouchers / guests ko nahi — default) |
 | Department ki shared speed (maslan Sales 10M: 1 user ho to poori, 10 hon to baant lein) | Departments | `radius-admin dept add sales 10M 5M` · `dept member sales user ali` / `group staff` |
 | Traffic graphs (interface / user / group / department) | Traffic graphs | khud chalta hai: interfaces router report se (auto-sync), users accounting se (har 5 min) |
 | Site kyun band hai? (kaun si list / policy rule, abhi active?) | Blocking → Why blocked? | `radius-admin why facebook.com ali` |

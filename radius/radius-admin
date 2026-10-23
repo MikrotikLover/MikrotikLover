@@ -1138,8 +1138,12 @@ ipbind_rsc() {   # router part of sync.rsc
 
 # auto: bind users online now to the address they have; move the binding to a new MAC. Prints changes.
 ipbind_auto() {
-    local verbose=${1:-} rows u ip mac nas cur cip cmac clocked other n=0 days
+    local verbose=${1:-} rows u ip mac nas cur cip cmac clocked other n=0 days scope_sql=""
     days=$(setting_get ipbind_days); [[ $days =~ ^[0-9]+$ ]] || days=7
+    # vouchers / PINs and Social WiFi guests come and go: a reserved address each would fill the DHCP pool
+    # (one the admin bound by hand still follows its device)
+    [ "$(setting_get ipbind_scope)" = all ] || scope_sql="AND (EXISTS (SELECT 1 FROM ml_ip_bind b WHERE b.username=r.username)
+                   OR NOT EXISTS (SELECT 1 FROM ml_account a WHERE a.username=r.username AND (a.voucher_batch IS NOT NULL OR a.plan='social-free')))"
     if [ "$days" -gt 0 ]; then
         n=$(echo "SELECT COUNT(*) FROM ml_ip_bind WHERE locked=0 AND last_seen < NOW() - INTERVAL $days DAY;
                   DELETE FROM ml_ip_bind WHERE locked=0 AND last_seen < NOW() - INTERVAL $days DAY;" | db)
@@ -1152,6 +1156,7 @@ ipbind_auto() {
                    AND r.callingstationid REGEXP '^([0-9A-Fa-f]{2}[-:.]?){5}[0-9A-Fa-f]{2}\$'
                    AND EXISTS (SELECT 1 FROM radcheck c WHERE c.username=r.username)
                    AND NOT EXISTS (SELECT 1 FROM radreply p WHERE p.username=r.username AND p.attribute='Framed-IP-Address')
+                   $scope_sql
                  ORDER BY r.acctstarttime, r.radacctid" | db)
     while IFS=$'\t' read -r u ip mac nas; do
         [ -n "$u" ] || continue
@@ -1183,6 +1188,7 @@ cmd_ipbind() {
     case $sub in
     status|"")
         echo "Auto binding : $([ "$(setting_get ipbind_auto)" = 1 ] && echo on || echo off)   (radius-admin ipbind auto on|off)"
+        echo "Who          : $([ "$(setting_get ipbind_scope)" = all ] && echo "everyone (vouchers / PINs and Social WiFi guests too)" || echo "users + MAC devices (not vouchers / PINs, not Social WiFi guests)")   (radius-admin ipbind scope users|all)"
         local d; d=$(setting_get ipbind_days); echo "Free after   : ${d:-7} day(s) not seen (0 = never; admin-set addresses are kept)"
         echo "Bindings     : $(echo "SELECT COUNT(*) FROM ml_ip_bind" | db) ($(echo "SELECT COUNT(*) FROM ml_ip_bind WHERE locked=1" | db) set by the admin)" ;;
     list)
@@ -1196,6 +1202,12 @@ cmd_ipbind() {
             on)  setting_set ipbind_auto 1; ok "Auto IP binding on: users keep the address DHCP gave them (checked every 5 min)" ;;
             off) setting_set ipbind_auto 0; ok "Auto IP binding off (existing bindings stay; remove with: ipbind del USER)" ;;
             *) die "usage: radius-admin ipbind auto on|off" ;;
+        esac ;;
+    scope)
+        case ${1:-} in
+            users) setting_set ipbind_scope users; ok "Auto binding for users and MAC devices only (vouchers / PINs and guests get a normal DHCP address)" ;;
+            all)   setting_set ipbind_scope all; ok "Auto binding for everyone — vouchers and guests too (watch the DHCP pool: each keeps an address for the unused days)" ;;
+            *) die "usage: radius-admin ipbind scope users|all" ;;
         esac ;;
     days)
         valid_int "${1:-}" days; [ "$1" -le 3650 ] || die "days: 0-3650"
@@ -1232,7 +1244,7 @@ cmd_ipbind() {
         local n; n=$(ipbind_auto "${1:-}")
         [ "${n##*$'\n'}" = 0 ] || cmd_policy build >/dev/null 2>&1 || true
         [ -z "${1:-}" ] && ok "IP binding: ${n##*$'\n'} change(s)" || echo "$n" ;;
-    *) die "usage: radius-admin ipbind status | list | auto on|off | days N | set USER IP | unlock USER | del USER | run [-v]" ;;
+    *) die "usage: radius-admin ipbind status | list | auto on|off | scope users|all | days N | set USER IP | unlock USER | del USER | run [-v]" ;;
     esac
 }
 
