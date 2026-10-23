@@ -1,0 +1,17 @@
+:root { --a: #16a34a; --t: #0f172a; --m: #64748b; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; background: linear-gradient(135deg, #15803d, #22c55e);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--t); }
+.card { width: 100%; max-width: 380px; background: #fff; border-radius: 18px; padding: 24px 22px; box-shadow: 0 20px 50px rgba(0, 0, 0, .25); }
+h1 { margin: 0 0 8px; font-size: 22px; text-align: center; }
+.lead { text-align: center; color: var(--m); margin: 0 0 14px; }
+label { display: block; font-weight: 600; font-size: 14px; margin: 12px 0 4px; }
+label input { display: block; width: 100%; margin-top: 5px; font-size: 18px; padding: 11px 12px; border: 1px solid #cbd5e1; border-radius: 10px; }
+label.chk { display: flex; gap: 8px; align-items: center; font-weight: 500; }
+label.chk input { width: auto; margin: 0; }
+button { width: 100%; margin-top: 16px; padding: 12px; font-size: 16px; font-weight: 700; color: #fff; background: var(--a); border: 0; border-radius: 10px; cursor: pointer; }
+button.link { background: none; color: var(--a); font-weight: 600; margin-top: 8px; }
+.err { background: #fef2f2; color: #b91c1c; border-radius: 10px; padding: 10px 12px; text-align: center; }
+.ok { background: #f0fdf4; color: #15803d; border-radius: 10px; padding: 10px 12px; text-align: center; font-weight: 700; }
+.small { font-size: 12px; color: var(--m); text-align: center; margin-top: 14px; }
+.cred { font-size: 18px; text-align: center; }

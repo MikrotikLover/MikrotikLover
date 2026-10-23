@@ -1,0 +1,2 @@
+# WhatsApp only: chat, calls, photos and status work; every other app and website is blocked
+allow-only whatsapp

@@ -1,0 +1,10 @@
+# Staff: social media and video only blocked during office hours
+block social time=9h-17h,mon,tue,wed,thu,fri,sat
+block video-streaming time=9h-17h,mon,tue,wed,thu,fri,sat
+block gaming
+block torrent-piracy
+block keywords
+allow-site linkedin.com
+block-site example-bet.com
+block-word casino
+block-word ^bet time=20h-23h,fri,sat

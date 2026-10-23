@@ -1,0 +1,2 @@
+# No video: Facebook/Instagram videos & Reels, YouTube and TikTok do not play; chat, photos, WhatsApp, Google work
+block social-video

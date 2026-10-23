@@ -1,0 +1,3 @@
+# Kids night: no internet 22:00-06:00 on school nights, games blocked 21:00-07:00
+block-all time=22h-6h,sun,mon,tue,wed,thu
+block gaming time=21h-7h,mon,tue,wed,thu,fri,sat,sun

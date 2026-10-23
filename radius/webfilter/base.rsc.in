@@ -1,0 +1,40 @@
+# MikrotikLover web filter — BASE (import this first, once per router)
+# RouterOS 7.15+.  Uses the default-config interface list "LAN".
+#
+# What it does
+#   * forces every LAN device to use the router's DNS (port 53 redirect)
+#   * blocks encrypted DNS that would bypass the filter (DoT 853, known DoH servers,
+#     Firefox canary, iCloud Private Relay)
+#   * devices in address list "web-filter-exempt" bypass the filter
+#     (static entries, or hotspot users via RADIUS: radius-admin group add NAME --address-list web-filter-exempt)
+#
+# Then import the category files you want: webfilter-social.rsc, webfilter-adlists.rsc, ...
+# Re-importing is safe: old webfilter entries are removed first.
+
+/ip dns
+set allow-remote-requests=yes
+# Tip: servers=1.1.1.3,1.0.0.3 (Cloudflare Family) also blocks adult + malware upstream, using no router RAM.
+
+/ip firewall address-list
+remove [find comment="webfilter:doh-ip"]
+:foreach a in={"1.1.1.1";"1.0.0.1";"1.1.1.2";"1.0.0.2";"1.1.1.3";"1.0.0.3";"8.8.8.8";"8.8.4.4";"9.9.9.9";"149.112.112.112";"9.9.9.11";"208.67.222.222";"208.67.220.220";"208.67.222.123";"208.67.220.123";"94.140.14.14";"94.140.15.15";"94.140.14.15";"94.140.15.16";"185.228.168.9";"185.228.169.9";"185.228.168.168";"45.90.28.0/24";"45.90.30.0/24";"76.76.2.0/24";"76.76.10.0/24";"194.242.2.0/24"} do={
+    add list=doh-servers address=$a comment="webfilter:doh-ip"
+}
+
+/ip firewall nat
+remove [find comment~"^webfilter:"]
+add chain=dstnat in-interface-list=LAN src-address-list=web-filter-exempt protocol=udp dst-port=53 action=dst-nat to-addresses=1.1.1.1 comment="webfilter: exempt -> unfiltered DNS"
+add chain=dstnat in-interface-list=LAN src-address-list=web-filter-exempt protocol=tcp dst-port=53 action=dst-nat to-addresses=1.1.1.1 comment="webfilter: exempt -> unfiltered DNS"
+add chain=dstnat in-interface-list=LAN protocol=udp dst-port=53 action=redirect to-ports=53 comment="webfilter: force router DNS"
+add chain=dstnat in-interface-list=LAN protocol=tcp dst-port=53 action=redirect to-ports=53 comment="webfilter: force router DNS"
+
+/ip firewall filter
+remove [find comment~"^webfilter:"]
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=853 action=reject reject-with=tcp-reset comment="webfilter: block DNS-over-TLS"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=udp dst-port=853 action=drop comment="webfilter: block DNS-over-QUIC"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt dst-address-list=doh-servers protocol=tcp dst-port=443 action=reject reject-with=tcp-reset comment="webfilter: block DNS-over-HTTPS"
+add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt dst-address-list=doh-servers protocol=udp dst-port=443 action=drop comment="webfilter: block DNS-over-HTTP/3"
+# Put the webfilter rules above any "accept LAN" rule.
+move [find comment~"^webfilter:"] destination=0
+
+# Encrypted-DNS hostnames

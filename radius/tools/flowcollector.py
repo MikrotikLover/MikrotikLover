@@ -1,0 +1,512 @@
+#!/usr/bin/env python3
+"""MikrotikLover traffic collector: data download/upload per client IP, per user, per website.
+
+* Receives MikroTik Traffic Flow (NetFlow v9 or IPFIX) on UDP 2055.
+* Finds the LAN client in every flow record from ALL its IPv4 fields (pre- and post-NAT),
+  so it works whether the router reports the private or the NATed address.
+* Names the remote side with the DNS logger's answers (dnsmasq log-queries=extra):
+  the IP that client X got for www.youtube.com is counted as youtube.com for client X.
+* Adds hourly totals to MariaDB table traffic_site (bucket, client_ip, username, site, down, up)
+  and writes the last minute to /run/mikrotiklover/traffic-now.json ("radius-admin traffic now").
+
+Run by systemd (mikrotiklover-traffic.service); config from /etc/mikrotiklover-radius/radius.conf.
+"""
+import ipaddress, json, os, re, socket, struct, sys, time
+from collections import OrderedDict
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from mlreport import base_domain, is_generic_cdn  # noqa: E402  (same directory)
+import ports  # noqa: E402
+import vpn  # noqa: E402
+import sentinel  # noqa: E402
+
+CONF = "/etc/mikrotiklover-radius/radius.conf"
+DNS_LOG = os.environ.get("MLREPORT_LOGDIR", "/var/log/mikrotik") + "/dns.log"
+NOW_FILE = "/run/mikrotiklover/traffic-now.json"
+FLUSH_EVERY = int(os.environ.get("MLR_FLUSH", 60))
+IPV4_SITE = re.compile(r"^[0-9.]+$")
+
+# IPFIX / NetFlow v9 information elements we use
+IE_BYTES, IE_BYTES_TOTAL, IE_PKTS, IE_PROTO = 1, 85, 2, 4
+IE_SRC4, IE_DST4, IE_SPORT, IE_DPORT = 8, 12, 7, 11
+IE_NAT_SRC4, IE_NAT_DST4, IE_NAT_SPORT, IE_NAT_DPORT = 225, 226, 227, 228
+IE_TIMES = (21, 22, 150, 151, 152, 153)
+
+
+def read_conf(path=CONF):
+    conf = {}
+    try:
+        for line in open(path):
+            m = re.match(r'^([A-Z_]+)=(.*)$', line.strip())
+            if m:
+                conf[m.group(1)] = m.group(2).strip('"')
+    except OSError:
+        pass
+    return conf
+
+
+# ------------------------------------------------------------------ flow decoding
+class Decoder:
+    """NetFlow v9 + IPFIX decoder with per-exporter template cache."""
+
+    def __init__(self):
+        self.templates = {}
+
+    def decode(self, data, exporter):
+        if len(data) < 4:
+            return []
+        version = struct.unpack("!H", data[:2])[0]
+        if version == 9:
+            return self._v9(data, exporter)
+        if version == 10:
+            return self._ipfix(data, exporter)
+        return []
+
+    def _v9(self, data, exporter):
+        if len(data) < 20:
+            return []
+        _, _, _, _, _, source_id = struct.unpack("!HHIIII", data[:20])
+        return self._sets(data[20:], (exporter, 9, source_id), tmpl_ids=(0,), opt_ids=(1,))
+
+    def _ipfix(self, data, exporter):
+        if len(data) < 16:
+            return []
+        _, length, _, _, domain = struct.unpack("!HHIII", data[:16])
+        return self._sets(data[16:length], (exporter, 10, domain), tmpl_ids=(2,), opt_ids=(3,), ipfix=True)
+
+    def _sets(self, body, key, tmpl_ids, opt_ids, ipfix=False):
+        out, off = [], 0
+        while off + 4 <= len(body):
+            set_id, set_len = struct.unpack("!HH", body[off:off + 4])
+            if set_len < 4:
+                break
+            content = body[off + 4:off + set_len]
+            off += set_len
+            if set_id in tmpl_ids:
+                self._templates(content, key, ipfix)
+            elif set_id in opt_ids:
+                continue
+            elif set_id >= 256:
+                tmpl = self.templates.get(key + (set_id,))
+                if tmpl:
+                    out.extend(self._records(content, tmpl))
+        return out
+
+    def _templates(self, content, key, ipfix):
+        off = 0
+        while off + 4 <= len(content):
+            tid, count = struct.unpack("!HH", content[off:off + 4])
+            off += 4
+            fields = []
+            for _ in range(count):
+                if off + 4 > len(content):
+                    return
+                ftype, flen = struct.unpack("!HH", content[off:off + 4])
+                off += 4
+                enterprise = False
+                if ipfix and ftype & 0x8000:
+                    ftype &= 0x7FFF
+                    enterprise = True
+                    off += 4
+                fields.append((ftype, flen, enterprise))
+            self.templates[key + (tid,)] = fields
+
+    @staticmethod
+    def _records(content, tmpl):
+        recs, off = [], 0
+        fixed = all(l != 65535 for _, l, _ in tmpl)
+        size = sum(l for _, l, _ in tmpl) if fixed else 0
+        while off < len(content):
+            if fixed and off + size > len(content):
+                break
+            rec, ok = {}, True
+            for ftype, flen, ent in tmpl:
+                if flen == 65535:
+                    if off >= len(content):
+                        ok = False
+                        break
+                    flen = content[off]
+                    off += 1
+                    if flen == 255:
+                        flen = struct.unpack("!H", content[off:off + 2])[0]
+                        off += 2
+                raw = content[off:off + flen]
+                off += flen
+                if len(raw) < flen:
+                    ok = False
+                    break
+                if ent:
+                    continue
+                if ftype in (IE_SRC4, IE_DST4, IE_NAT_SRC4, IE_NAT_DST4) and flen == 4:
+                    rec[ftype] = socket.inet_ntoa(raw)
+                elif flen <= 8:
+                    rec[ftype] = int.from_bytes(raw, "big")
+            if not ok:
+                break
+            if rec:
+                recs.append(rec)
+        return recs
+
+
+# ------------------------------------------------------------------ classification
+class Classifier:
+    def __init__(self, lan_nets):
+        self.lan = [ipaddress.ip_network(n) for n in lan_nets]
+
+    def is_lan(self, ip):
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            return False
+        return any(a in n for n in self.lan)
+
+    def classify(self, rec):
+        """-> (client_ip, remote_ip, 'up'|'down', bytes, dedupe_key, proto, client_port, remote_port) or None."""
+        nbytes = rec.get(IE_BYTES, rec.get(IE_BYTES_TOTAL, 0))
+        if not nbytes:
+            return None
+        srcs = [rec.get(IE_SRC4), rec.get(IE_NAT_SRC4)]
+        dsts = [rec.get(IE_DST4), rec.get(IE_NAT_DST4)]
+        src_client = next((ip for ip in srcs if ip and self.is_lan(ip)), None)
+        dst_client = next((ip for ip in dsts if ip and self.is_lan(ip)), None)
+        src_remote = next((ip for ip in srcs if ip and not self.is_lan(ip)), None)
+        dst_remote = next((ip for ip in dsts if ip and not self.is_lan(ip)), None)
+        if src_client and dst_remote and not dst_client:
+            client, remote, direction = src_client, dst_remote, "up"
+            cport = rec.get(IE_SPORT, 0) if src_client == rec.get(IE_SRC4) else rec.get(IE_NAT_SPORT) or rec.get(IE_SPORT, 0)
+            rport = rec.get(IE_DPORT, 0) if dst_remote == rec.get(IE_DST4) else rec.get(IE_NAT_DPORT) or rec.get(IE_DPORT, 0)
+        elif dst_client and src_remote and not src_client:
+            client, remote, direction = dst_client, src_remote, "down"
+            # client found in the post-NAT field (download on the WAN side): use the post-NAT port too,
+            # so the LAN and WAN record of the same packets get the same dedupe key
+            cport = rec.get(IE_DPORT, 0) if dst_client == rec.get(IE_DST4) else rec.get(IE_NAT_DPORT) or rec.get(IE_DPORT, 0)
+            rport = rec.get(IE_SPORT, 0) if src_remote == rec.get(IE_SRC4) else rec.get(IE_NAT_SPORT) or rec.get(IE_SPORT, 0)
+        else:
+            return None  # LAN<->LAN, router itself, or the client is not visible in this record
+        # The same packets can be reported on the LAN and the WAN interface: identical
+        # (client, remote, ports, proto, times, bytes) means a duplicate.
+        times = tuple(rec.get(t, 0) for t in IE_TIMES)
+        proto = rec.get(IE_PROTO, 0)
+        key = (client, cport, remote, rport, proto, direction, nbytes, times)
+        return client, remote, direction, nbytes, key, proto, cport, rport
+
+
+class Dedupe:
+    def __init__(self, ttl=600):
+        self.seen, self.ttl = OrderedDict(), ttl
+
+    def first(self, key, now):
+        while self.seen and next(iter(self.seen.values())) < now - self.ttl:
+            self.seen.popitem(last=False)
+        if key in self.seen:
+            return False
+        self.seen[key] = now
+        return True
+
+
+# ------------------------------------------------------------------ DNS answers -> site names
+EXTRA_RE = re.compile(r"\b(\d+) (\d+\.\d+\.\d+\.\d+)/\d+ (query\[\w+\]|reply|cached|config) (\S+)(?: is (\S+))?")
+
+
+class DnsNames:
+    """(client_ip, answer_ip) -> queried name, from dnsmasq 'log-queries=extra' lines."""
+
+    def __init__(self, ttl=7200):
+        self.serial, self.by_client, self.by_ip, self.ttl = {}, {}, {}, ttl
+        self.last_site = {}     # client -> (time, name) of the last non-CDN name it asked for
+
+    def feed(self, line, now):
+        m = EXTRA_RE.search(line)
+        if not m:
+            return
+        serial, client, action, name, answer = m.groups()
+        if action.startswith("query"):
+            name = name.rstrip(".").lower()
+            if is_generic_cdn(name):
+                # a bare shared-CDN name (d123.cloudfront.net): count its data for the site the
+                # device opened just before (CDN detective "context"), if that was < 15 s ago
+                prev = self.last_site.get(client)
+                if prev and now - prev[0] <= 15:
+                    name = prev[1]
+            else:
+                self.last_site[client] = (now, name)
+            self.serial[serial] = (client, name, now)
+            if len(self.serial) > 50000:
+                for k in list(self.serial)[:10000]:
+                    del self.serial[k]
+            return
+        q = self.serial.get(serial)
+        if not q or not answer or not re.match(r"^\d+\.\d+\.\d+\.\d+$", answer):
+            return
+        qclient, qname, _ = q
+        self.by_client[(qclient, answer)] = (qname, now)
+        self.by_ip[answer] = (qname, now)
+
+    def prune(self, now):
+        for d in (self.by_client, self.by_ip):
+            for k in [k for k, (_, ts) in d.items() if ts < now - self.ttl]:
+                del d[k]
+
+    def site(self, client, remote):
+        hit = self.by_client.get((client, remote)) or self.by_ip.get(remote)
+        if hit:
+            return base_domain(hit[0])
+        # no DNS name (app uses a fixed IP or private DNS): an owner that serves one app is enough
+        try:
+            import cdnmap
+            s = cdnmap.catalog().ip_site(remote)
+        except Exception:
+            s = None
+        return s or remote
+
+
+class Tail:
+    def __init__(self, path, prime_bytes=4_000_000):
+        self.path, self.fh, self.ino, self.prime = path, None, None, prime_bytes
+
+    def lines(self):
+        try:
+            st = os.stat(self.path)
+        except OSError:
+            return []
+        if self.fh is not None and st.st_ino == self.ino and st.st_size < self.fh.tell():
+            self.fh.seek(0)                 # truncated in place (copytruncate): read from the start
+        if self.fh is None or st.st_ino != self.ino:
+            if self.fh is not None:
+                self.fh.close()             # rotated: follow the new file
+            self.fh = open(self.path, encoding="utf-8", errors="replace")
+            self.ino = st.st_ino
+            if self.prime:  # start with the recent past so existing connections get names
+                self.fh.seek(max(0, st.st_size - self.prime))
+                self.fh.readline()
+                self.prime = 0
+        return self.fh.readlines()
+
+
+# ------------------------------------------------------------------ storage
+class Store:
+    def __init__(self, conf):
+        import pymysql
+        self.pymysql, self.conf, self.db = pymysql, conf, None
+
+    def conn(self):
+        if self.db is None:
+            self.db = self.pymysql.connect(unix_socket="/run/mysqld/mysqld.sock", user=self.conf.get("DB_USER", "radius"),
+                                           password=self.conf.get("DB_PASS", ""), database=self.conf.get("DB_NAME", "radius"),
+                                           autocommit=True, connect_timeout=10)
+        return self.db
+
+    def users(self):
+        """client IP -> username of the RADIUS session active now."""
+        with self.conn().cursor() as c:
+            c.execute("SELECT framedipaddress, username FROM radacct WHERE acctstoptime IS NULL "
+                      "AND framedipaddress <> '' ORDER BY acctstarttime")
+            return {ip: u for ip, u in c.fetchall()}
+
+    def exporters(self):
+        with self.conn().cursor() as c:
+            c.execute("SELECT nasname FROM nas")
+            return [r[0] for r in c.fetchall()]
+
+    def write_ports(self, rows, keep_days):
+        """rows: (bucket, client, user, site, proto, port, dir, down, up, flows)."""
+        sql = ("INSERT INTO traffic_port (bucket, client_ip, username, site, proto, port, direction, bytes_down, bytes_up, flows) "
+               "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE username=VALUES(username), "
+               "bytes_down=bytes_down+VALUES(bytes_down), bytes_up=bytes_up+VALUES(bytes_up), flows=flows+VALUES(flows)")
+        prof = ("INSERT INTO ml_app_port (site, proto, port, direction, bytes, flows) VALUES (%s,%s,%s,%s,%s,%s) "
+                "ON DUPLICATE KEY UPDATE last_seen=NOW(), bytes=bytes+VALUES(bytes), flows=flows+VALUES(flows)")
+        profile = {}
+        for b, c, u, site, proto, port, d, down, up, fl in rows:
+            if IPV4_SITE.match(site):       # no name = not an app (scans and floods would fill the profile)
+                continue
+            k = (site, proto, port, d)
+            v = profile.setdefault(k, [0, 0])
+            v[0] += down + up
+            v[1] += fl
+        try:
+            with self.conn().cursor() as c:
+                c.executemany(sql, rows)
+                c.executemany(prof, [k + tuple(v) for k, v in profile.items()])
+                if int(time.time()) % 3600 < FLUSH_EVERY:
+                    c.execute("DELETE FROM traffic_port WHERE bucket < NOW() - INTERVAL %s DAY", (keep_days,))
+        except self.pymysql.MySQLError:
+            self.db = None
+            raise
+
+    def write_inbound(self, rows, keep_days):
+        """rows: (bucket, remote, lan ip, user, proto, port, flows, bytes in, bytes out) — from outside into the LAN."""
+        sql = ("INSERT INTO ml_inbound (bucket, remote_ip, lan_ip, username, proto, port, flows, bytes_in, bytes_out) "
+               "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE username=VALUES(username), "
+               "flows=flows+VALUES(flows), bytes_in=bytes_in+VALUES(bytes_in), bytes_out=bytes_out+VALUES(bytes_out)")
+        try:
+            with self.conn().cursor() as c:
+                c.executemany(sql, rows)
+                if int(time.time()) % 3600 < FLUSH_EVERY:
+                    c.execute("DELETE FROM ml_inbound WHERE bucket < NOW() - INTERVAL %s DAY", (keep_days,))
+        except self.pymysql.MySQLError:
+            self.db = None
+            raise
+
+    def vpn_servers(self):
+        """ip -> kind of every known VPN server (tools/vpn.py, earlier flows)."""
+        with self.conn().cursor() as c:
+            c.execute("SELECT ip, kind FROM ml_vpn_server")
+            return {ip: k for ip, k in c.fetchall()}
+
+    def write_vpn(self, rows):
+        """rows: (bucket, client, user, what, kind, remote, flows, bytes) — VPN connections seen in flows."""
+        ev = ("INSERT INTO ml_vpn_event (bucket, client_ip, username, source, what, kind, hits, bytes, first_seen, last_seen) "
+              "VALUES (%s,%s,%s,'flow',%s,%s,%s,%s,NOW(),NOW()) ON DUPLICATE KEY UPDATE username=VALUES(username), "
+              "hits=hits+VALUES(hits), bytes=bytes+VALUES(bytes), last_seen=NOW()")
+        srv = ("INSERT INTO ml_vpn_server (ip, kind, why, first_seen, last_seen) VALUES (%s,%s,%s,NOW(),NOW()) "
+               "ON DUPLICATE KEY UPDATE last_seen=NOW()")
+        try:
+            with self.conn().cursor() as c:
+                c.executemany(ev, [(b, cl, u, w, k, n, by) for b, cl, u, w, k, r, n, by in rows])
+                c.executemany(srv, [(r, k, f"traffic: {w}") for b, cl, u, w, k, r, n, by in rows])
+        except self.pymysql.MySQLError:
+            self.db = None
+            raise
+
+    def write_security(self, events):
+        """Events from sentinel.FlowWatch (virus / attack / ddos seen in the flows)."""
+        rows = [sentinel.row_values(k, e) for k, e in events.rows()]
+        if not rows:
+            return
+        try:
+            with self.conn().cursor() as c:
+                c.execute(sentinel.UPSERT.format(",".join(rows)))
+        except self.pymysql.MySQLError:
+            self.db = None
+            raise
+
+    def write(self, rows, keep_days):
+        sql = ("INSERT INTO traffic_site (bucket, client_ip, username, site, bytes_down, bytes_up, flows) "
+               "VALUES (%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE username=VALUES(username), "
+               "bytes_down=bytes_down+VALUES(bytes_down), bytes_up=bytes_up+VALUES(bytes_up), flows=flows+VALUES(flows)")
+        try:
+            with self.conn().cursor() as c:
+                c.executemany(sql, rows)
+                if int(time.time()) % 3600 < FLUSH_EVERY:
+                    c.execute("DELETE FROM traffic_site WHERE bucket < NOW() - INTERVAL %s DAY", (keep_days,))
+        except self.pymysql.MySQLError:
+            self.db = None
+            raise
+
+
+def main():
+    conf = read_conf()
+    port = int(conf.get("TRAFFIC_PORT", 2055))
+    lan = conf.get("LAN_NETS", "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10").split(",")
+    keep_days = int(conf.get("TRAFFIC_DAYS", 90))
+    store = Store(conf)
+    decoder, cls, dedupe, names = Decoder(), Classifier(lan), Dedupe(), DnsNames()
+    watch, threats_loaded = sentinel.FlowWatch(lan, conf=conf), time.time()
+    tail = Tail(DNS_LOG)
+    allowed = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"]
+    try:
+        allowed += [n for n in store.exporters()]
+    except Exception as e:  # DB down at boot: private networks only until the next restart
+        print(f"warning: cannot read NAS list: {e}", file=sys.stderr)
+    allowed_nets = []
+    for n in allowed:
+        try:
+            allowed_nets.append(ipaddress.ip_network(n, strict=False))
+        except ValueError:
+            pass
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+    sock.bind(("0.0.0.0", port))
+    sock.settimeout(1.0)
+    os.makedirs(os.path.dirname(NOW_FILE), exist_ok=True)
+    print(f"traffic collector listening on udp/{port}, LAN {','.join(lan)}", flush=True)
+
+    agg, pagg, vagg, iagg, last_flush, rejected = {}, {}, {}, {}, time.time(), 0
+    try:
+        vpn_servers = store.vpn_servers()
+    except Exception as e:
+        print(f"warning: VPN server list: {e}", file=sys.stderr)
+        vpn_servers = {}
+    while True:
+        now = time.time()
+        try:
+            data, (addr, _) = sock.recvfrom(65535)
+            if any(ipaddress.ip_address(addr) in n for n in allowed_nets):
+                for line in tail.lines():
+                    names.feed(line, now)
+                for rec in decoder.decode(data, addr):
+                    watch.feed(rec)
+                    r = cls.classify(rec)
+                    if not r or not dedupe.first(r[4], now):
+                        continue
+                    client, remote, direction, nbytes, _, proto, cport, rport = r
+                    site = names.site(client, remote)
+                    a = agg.setdefault((client, site), [0, 0, 0])
+                    a[0 if direction == "down" else 1] += nbytes
+                    a[2] += 1
+                    pdir, pport = ports.service(proto, cport, rport)
+                    pa = pagg.setdefault((client, site, int(proto or 0), int(pport), pdir), [0, 0, 0])
+                    pa[0 if direction == "down" else 1] += nbytes
+                    pa[2] += 1
+                    if pdir == "in":             # an outside address used a service on this inside device
+                        ia = iagg.setdefault((remote, client, int(proto or 0), int(pport)), [0, 0, 0])
+                        ia[0] += 1
+                        ia[1 if direction == "down" else 2] += nbytes
+                    vk = vpn.flow_kind(proto, pdir, pport, remote, vpn_servers)
+                    if vk:
+                        what = f"{remote} {ports.proto_name(proto)}/{pport}" if pport else f"{remote} {ports.proto_name(proto)}"
+                        va = vagg.setdefault((client, what, vk, remote), [0, 0])
+                        va[0] += 1
+                        va[1] += nbytes
+            else:
+                rejected += 1
+        except socket.timeout:
+            pass
+        if now - last_flush >= FLUSH_EVERY:
+            for line in tail.lines():
+                names.feed(line, now)
+            names.prune(now)
+            interval, last_flush = now - last_flush, now
+            try:
+                users = store.users()
+            except Exception as e:
+                print(f"warning: sessions: {e}", file=sys.stderr, flush=True)
+                users = {}
+            bucket = time.strftime("%Y-%m-%d %H:00:00", time.localtime(now))
+            rows = [(bucket, c, users.get(c, ""), s, v[0], v[1], v[2]) for (c, s), v in agg.items()]
+            snapshot = {"time": int(now), "interval": round(interval, 1),
+                        "rows": [{"ip": c, "user": users.get(c, ""), "site": s, "down": v[0], "up": v[1]}
+                                 for (c, s), v in agg.items()]}
+            prows = [(bucket, c, users.get(c, ""), s, pr, po, d, v[0], v[1], v[2]) for (c, s, pr, po, d), v in pagg.items()]
+            sec_events = watch.evaluate(now, interval, users)
+            try:
+                if rows:
+                    store.write(rows, keep_days)
+                agg = {}
+                if prows:
+                    store.write_ports(prows, keep_days)
+                pagg = {}
+                if iagg:
+                    store.write_inbound([(bucket, r, c, users.get(c, ""), pr, po, v[0], v[1], v[2]) for (r, c, pr, po), v in iagg.items()], keep_days)
+                iagg = {}
+                if vagg:
+                    store.write_vpn([(bucket, c, users.get(c, ""), w, k, r, v[0], v[1]) for (c, w, k, r), v in vagg.items()])
+                vagg = {}
+                vpn_servers = store.vpn_servers()
+                store.write_security(sec_events)
+            except Exception as e:  # keep the counters and retry on the next flush
+                print(f"warning: database write failed, retrying: {e}", file=sys.stderr, flush=True)
+            if now - threats_loaded > 3600:          # threat lists are refreshed weekly by radius-admin update
+                watch.threats, threats_loaded = sentinel.Threats(), now
+            tmp = NOW_FILE + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump(snapshot, fh)
+            os.replace(tmp, NOW_FILE)
+            if rejected:
+                print(f"warning: ignored {rejected} packets from unknown exporters", file=sys.stderr, flush=True)
+                rejected = 0
+
+
+if __name__ == "__main__":
+    main()

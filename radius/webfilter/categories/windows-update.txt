@@ -1,0 +1,13 @@
+# Windows Update: the update service, its downloads and Delivery Optimization (peer downloads).
+# Only update names — Office, Outlook, Teams, OneDrive, Microsoft accounts and the Store keep working.
+# Blocking the update service (HTTPS) is enough: Windows finds no updates, so it downloads nothing.
+windowsupdate.com
+windowsupdate.microsoft.com
+update.microsoft.com
+delivery.mp.microsoft.com
+do.dsp.mp.microsoft.com
+dsp.mp.microsoft.com
+emdl.ws.microsoft.com
+wustat.windows.com
+ntservicepack.microsoft.com
+download.windowsupdate.com
