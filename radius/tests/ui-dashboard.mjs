@@ -444,7 +444,7 @@ try {
     const ac = page.locator(".card", { has: page.locator("h2", { hasText: /^Alerts/ }) });
     await ac.waitFor({ timeout: 30000 });
     await page.waitForLoadState("networkidle");
-    if ((await ac.locator(".alert-events input[type=checkbox]").count()) !== 14) throw new Error("alerts: 14 event switches expected");
+    if ((await ac.locator(".alert-events input[type=checkbox]").count()) !== 15) throw new Error("alerts: 15 event switches expected");
     for (const ch of ["Telegram", "WhatsApp", "Email"]) await ac.locator(".sub-card", { hasText: ch }).first().waitFor();
     if (/AAFake|SmtpPass/.test(await page.content())) throw new Error("alerts: a secret reached the browser");
     await ac.locator("input[name=WHATSAPP_PHONE]").fill("12ab");
@@ -456,7 +456,7 @@ try {
     if (!/invalid WHATSAPP_PHONE/.test(await at.textContent())) throw new Error(`alerts: bad phone not refused: ${await at.textContent()}`);
     expect400 = false;
   }
-  ok("settings: alerts card (Telegram / WhatsApp / email, 11 events), no secrets in page, bad phone refused");
+  ok("settings: alerts card (Telegram / WhatsApp / email, 15 events), no secrets in page, bad phone refused");
   {
     const nc = page.locator(".card", { has: page.locator("h2", { hasText: "Warn users before it runs out" }) });
     await nc.waitFor({ timeout: 30000 });

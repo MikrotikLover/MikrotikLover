@@ -462,8 +462,37 @@ class Checks:
         if not bad:
             self.add("mail", g, "Mail server", "ok", f"{len(res.get('checks', []))} checks fine ({res.get('at', '')})")
 
+    def devices(self):
+        """SNMP devices: the minute job runs, who does not answer, the trap receiver."""
+        try:
+            rows = self.sql("SELECT name, status, enabled FROM ml_snmp_device")
+        except RuntimeError:
+            return
+        trapd = (self.sql("SELECT v FROM ml_setting WHERE k='snmp_trapd'") or [["0"]])[0][0] == "1"
+        if not rows and not trapd:
+            return
+        g = "Devices (SNMP)"
+        if rows:
+            age = file_age("/var/lib/mikrotiklover/snmp-poll.stamp")
+            if age is None or age > 300:
+                self.add("snmp-poll", g, "Device checks every minute", "fail", "not run " + ("yet" if age is None else f"since {age_text(age)}"),
+                         "cron runs 'radius-admin snmp poll' every minute: sudo radius-admin snmp poll (shows errors); is cron running?")
+            else:
+                self.add("snmp-poll", g, "Device checks every minute", "ok", f"last run {age_text(age)}")
+            down = [r[0] for r in rows if len(r) == 3 and r[1] == "down" and r[2] == "1"]
+            on = [r for r in rows if len(r) == 3 and r[2] == "1"]
+            if down:
+                self.add("snmp-down", g, "Devices answer", "warn", f"{len(down)} of {len(on)} do not answer: {', '.join(down[:8])}",
+                         "Power / cable of the device; Devices page → the device → Last error")
+            else:
+                self.add("snmp-down", g, "Devices answer", "ok", f"all {len(on)} answer")
+        if trapd:
+            ok = running(r"mikrotiklover/snmp[.]py .*trapd")
+            self.add("snmp-trapd", g, "Trap receiver (UDP 162)", "ok" if ok else "fail", "running" if ok else "stopped",
+                     "sudo radius-admin snmp trapd on   (port 162 in use by snmptrapd? then: sudo systemctl disable --now snmptrapd)")
+
     def run(self):
-        for f in (self.services, self.jobs, self.system, self.routers, self.blocking, self.firewall, self.ips, self.mail):
+        for f in (self.services, self.jobs, self.system, self.routers, self.blocking, self.firewall, self.ips, self.mail, self.devices):
             try:
                 f()
             except Exception as e:  # noqa: BLE001 — one broken check must not hide the others

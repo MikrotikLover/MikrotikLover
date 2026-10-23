@@ -52,6 +52,7 @@ const ICONS = {
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14m10 3-5.2-5.2",
   block: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M5.6 5.6l12.8 12.8",
   flag: "M5 21V4m0 0h11l-2 4 2 4H5",
+  device: "M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01M12 7h4M12 17h4",
   mail: "M3 6h18v12H3zM3 7l9 6 9-6",
   wall: "M3 5h18v14H3zM3 9.7h18M3 14.3h18M9 5v4.7M15 9.7v4.6M9 14.3V19",
   shield: "M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6zM12 8v5m0 3h.01",
@@ -223,7 +224,7 @@ const legend = () => h("div", { class: "legend" }, h("span", {}, h("i", { class:
 // ------------------------------------------------------------------ shell + router
 const NAV = [
   ["dashboard", "Dashboard", "home"], ["golive", "Setup steps", "flag"], ["users", "Users", "users"], ["groups", "Groups & policies", "groups"], ["departments", "Departments", "team"],
-  ["macs", "MAC devices", "mac"], ["ipbind", "IP binding", "pin"], ["routers", "Routers", "router"], ["setup", "Router setup", "term"], "-",
+  ["macs", "MAC devices", "mac"], ["ipbind", "IP binding", "pin"], ["routers", "Routers", "router"], ["devices", "Devices (SNMP)", "device"], ["setup", "Router setup", "term"], "-",
   ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], ["speed", "Speed schedule", "clock"], ["hotspot", "Hotspot page", "brush"], ["social", "Social WiFi", "phone"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["insights", "Insights (samajh)", "bulb"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
   ["traffic", "Traffic graphs", "graph"], ["data", "Data usage", "data"], ["apps", "Apps on network", "apps"], ["ports", "Ports & protocols", "ports"], "-",
@@ -916,7 +917,7 @@ const ALERT_EVENTS = [
   ["security", "Virus, hacker attack, DDoS", "only HIGH danger"], ["quarantine", "Device quarantined", "automatic or by an admin"],
   ["router", "Router down / back", "router stops answering (2 checks)"], ["service", "Server service stopped", "FreeRADIUS, database, DNS logger, traffic"],
   ["jobs", "Backup / update failed", "nightly backup, off-site copy, updates"], ["disk", "Disk almost full", "under 10% free"],
-  ["expiring", "Users expiring", "subscription ends within 24 hours"], ["anomaly", "Unusual data use", "a user uses 10x a normal day"], ["requests", "Unblock requests", "a user asks to open a blocked site (block page)"], ["newapp", "New apps", "an app never seen before is used (with Android / iPhone devices)"], ["health", "Health check", "the hourly self-check finds a problem, and when it is fine again"],
+  ["expiring", "Users expiring", "subscription ends within 24 hours"], ["anomaly", "Unusual data use", "a user uses 10x a normal day"], ["requests", "Unblock requests", "a user asks to open a blocked site (block page)"], ["newapp", "New apps", "an app never seen before is used (with Android / iPhone devices)"], ["health", "Health check", "the hourly self-check finds a problem, and when it is fine again"], ["devices", "Devices (SNMP)", "UPS on battery, a device stops answering, printer jam / toner, watched port down"],
   ["summary", "Daily summary", "users, data, sales, security"], ["weekly", "Weekly report", "Monday: top users & apps, this week vs last"],
   ["monthly", "Monthly security report", "1st of the month: PDF by email / Telegram"]];
 const alertsCard = async () => {
@@ -3680,6 +3681,252 @@ function netPolicyCard(meta) {
     { label: "", render: (n) => isAdmin() ? h("button", { class: "small danger", onclick: async () => {
       if (await confirmDlg("Remove", `Remove policy ${n.policy} from ${n.target}?`, "Remove") && await act(api("POST", `/api/policies/net/${n.id}/del`, {}))) { blSummary = null; route(); } } }, "Remove") : null }],
     nets, "None — e.g. give 'staff' to the whole office LAN: Give a policy → Network / IP."));
+}
+
+// ------------------------------------------------------------------ devices through SNMP (switch, UPS, printer, MikroTik, server, camera)
+const DEV_KIND = { switch: "Switch", ups: "UPS", printer: "Printer", mikrotik: "MikroTik", server: "Server", camera: "Camera / NVR", other: "Other" };
+const devStatus = (d) => !d.enabled ? badge("off", "") : d.status === "up" ? (d.info && d.info.ups && d.info.ups.source === "battery" ? badge("ON BATTERY", "bad") : badge("answers", "ok"))
+  : d.status === "down" ? badge("NO ANSWER", "bad") : badge("checking…", "info");
+const tonerMeter = (pct) => { const bar = h("i", {}); bar.style.width = `${Math.min(100, Math.max(0, pct))}%`; return h("div", { class: "meter " + (pct <= 10 ? "bad" : pct <= 25 ? "warn" : "ok") }, bar); };
+const tsEpoch = (t) => new Date(t.replace(" ", "T")).getTime() / 1000;
+
+function valueChart(series, unit, top = null) {      // series: [[t, v]] -> one line
+  const W = 720, H = 180, P = { l: 52, r: 10, t: 10, b: 24 };
+  const vals = series.map((p) => p[1]);
+  const max = top || Math.max(...vals, 1) * 1.15;
+  const n = Math.max(series.length - 1, 1);
+  const x = (i) => P.l + (i / n) * (W - P.l - P.r), y = (v) => H - P.b - (v / max) * (H - P.t - P.b);
+  const kids = [];
+  for (let i = 0; i <= 4; i++) {
+    const v = (max / 4) * i;
+    kids.push(svg("line", { class: "grid-line", x1: P.l, x2: W - P.r, y1: y(v), y2: y(v) }), svg("text", { class: "axis", x: P.l - 6, y: y(v) + 4, "text-anchor": "end" }, `${v >= 10 ? v.toFixed(0) : v.toFixed(1)}${unit}`));
+  }
+  const every = Math.ceil(series.length / 7);
+  series.forEach((p, i) => { if (i % every === 0) kids.push(svg("text", { class: "axis", x: x(i), y: H - 6, "text-anchor": "middle" }, p[0].slice(11, 16))); });
+  if (series.length) {
+    const d = series.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p[1]).toFixed(1)}`).join("");
+    kids.push(svg("path", { class: "area-down", d: `${d}L${x(series.length - 1)},${y(0)}L${x(0)},${y(0)}Z` }), svg("path", { class: "line-down", d }));
+  }
+  const tip = h("div", { class: "chart-tip" }); tip.style.display = "none";
+  const hover = svg("g", { class: "hover" });
+  const box = svg("svg", { class: "chart", viewBox: `0 0 ${W} ${H}`, role: "img" }, kids, hover);
+  box.addEventListener("mousemove", (e) => {
+    const r = box.getBoundingClientRect(), i = Math.max(0, Math.min(series.length - 1, Math.round((((e.clientX - r.left) / r.width) * W - P.l) / (W - P.l - P.r) * n)));
+    const p = series[i]; if (!p) return;
+    hover.replaceChildren(svg("line", { class: "hover-line", x1: x(i), x2: x(i), y1: P.t, y2: H - P.b }));
+    tip.textContent = `${p[0]} — ${p[1]}${unit}`; tip.style.display = "";
+  });
+  box.addEventListener("mouseleave", () => { hover.replaceChildren(); tip.style.display = "none"; });
+  return h("div", { class: "chart-wrap" }, box, tip);
+}
+
+function snmpSecretFields(pre = {}) {
+  const ver = h("select", { name: "version" }, [["2c", "v2c (community)"], ["1", "v1 (old devices)"], ["3", "v3 (user + password, encrypted)"]].map(([v, l]) => h("option", { value: v, selected: v === (pre.version || "2c") }, l)));
+  const v12 = h("div", { class: "stack" }, h("label", { class: "field" }, "Community", h("input", { name: "community", placeholder: "public", autocomplete: "off", maxlength: 64 }),
+    h("span", { class: "help" }, "the device's read-only SNMP password (often 'public' — better change it on the device)")));
+  const v3 = h("div", { class: "stack", hidden: true },
+    h("div", { class: "grid g-2" }, h("label", { class: "field" }, "User", h("input", { name: "user", autocomplete: "off", maxlength: 32 })),
+      h("label", { class: "field" }, "Login check", h("select", { name: "auth" }, ["SHA", "SHA-256", "MD5"].map((v) => h("option", { value: v }, v))))),
+    h("div", { class: "grid g-2" }, h("label", { class: "field" }, "Login password", h("input", { name: "authpass", type: "password", autocomplete: "new-password", maxlength: 64 })),
+      h("label", { class: "field" }, "Encryption", h("select", { name: "priv" }, ["AES", "AES-256", "DES"].map((v) => h("option", { value: v }, v))))),
+    h("label", { class: "field" }, "Encryption password", h("input", { name: "privpass", type: "password", autocomplete: "new-password", maxlength: 64 }),
+      h("span", { class: "help" }, "8-64 characters each; leave the encryption password empty for 'auth, no encryption'")));
+  const sync = () => { v12.hidden = ver.value === "3"; v3.hidden = ver.value !== "3"; };
+  ver.addEventListener("change", sync); sync();
+  return [h("label", { class: "field" }, "SNMP version", ver), v12, v3];
+}
+
+function deviceAddDialog(kinds, pre = {}) {
+  const out = h("div", { class: "muted small" });
+  const form = h("form", { class: "form", onsubmit: (e) => e.preventDefault() },
+    h("div", { class: "grid g-2" }, h("label", { class: "field" }, "IP address", h("input", { name: "ip", value: pre.ip || "", placeholder: "192.168.88.5", required: true })),
+      h("label", { class: "field" }, "Name (optional)", h("input", { name: "name", value: pre.name || "", placeholder: "UPS server room", maxlength: 64 }))),
+    h("label", { class: "field" }, "Kind", h("select", { name: "kind" }, h("option", { value: "" }, "find out by itself"), kinds.map((k) => h("option", { value: k, selected: k === pre.kind }, DEV_KIND[k])))),
+    ...snmpSecretFields(pre),
+    h("label", { class: "check" }, h("input", { type: "checkbox", name: "nocheck" }), h("div", {}, h("b", {}, "Add even if it does not answer now"), h("span", {}, "e.g. SNMP not switched on yet"))),
+    out);
+  const vals = () => { const v = formValues(form); v.nocheck = form.querySelector("[name=nocheck]").checked; if (pre.community && !v.community) v.community = pre.community; return v; };
+  dialog("Add a device", form, [{ label: "Cancel" },
+    { label: "Test", action: async () => {
+      out.textContent = "asking the device…";
+      try { const r = await api("POST", "/api/devices/test", vals()); out.replaceChildren(badge("answers", "ok"), ` ${r.info.sys.name || r.info.ip}: ${DEV_KIND[r.info.kind]} — ${r.info.line} (${r.info.rtt} ms)`); }
+      catch (e) { out.replaceChildren(badge("no answer", "bad"), " ", e.message); }
+      return false; } },
+    { label: "Add", class: "primary", action: async () => { if (!(await act(api("POST", "/api/devices/add", vals()), "Device added"))) return false; route(); } }]);
+}
+
+function deviceFindDialog(kinds, have) {
+  const res = h("div", { class: "stack" });
+  const form = h("form", { class: "form", onsubmit: (e) => e.preventDefault() },
+    h("div", { class: "grid g-2" }, h("label", { class: "field" }, "Network", h("input", { name: "net", value: "192.168.88.0/24", placeholder: "192.168.88.0/24" }),
+      h("span", { class: "help" }, "/22 to /32 (up to 1024 addresses); takes a few seconds")),
+      h("label", { class: "field" }, "Community", h("input", { name: "community", placeholder: "public", maxlength: 64 }))), res);
+  dialog("Find devices that answer SNMP", form, [{ label: "Close" }, { label: "Search", class: "primary", action: async () => {
+    res.replaceChildren(h("div", { class: "muted" }, "searching…"));
+    try {
+      const v = formValues(form);
+      const r = await api("POST", "/api/devices/find", v);
+      res.replaceChildren(r.found.length ? table([{ label: "IP", render: (x) => h("code", {}, x.ip) }, { label: "Name", key: "name" }, { label: "Kind", render: (x) => DEV_KIND[x.kind] },
+        { label: "What it says", render: (x) => h("span", { class: "small muted" }, x.descr.slice(0, 70)), wrap: true },
+        { label: "", render: (x) => x.added ? badge("in the list", "ok") : h("button", { class: "small", type: "button", onclick: () => { document.querySelector("dialog[open]").close(); deviceAddDialog(kinds, { ip: x.ip, name: x.name, kind: x.kind, community: v.community }); } }, "Add") }],
+        r.found) : h("div", { class: "empty" }, "Nothing answered. SNMP off on the devices, another community, or a firewall in between?"));
+    } catch (e) { res.replaceChildren(h("div", { class: "empty" }, e.message)); }
+    return false; } }]);
+}
+
+const devTabs = (tab) => h("div", { class: "tabs" }, [["", "Devices"], ["traps", "Traps"], ["settings", "Settings"]].map(([k, l]) => h("a", { href: `#/devices${k ? "/" + k : ""}`, class: k === tab ? "active" : "" }, l)));
+
+ROUTES.devices = async (sub = "", ...rest) => {
+  if (/^\d+$/.test(sub)) return deviceDetail(sub, rest[0]);
+  const d = await api("GET", "/api/devices");
+  if (sub === "traps") return devicesTraps(d);
+  if (sub === "settings") return devicesSettings(d);
+  const on = d.devices.filter((x) => x.enabled), down = on.filter((x) => x.status === "down");
+  const battery = on.filter((x) => x.status === "up" && x.info.ups && x.info.ups.source === "battery");
+  const printers = on.filter((x) => x.kind === "printer" && x.info.printer && ((x.info.printer.errors || []).length || (x.info.supplies || []).some((s) => s.pct !== null && s.pct <= d.settings.limits.toner)));
+  let state = "ok", title = `All ${on.length} device(s) answer`, text = d.poll_age === null ? "first check within a minute" : `checked every minute (last ${d.poll_age < 120 ? "just now" : Math.round(d.poll_age / 60) + " min ago"})`;
+  if (!on.length) { state = "warn"; title = "No devices yet"; text = "Add a switch, UPS, printer, server … or let the server find them (Find devices). MikroTik routers: Add my MikroTik routers."; }
+  else if (battery.length) { state = "fail"; title = `UPS on battery: ${battery.map((x) => x.name).join(", ")}`; text = "Mains power is gone — " + battery.map((x) => x.line).join(" | "); }
+  else if (down.length) { state = "fail"; title = `${down.length} device(s) do not answer`; text = down.map((x) => `${x.name} (${x.ip})`).join(", "); }
+  if (d.poll_age !== null && d.poll_age > 300 && on.length) { state = "fail"; title = "Device checks are not running"; text = "cron runs 'radius-admin snmp poll' every minute — Health check shows why."; }
+  const notAdded = d.routers.filter((r) => !r.added);
+  const bar = isAdmin() ? h("div", { class: "toolbar" },
+    h("button", { class: "primary", onclick: () => deviceAddDialog(d.kinds) }, "+ Add device"),
+    h("button", { onclick: () => deviceFindDialog(d.kinds) }, icon("search"), "Find devices"),
+    notAdded.length ? h("button", { onclick: async () => { if (await act(api("POST", "/api/devices/routers", {}))) route(); } }, icon("router"), `Add my MikroTik routers (${notAdded.length})`) : null) : null;
+  const icons = { switch: "ports", ups: "pulse", printer: "reports", mikrotik: "router", server: "data", camera: "online", other: "device" };
+  shell("Devices", h("div", { class: "stack" }, devTabs(""),
+    h("div", { class: `card health-hero ${state}` }, h("div", { class: "hh-mark" }, state === "ok" ? "✔" : "!"),
+      h("div", { class: "grow" }, h("div", { class: "hh-title" }, title), h("div", { class: "muted" }, text)), bar),
+    on.length ? h("div", { class: "grid g-tiles" }, tile("Devices", num(on.length), `${num(d.devices.length - on.length)} switched off`),
+      tile("Not answering", num(down.length), down.length ? down.slice(0, 3).map((x) => x.name).join(", ") : "none"),
+      tile("UPS", num(on.filter((x) => x.kind === "ups").length), battery.length ? "ON BATTERY" : "on mains"),
+      tile("Printers to look at", num(printers.length), printers.length ? printers.map((x) => x.name).join(", ") : "fine"),
+      tile("Traps today", num(d.traps_day.n), d.settings.trapd_running ? `${num(d.traps_day.high)} high` : "receiver off (Settings)")) : null,
+    card("Devices", "click a device for its ports, graphs and history", table([
+      { label: "Device", render: (x) => h("a", { href: `#/devices/${x.id}`, class: "dev-name" }, icon(icons[x.kind] || "device"), h("span", {}, h("b", {}, x.name), h("div", { class: "muted small" }, DEV_KIND[x.kind] || x.kind))) },
+      { label: "IP", render: (x) => h("code", {}, x.ip) }, { label: "Status", render: devStatus },
+      { label: "Now", render: (x) => x.status === "down" ? h("span", { class: "small muted" }, x.last_error) : h("span", { class: "small" }, x.line || "—"), wrap: true },
+      { label: "Up for", render: (x) => x.status === "up" && x.uptime ? duration(x.uptime) : "—" },
+      { label: "Last answer", render: (x) => x.last_ok ? ago(x.last_ok) : "never" }], d.devices,
+      "No devices yet — + Add device, or Find devices to look through your network.")),
+    d.events.length ? card("What happened", "newest first", h("div", { class: "stack" }, d.events.slice(0, 15).map((e) => h("div", { class: "dev-ev" },
+      badge(e.severity === "high" ? "HIGH" : e.severity, e.severity === "high" ? "bad" : e.severity === "medium" ? "warn" : ""), h("span", { class: "muted small" }, e.ts.slice(5, 16)), h("span", {}, e.text))))) : null,
+    hint("How it works", h("ul", { class: "g-list" },
+      h("li", {}, "The server asks every device once a minute (SNMP, read only): does it answer, CPU, memory, disks, temperature, ports and traffic; a UPS: mains or battery, charge, minutes left; a printer: toner / ink, paper jam."),
+      h("li", {}, "Alerts (Telegram / WhatsApp / email) at once: no answer for 2 minutes, UPS on battery / battery low / power back, printer jam or toner low, CPU high for 5 minutes, disk full, too hot, a watched port down."),
+      h("li", {}, "Traps: the device tells the server itself (Settings → Trap receiver). A port is only alerted if you watch it (device → Ports → Watch)."),
+      h("li", {}, "On the device: switch SNMP on, read only, allow only this server's IP. MikroTik: Router setup → SNMP does it.")))));
+};
+
+async function deviceDetail(id, hours = "24") {
+  const d = await api("GET", `/api/devices/${id}?hours=${hours}`);
+  const x = d.device, inf = x.info || {};
+  const doIt = async (action, data, msg) => { if (await act(api("POST", `/api/devices/${id}/${action}`, data || {}), msg)) route(); };
+  const ranges = h("div", { class: "seg" }, [["6", "6 h"], ["24", "24 h"], ["168", "7 days"], ["720", "30 days"]].map(([v, l]) => h("button", { type: "button", class: v === String(d.hours) ? "on" : "", onclick: () => { location.hash = `#/devices/${id}/${v}`; } }, l)));
+  const tiles = [];
+  if (inf.ups) {
+    const u = inf.ups;
+    tiles.push(tile("Power", u.source === "battery" ? "ON BATTERY" : u.source, u.battery !== "unknown" ? `battery ${u.battery}` : ""), tile("Charge", u.charge != null ? `${u.charge}%` : "—", u.runtime != null ? `${u.runtime} min left` : ""),
+      tile("Load", u.load != null ? `${u.load}%` : "—", u.in_volt != null ? `input ${u.in_volt} V` : ""));
+    if (u.replace) tiles.push(tile("Battery", "REPLACE", "the UPS asks for a new battery"));
+  }
+  if (inf.printer) tiles.push(tile("Printer", (inf.printer.errors || []).join(", ") || inf.printer.status, inf.printer.pages != null ? `${num(inf.printer.pages)} pages printed` : ""));
+  if (inf.cpu != null) tiles.push(tile("CPU", `${inf.cpu.toFixed(0)}%`, ""));
+  if (inf.mem != null) tiles.push(tile("Memory", `${inf.mem.toFixed(0)}%`, ""));
+  (inf.sensors || []).filter((s) => s.unit === "°C").slice(0, 3).forEach((s) => tiles.push(tile(s.name, `${s.value}°C`, "")));
+  if (inf.rtt != null) tiles.push(tile("Answer time", `${inf.rtt} ms`, ""));
+  const GR = { cpu: ["CPU", "%", 100], mem: ["Memory", "%", 100], temp: ["Temperature", "°C", null], charge: ["UPS charge", "%", 100], runtime: ["Minutes left on battery", " min", null], load: ["UPS load", "%", 100], rtt: ["Answer time", " ms", null] };
+  const graphs = Object.entries(GR).filter(([k]) => (d.graphs[k] || []).length > 1).map(([k, [t, u, top]]) => card(t, null, valueChart(d.graphs[k], u, top)));
+  const ifGraph = h("div", {});
+  const showIf = async (i) => {
+    const g = await api("GET", `/api/devices/${id}?hours=${d.hours}&k=if:${i.ifindex}:in,if:${i.ifindex}:out`);
+    const inn = g.graphs[`if:${i.ifindex}:in`] || [], out = Object.fromEntries((g.graphs[`if:${i.ifindex}:out`] || []).map((p) => [p[0], p[1]]));
+    ifGraph.replaceChildren(card(`Port ${i.name}${i.alias ? " — " + i.alias : ""}`, "traffic (every 5 minutes)",
+      inn.length > 1 ? lineChart(inn.map((p) => ({ t: tsEpoch(p[0]), rx_bps: p[1], tx_bps: out[p[0]] || 0 })), 300, ["In", "Out"]) : h("div", { class: "empty" }, "No traffic numbers yet (every 5 minutes, ports that are up)."),
+      legend()));
+    ifGraph.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  };
+  const sup = (inf.supplies || []);
+  shell("Devices", h("div", { class: "stack" }, devTabs(""),
+    h("div", { class: "card health-hero " + (x.status === "up" ? (inf.ups && inf.ups.source === "battery" ? "fail" : "ok") : x.status === "down" ? "fail" : "warn") },
+      h("div", { class: "hh-mark" }, x.status === "up" ? "✔" : "!"),
+      h("div", { class: "grow" }, h("div", { class: "hh-title" }, `${x.name} `, devStatus(x)),
+        h("div", { class: "muted" }, `${DEV_KIND[x.kind] || x.kind} · ${x.ip}${x.port !== 161 ? ":" + x.port : ""} · SNMP v${x.version}${x.location ? " · " + x.location : ""}`),
+        h("div", { class: "muted small" }, x.status === "down" ? `Last error: ${x.last_error}` : x.sysdescr.slice(0, 160)),
+        x.status === "up" ? h("div", { class: "small" }, x.line, x.uptime ? ` · up ${duration(x.uptime)}` : "") : null),
+      h("div", { class: "toolbar" }, ranges, isAdmin() ? h("button", { class: "small", onclick: () => doIt("poll", {}, "Checked") }, icon("refresh"), "Check now") : null)),
+    tiles.length ? h("div", { class: "grid g-tiles" }, tiles) : null,
+    sup.length ? card("Toner / ink / drums", null, h("div", { class: "stack" }, sup.map((s) => h("div", { class: "dev-sup" }, h("span", { class: "grow" }, s.name),
+      s.pct === null ? h("span", { class: "muted small" }, s.level === -3 ? "some left" : "not told") : tonerMeter(s.pct), s.pct !== null ? h("b", { class: s.pct <= 10 ? "bad-text" : "" }, `${s.pct}%`) : null)))) : null,
+    graphs.length ? h("div", { class: "grid g-2" }, graphs) : null,
+    d.ifs.length ? card("Ports", `${d.ifs.filter((i) => i.oper === "up").length} of ${d.ifs.length} up · Watch = alert when it goes down`, table([
+      { label: "Port", render: (i) => h("a", { href: "javascript:void 0", onclick: () => showIf(i) }, h("b", {}, i.name), i.alias ? h("div", { class: "muted small" }, i.alias) : null) },
+      { label: "State", render: (i) => i.admin === "down" ? badge("switched off", "") : i.oper === "up" ? badge("up", "ok") : badge(i.oper, "warn") },
+      { label: "Speed", render: (i) => i.speed ? (i.speed >= 1000 ? `${i.speed / 1000} G` : `${i.speed} M`) : "—" },
+      { label: "In now", render: (i) => bps(i.in_bps), num: true }, { label: "Out now", render: (i) => bps(i.out_bps), num: true },
+      { label: "Errors", render: (i) => (i.in_err + i.out_err) ? h("span", { class: "small" }, num(i.in_err + i.out_err)) : "0", num: true },
+      { label: "Changed", render: (i) => i.changed ? ago(i.changed) : "—" },
+      { label: "Watch", render: (i) => h("input", { type: "checkbox", checked: !!i.watch, disabled: !isAdmin(), title: "alert when this port goes down",
+        onchange: (e) => doIt("watch", { ifindex: String(i.ifindex), on: e.target.checked }, e.target.checked ? `Watching ${i.name}` : `Not watching ${i.name}`) }) }], d.ifs)) : null,
+    ifGraph,
+    h("div", { class: "grid g-2" },
+      card("What happened", null, d.events.length ? h("div", { class: "stack" }, d.events.slice(0, 20).map((e) => h("div", { class: "dev-ev" },
+        badge(e.severity === "high" ? "HIGH" : e.severity, e.severity === "high" ? "bad" : e.severity === "medium" ? "warn" : ""), h("span", { class: "muted small" }, e.ts.slice(5, 16)), h("span", {}, e.text))))
+        : h("div", { class: "empty" }, "Nothing yet.")),
+      card("Traps from it", null, d.traps.length ? h("div", { class: "stack" }, d.traps.slice(0, 20).map((t) => h("div", { class: "dev-ev" },
+        badge(t.severity === "high" ? "HIGH" : t.severity, t.severity === "high" ? "bad" : t.severity === "medium" ? "warn" : ""), h("span", { class: "muted small" }, t.ts.slice(5, 16)), h("span", {}, t.words))))
+        : h("div", { class: "empty" }, "No traps yet (Settings → Trap receiver)."))),
+    isAdmin() ? card("Settings", null, h("div", { class: "toolbar wrap" },
+      h("label", { class: "field" }, "Name", h("input", { value: x.name, maxlength: 64, onchange: (e) => doIt("name", { name: e.target.value.trim() }, "Name saved") })),
+      h("label", { class: "field" }, "Kind", h("select", { onchange: (e) => doIt("kind", { kind: e.target.value }, "Kind saved") },
+        h("option", { value: "auto" }, "find out by itself"), d.kinds.map((k) => h("option", { value: k, selected: !x.kind_auto && k === x.kind }, DEV_KIND[k])))),
+      h("label", { class: "check" + (x.alerts ? " on" : "") }, h("input", { type: "checkbox", checked: !!x.alerts, onchange: (e) => doIt("alerts", { on: e.target.checked }) }), h("div", {}, h("b", {}, "Alerts"), h("span", {}, "Telegram / WhatsApp / email"))),
+      h("label", { class: "check" + (x.enabled ? " on" : "") }, h("input", { type: "checkbox", checked: !!x.enabled, onchange: (e) => doIt("enabled", { on: e.target.checked }) }), h("div", {}, h("b", {}, "Check it"), h("span", {}, "off = kept, not asked"))),
+      h("button", { class: "small", onclick: () => {
+        const form = h("form", { class: "form", onsubmit: (e) => e.preventDefault() }, ...snmpSecretFields({ version: x.version }));
+        dialog("Community / SNMP user", form, [{ label: "Cancel" }, { label: "Save", class: "primary", action: async () => { if (!(await act(api("POST", `/api/devices/${id}/secret`, formValues(form)), "Saved"))) return false; route(); } }]);
+      } }, "Change community / user"),
+      h("button", { class: "small danger", onclick: async () => { if (await confirmDlg("Remove device", `Remove ${x.name} (${x.ip})? Its history goes too.`, "Remove") && await act(api("POST", `/api/devices/${id}/del`, {}))) location.hash = "#/devices"; } }, "Remove"))) : null));
+}
+
+async function devicesTraps(dd) {
+  const days = location.hash.split("/")[3] || "7";
+  const d = await api("GET", `/api/devices/traps?days=${days}`);
+  const sel = h("select", { onchange: (e) => { location.hash = `#/devices/traps/${e.target.value}`; } }, [["1", "Today"], ["7", "7 days"], ["30", "30 days"], ["90", "90 days"]].map(([v, l]) => h("option", { value: v, selected: v === String(d.days) }, l)));
+  shell("Devices", h("div", { class: "stack" }, devTabs("traps"),
+    !dd.settings.trapd_running ? h("div", { class: "card health-hero warn" }, h("div", { class: "hh-mark" }, "!"), h("div", { class: "grow" }, h("div", { class: "hh-title" }, "The trap receiver is off"),
+      h("div", { class: "muted" }, "Devices → Settings → Trap receiver: on. Then point the devices' traps to this server (UDP 162)."))) : null,
+    card("Traps", "what the devices told the server by themselves", h("div", { class: "toolbar" }, sel, h("span", { class: "muted small" }, `${num(d.traps.length)} trap(s)`)),
+      table([{ label: "When", render: (t) => h("span", { class: "small" }, t.ts.slice(5, 16)) },
+        { label: "Device", render: (t) => t.device_id ? h("a", { href: `#/devices/${t.device_id}` }, t.name) : h("span", {}, h("code", {}, t.src_ip), h("div", { class: "muted small" }, "not in the list")) },
+        { label: "Level", render: (t) => badge(t.severity === "high" ? "HIGH" : t.severity, t.severity === "high" ? "bad" : t.severity === "medium" ? "warn" : "") },
+        { label: "What", render: (t) => h("details", { class: "small" }, h("summary", {}, t.words, t.alerted ? h("span", { class: "muted" }, " · alert sent") : null),
+          h("pre", { class: "code-box" }, `${t.trap_oid}  (v${t.version})\n` + t.vars.map((v) => `${v.oid} = ${v.value}`).join("\n"))), wrap: true }], d.traps,
+        "No traps in this time."))));
+}
+
+function devicesSettings(d) {
+  const s = d.settings;
+  const doIt = async (action, data, msg) => { if (await act(api("POST", `/api/devices/${action}`, data), msg)) route(); };
+  const lim = (k, label, unit) => h("label", { class: "field" }, label, h("input", { type: "number", min: 1, max: 150, value: s.limits[k], disabled: !isAdmin(), onchange: (e) => doIt("limit", { key: k, value: e.target.value }, "Saved") }), h("span", { class: "help" }, unit));
+  const comm = h("input", { placeholder: "new trap community", maxlength: 64, autocomplete: "off" });
+  shell("Devices", h("div", { class: "stack" }, devTabs("settings"),
+    card("Trap receiver", s.trapd_running ? "running on UDP 162" : "off", h("div", { class: "stack" },
+      h("label", { class: "check" + (s.trapd ? " on" : "") }, h("input", { type: "checkbox", checked: s.trapd, disabled: !isAdmin(), onchange: (e) => doIt("trapd", { on: e.target.checked }) }),
+        h("div", {}, h("b", {}, "Receive traps"), h("span", {}, "Devices tell the server at once: UPS on battery, port down, printer jam, restart. Only from the community below or a device's own community."))),
+      s.trapd && !s.trapd_running ? h("div", {}, badge("not running", "bad"), " port 162 used by another program (snmptrapd)? Health check shows it.") : null,
+      isAdmin() ? h("div", { class: "toolbar" }, comm, h("button", { class: "small", onclick: () => comm.value.trim() && doIt("trap-community", { community: comm.value.trim() }, "Trap community saved") }, "Set trap community")) : null,
+      h("div", { class: "muted small" }, `On each device: trap / notification receiver = ${s.server_ip || "this server's IP"}, port 162, v2c, the same community. A device not in the list is shown as 'not in the list' without alerts.`))),
+    card("When to alert", "for all devices", h("div", { class: "grid g-tiles" }, lim("toner", "Toner / ink low at", "%"), lim("cpu", "CPU high at (5 min)", "%"), lim("disk", "Disk full at", "%"),
+      lim("temp", "Too hot at", "°C"), lim("ups-load", "UPS load too high at", "%"))),
+    card("Setting up the devices", null, h("ul", { class: "g-list" },
+      h("li", {}, h("b", {}, "MikroTik: "), "Router setup → tick SNMP → the router gets a secret read-only community for this server only, and sends traps here. Or: Devices → Add my MikroTik routers."),
+      h("li", {}, h("b", {}, "Switch (TP-Link, D-Link, Cisco, HP …): "), "web page → SNMP → on, community (read only), allowed host = this server; Trap = this server."),
+      h("li", {}, h("b", {}, "UPS (APC, Eaton …): "), "needs a network card (APC AP9630 / NMC, Eaton Network-M2 …) → SNMP v1/v3 on, access for this server, trap receiver = this server."),
+      h("li", {}, h("b", {}, "Printer: "), "printer web page → Networking → SNMP on (often v1/v2 'public' read only)."),
+      h("li", {}, h("b", {}, "Windows server: "), "Settings → Optional features → SNMP Service; Services → SNMP Service → Security: community, accept from this server. Linux: apt install snmpd."),
+      h("li", {}, h("b", {}, "Safer: "), "v3 with user + password + encryption where the device has it; never 'public' with write access.")))));
 }
 
 // ------------------------------------------------------------------ step-by-step setup: one part at a time, each checked

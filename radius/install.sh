@@ -39,6 +39,7 @@ apt-get update -qq
 apt-get install -y -qq freeradius freeradius-mysql freeradius-utils mariadb-server openssl rsyslog python3 python3-pymysql dnsmasq-base openssh-client iputils-ping >/dev/null
 # eapol_test lets "radius-admin test --peap" simulate a real Wi-Fi client (optional package)
 apt-get install -y -qq eapoltest >/dev/null 2>&1 || warn "eapoltest not available; PEAP self-test disabled"
+apt-get install -y -qq snmp >/dev/null 2>&1 || warn "net-snmp tools not available: SNMP v3 devices cannot be read (v1 / v2c work)"
 [ -d "$RADDB" ] || die "$RADDB not found — unexpected FreeRADIUS layout"
 
 # ---------------------------------------------------------------- settings
@@ -219,6 +220,8 @@ cat > /etc/cron.d/mikrotiklover <<'EOF'
 2-59/5 * * * * root /usr/local/sbin/radius-admin alerts check >/dev/null 2>&1
 # intrusion prevention (radius-admin ips on): Suricata alerts -> Security page, blocks -> routers (does nothing while off)
 * * * * * root /usr/local/sbin/radius-admin ips scan >/dev/null 2>&1
+# devices through SNMP (radius-admin snmp add): who answers, UPS / printer / ports, alerts (does nothing without devices)
+* * * * * root /usr/local/sbin/radius-admin snmp poll --quiet >/dev/null 2>&1
 # nightly complete backup (newest 14 kept in /var/backups/mikrotiklover)
 43 2 * * * root /usr/local/sbin/radius-admin backup --auto --quiet >/dev/null 2>&1
 EOF
@@ -228,7 +231,8 @@ install -d -m 755 /usr/local/lib/mikrotiklover
 install -m 644 "$SCRIPT_DIR/tools/mlreport.py" /usr/local/lib/mikrotiklover/mlreport.py
 install -m 644 "$SCRIPT_DIR/tools/flowcollector.py" /usr/local/lib/mikrotiklover/flowcollector.py
 install -m 644 "$SCRIPT_DIR/tests/lint-rsc.py" /usr/local/lib/mikrotiklover/rsclint.py   # health check: router files import cleanly
-install -m 644 "$SCRIPT_DIR/tools/cdnmap.py" "$SCRIPT_DIR/tools/cdnlearn.py" "$SCRIPT_DIR/tools/cdn-apps.json" "$SCRIPT_DIR/tools/ports.py" "$SCRIPT_DIR/tools/appinv.py" "$SCRIPT_DIR/tools/vpn.py" "$SCRIPT_DIR/tools/sentinel.py" "$SCRIPT_DIR/tools/alerts.py" "$SCRIPT_DIR/tools/health.py" "$SCRIPT_DIR/tools/insights.py" "$SCRIPT_DIR/tools/minipdf.py" "$SCRIPT_DIR/tools/secreport.py" "$SCRIPT_DIR/tools/routerstat.py" "$SCRIPT_DIR/tools/hotspotgen.py" "$SCRIPT_DIR/tools/routersetup.py" "$SCRIPT_DIR/tools/whyblocked.py" "$SCRIPT_DIR/tools/applearn.py" "$SCRIPT_DIR/tools/webscan.py" "$SCRIPT_DIR/tools/firewall.py" "$SCRIPT_DIR/tools/ips.py" "$SCRIPT_DIR/tools/tzsp2tap.py" "$SCRIPT_DIR/tools/mailsec.py" "$SCRIPT_DIR/tools/rosapi.py" "$SCRIPT_DIR/tools/ipsguard.py" /usr/local/lib/mikrotiklover/
+install -m 644 "$SCRIPT_DIR/tools/cdnmap.py" "$SCRIPT_DIR/tools/cdnlearn.py" "$SCRIPT_DIR/tools/cdn-apps.json" "$SCRIPT_DIR/tools/ports.py" "$SCRIPT_DIR/tools/appinv.py" "$SCRIPT_DIR/tools/vpn.py" "$SCRIPT_DIR/tools/sentinel.py" "$SCRIPT_DIR/tools/alerts.py" "$SCRIPT_DIR/tools/health.py" "$SCRIPT_DIR/tools/insights.py" "$SCRIPT_DIR/tools/minipdf.py" "$SCRIPT_DIR/tools/secreport.py" "$SCRIPT_DIR/tools/routerstat.py" "$SCRIPT_DIR/tools/hotspotgen.py" "$SCRIPT_DIR/tools/routersetup.py" "$SCRIPT_DIR/tools/whyblocked.py" "$SCRIPT_DIR/tools/applearn.py" "$SCRIPT_DIR/tools/webscan.py" "$SCRIPT_DIR/tools/firewall.py" "$SCRIPT_DIR/tools/ips.py" "$SCRIPT_DIR/tools/tzsp2tap.py" "$SCRIPT_DIR/tools/mailsec.py" "$SCRIPT_DIR/tools/rosapi.py" "$SCRIPT_DIR/tools/ipsguard.py" "$SCRIPT_DIR/tools/snmp.py" /usr/local/lib/mikrotiklover/
+[ -d /run/systemd/system ] && systemctl try-restart mikrotiklover-snmptrap >/dev/null 2>&1 || true   # new code for the trap receiver
 install -d -m 755 /usr/local/lib/mikrotiklover/hotspot-login
 install -m 644 "$SCRIPT_DIR"/mikrotik/hotspot-login/*.html /usr/local/lib/mikrotiklover/hotspot-login/
 install -d -m 755 /usr/local/lib/mikrotiklover/mikrotik      # router scripts for the Router setup page

@@ -1934,7 +1934,7 @@ cmd_snmp() { # devices on the LAN through SNMP (switch, UPS, printer, MikroTik, 
             local rip=${1:-} sip comm; valid_ip "$rip"; sip=$(setting_get server_ip 2>/dev/null || true)
             [ -n "$sip" ] || die "set the server IP first: radius-admin security quarantine-server SERVER-IP"
             comm=$(cmd_snmp router "$rip") || exit 1
-            grep -v '^#' "$MIKROTIK_DIR/snmp.rsc" | sed "s/SNMP_COMMUNITY/$comm/g; s/RADIUS_SERVER_IP/$sip/g" ;;
+            grep -v "^#" /usr/local/lib/mikrotiklover/mikrotik/snmp.rsc | sed "s/SNMP_COMMUNITY/$comm/g; s/RADIUS_SERVER_IP/$sip/g" ;;
         limit|threshold)
             local k=${1:-} v=${2:-}
             [[ $k =~ ^(toner|cpu|disk|temp|ups-load)$ ]] || die "usage: radius-admin snmp limit toner|cpu|disk|temp|ups-load N"

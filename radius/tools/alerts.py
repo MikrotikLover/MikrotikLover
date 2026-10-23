@@ -42,6 +42,7 @@ KEYS = {
     "SMTP_PASS": r"^[^\n]{1,256}$",
     "SMTP_TLS": r"^(starttls|ssl|none)$",
     "EVENTS": r"^[a-z,]*$",
+    "EVENTS_KNOWN": r"^[a-z,]*$",
     "SUMMARY_HOUR": r"^([01]?\d|2[0-3])$",
     "SMS_URL": r"^https?://[^\s]{4,500}$",
     "SMS_METHOD": r"^(GET|POST)$",
@@ -102,11 +103,21 @@ def set_values(c, lines):
             c[k] = v
         else:
             c.pop(k, None)
+        if k == "EVENTS":
+            c["EVENTS_KNOWN"] = ",".join(EVENTS)      # events added in later versions start switched on
     return c
 
 
+LEGACY_EVENTS = [e for e in EVENTS if e != "devices"]     # the events before EVENTS_KNOWN was kept
+
+
 def events(c):
-    return [e for e in c.get("EVENTS", DEFAULT_EVENTS).split(",") if e in EVENTS]
+    """The switched-on events. A list saved by an older version does not know newer events: those are on."""
+    on = c.get("EVENTS", DEFAULT_EVENTS).split(",")
+    if "EVENTS" in c:
+        known = c.get("EVENTS_KNOWN", ",".join(LEGACY_EVENTS)).split(",")
+        on += [e for e in DEFAULT_EVENTS.split(",") if e not in known]
+    return [e for e in EVENTS if e in on]
 
 
 def channels(c):

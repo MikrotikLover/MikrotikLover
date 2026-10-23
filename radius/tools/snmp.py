@@ -762,6 +762,8 @@ def send_alerts(db, lines, kind="devices"):
         c = alerts.load_conf()
         if "devices" not in alerts.events(c) or not alerts.channels(c):
             return {}
+        if not os.environ.get("ML_BRAND"):
+            os.environ["ML_BRAND"] = db.setting("brand", "")       # the dashboard's name, as in the other alerts
         k, title, text_ = alerts.compose([(kind, l) for l in lines])
         res = alerts.deliver(c, title, text_)
         db.q("INSERT INTO ml_alert (kind, title, text, result) VALUES (%s,%s,%s,%s)",

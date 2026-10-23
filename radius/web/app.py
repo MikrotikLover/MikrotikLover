@@ -3244,6 +3244,182 @@ def mail_action(action):
     return result(*radius_admin(["mail", "remove"], timeout=300))
 
 
+# ------------------------------------------------------------------ devices through SNMP: tools/snmp.py
+SNMP_KINDS = ("switch", "ups", "printer", "mikrotik", "server", "camera", "other")
+SNMP_LIMITS = (("toner", "snmp_toner_pct", 10), ("cpu", "snmp_cpu_pct", 90), ("disk", "snmp_disk_pct", 90), ("temp", "snmp_temp_c", 70), ("ups-load", "snmp_ups_load", 90))
+SNMP_NAME_RE = re.compile(r"^[\w .()@#&+,/-]{1,64}$")
+
+
+def _snmp_dev(r):
+    d = jsonable([r])[0]
+    try:
+        d["info"] = json.loads(r.get("info") or "{}")
+    except ValueError:
+        d["info"] = {}
+    return d
+
+
+def _snmp_secret(data):
+    """The community / v3 user + passwords from the form -> (version, JSON for radius-admin's stdin). Never stored here."""
+    ver = field(data, "version", re.compile(r"^(1|2c|3)$")) or "2c"
+    if ver == "3":
+        sec = {"user": field(data, "user", re.compile(r"^[\w.@-]{1,32}$"), required=True),
+               "auth": field(data, "auth", re.compile(r"^(MD5|SHA|SHA-256|SHA-512)$")) or "SHA",
+               "authpass": field(data, "authpass", re.compile(r"^[\x21-\x7e]{8,64}$")),
+               "priv": field(data, "priv", re.compile(r"^(DES|AES|AES-256)$")) or "AES",
+               "privpass": field(data, "privpass", re.compile(r"^[\x21-\x7e]{8,64}$"))}
+        if sec["privpass"] and not sec["authpass"]:
+            abort(400, "encryption needs a login password too")
+    else:
+        sec = {"community": field(data, "community", re.compile(r"^[\x21-\x7e]{1,64}$")) or "public"}
+    return ver, json.dumps({k: v for k, v in sec.items() if v})
+
+
+@app.get("/api/devices")
+@login_required()
+def devices_get():
+    rows = q("SELECT id, name, ip, port, version, kind, kind_auto, enabled, alerts, status, last_ok, last_poll, last_error, sysname, sysdescr, "
+             "location, uptime, line, info, created FROM ml_snmp_device ORDER BY FIELD(status,'down','new','up'), name")
+    ports = {r["device_id"]: r for r in q("SELECT device_id, COUNT(*) AS n, SUM(oper='up') AS up, SUM(watch) AS watched FROM ml_snmp_if GROUP BY device_id")}
+    devs = []
+    for r in rows:
+        d = _snmp_dev(r)
+        p = ports.get(r["id"]) or {}
+        d["ports"] = {"n": int(p.get("n") or 0), "up": int(p.get("up") or 0), "watched": int(p.get("watched") or 0)}
+        devs.append(d)
+    sett = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k LIKE 'snmp\\_%%' OR k='server_ip'")}
+    events = jsonable(q("SELECT e.ts, e.severity, e.text, e.device_id FROM ml_snmp_event e ORDER BY e.id DESC LIMIT 30"))
+    traps = q1("SELECT COUNT(*) AS n, SUM(severity='high') AS high FROM ml_snmp_trap WHERE ts >= NOW() - INTERVAL 1 DAY") or {}
+    try:
+        trapd = subprocess.run(["pgrep", "-f", r"mikrotiklover/snmp[.]py .*trapd"], capture_output=True, timeout=5).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        trapd = False
+    stamp = "/var/lib/mikrotiklover/snmp-poll.stamp"
+    poll_age = int(time.time() - os.path.getmtime(stamp)) if os.path.exists(stamp) else None
+    routers = [r for r in jsonable(q("SELECT nasname, shortname FROM nas ORDER BY nasname")) if re.match(r"^\d+(\.\d+){3}$", r["nasname"])]
+    have = {d["ip"] for d in devs}
+    return jsonify(devices=devs, events=events, kinds=SNMP_KINDS, routers=[dict(r, added=r["nasname"] in have) for r in routers],
+                   traps_day={"n": int(traps.get("n") or 0), "high": int(traps.get("high") or 0)}, poll_age=poll_age,
+                   settings={"trapd": sett.get("snmp_trapd") == "1", "trapd_running": trapd, "server_ip": sett.get("server_ip", ""),
+                             "limits": {k: int(sett.get(s) or d) for k, s, d in SNMP_LIMITS}})
+
+
+@app.get("/api/devices/<int:did>")
+@login_required()
+def device_get(did):
+    r = q1("SELECT * FROM ml_snmp_device WHERE id=%s", (did,))
+    if not r:
+        abort(404)
+    hours = max(1, min(int(request.args.get("hours", 24) or 24), 24 * 30))
+    ifs = jsonable(q("SELECT ifindex, name, alias, type, speed, admin, oper, in_bps, out_bps, in_err, out_err, watch, changed FROM ml_snmp_if "
+                     "WHERE device_id=%s ORDER BY ifindex", (did,)))
+    keys = [k for k in (request.args.get("k") or "").split(",") if re.match(r"^(cpu|mem|rtt|charge|runtime|load|in_volt|temp|if:\d{1,10}:(in|out))$", k)][:6]
+    if not keys:
+        keys = ["cpu", "mem", "temp", "charge", "runtime", "load", "rtt"]
+    graphs = {}
+    for row in q("SELECT k, DATE_FORMAT(ts, '%%Y-%%m-%%d %%H:%%i') AS t, v FROM ml_snmp_sample WHERE device_id=%s AND ts >= NOW() - INTERVAL %s HOUR "
+                 "AND k IN (" + ",".join(["%s"] * len(keys)) + ") ORDER BY ts", (did, hours, *keys)):
+        graphs.setdefault(row["k"], []).append([row["t"], round(float(row["v"]), 2)])
+    events = jsonable(q("SELECT ts, severity, text FROM ml_snmp_event WHERE device_id=%s ORDER BY id DESC LIMIT 50", (did,)))
+    traps = jsonable(q("SELECT ts, severity, words, trap_oid, alerted FROM ml_snmp_trap WHERE device_id=%s ORDER BY id DESC LIMIT 50", (did,)))
+    return jsonify(device=_snmp_dev(r), ifs=ifs, graphs=graphs, events=events, traps=traps, hours=hours, kinds=SNMP_KINDS)
+
+
+@app.get("/api/devices/traps")
+@login_required()
+def device_traps():
+    days = max(1, min(int(request.args.get("days", 7) or 7), 90))
+    rows = jsonable(q("SELECT t.id, t.ts, t.src_ip, t.device_id, d.name, t.version, t.trap_oid, t.severity, t.words, t.vars, t.alerted "
+                      "FROM ml_snmp_trap t LEFT JOIN ml_snmp_device d ON d.id=t.device_id WHERE t.ts >= NOW() - INTERVAL %s DAY ORDER BY t.id DESC LIMIT 500", (days,)))
+    for r in rows:
+        try:
+            r["vars"] = json.loads(r["vars"] or "[]")
+        except ValueError:
+            r["vars"] = []
+    return jsonify(traps=rows, days=days)
+
+
+@app.post("/api/devices/<action>")
+@login_required("admin")
+def devices_action(action):
+    data = body()
+    ipre = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+    if action in ("add", "test"):
+        ip = field(data, "ip", ipre, required=True)
+        ver, sec = _snmp_secret(data)
+        args = ["snmp", "add" if action == "add" else "test", ip, "version", ver, "--stdin", "--json"]
+        port = field(data, "port", re.compile(r"^\d{1,5}$"))
+        if port and port != "161":
+            args += ["port", port]
+        if action == "add":
+            nm = field(data, "name", SNMP_NAME_RE, maxlen=64)
+            kind = field(data, "kind", re.compile(r"^(" + "|".join(SNMP_KINDS) + ")$"))
+            args += (["name", nm] if nm else []) + (["kind", kind] if kind else []) + (["--no-check"] if data.get("nocheck") else [])
+        ok, out = radius_admin(args, stdin=sec, timeout=90, action=" ".join(a for a in args if a != "--stdin"))
+        if not ok:
+            return result(ok, out)
+        try:
+            info = json.loads(out.splitlines()[-1])
+        except (ValueError, IndexError):
+            info = {}
+        return result(True, "added" if action == "add" else "answers", info=info)
+    if action == "find":
+        net = field(data, "net", re.compile(r"^\d{1,3}(\.\d{1,3}){3}/(2[2-9]|3[0-2])$"), required=True)
+        ver, sec = _snmp_secret({**data, "version": "1" if data.get("version") == "1" else "2c"})
+        ok, out = radius_admin(["snmp", "find", net, "version", ver, "--stdin", "--json"], stdin=sec, timeout=60)
+        if not ok:
+            return result(ok, out)
+        try:
+            return jsonify(ok=True, found=json.loads(out.splitlines()[-1]))
+        except (ValueError, IndexError):
+            return result(False, "no answer from the search")
+    if action == "routers":       # every MikroTik router in Routers -> a device (its community made by the server)
+        added = []
+        for r in q("SELECT nasname FROM nas ORDER BY nasname"):
+            if re.match(r"^\d+(\.\d+){3}$", r["nasname"]):
+                ok, _ = radius_admin(["snmp", "router", r["nasname"]], timeout=60, log=False)
+                if ok:
+                    added.append(r["nasname"])
+        audit(f"snmp routers {' '.join(added)}", "ok")
+        return result(bool(added), f"{len(added)} router(s) in the list. Router setup → SNMP gives each router its lines (read-only, only this server)"
+                      if added else "no router with a single IP on the Routers page")
+    if action == "trapd":
+        return result(*radius_admin(["snmp", "trapd", "on" if data.get("on") else "off"], timeout=60))
+    if action == "trap-community":
+        c = field(data, "community", re.compile(r"^[\x21-\x7e]{1,64}$"), required=True)
+        return result(*radius_admin(["snmp", "trap-community", "--stdin"], stdin=json.dumps({"community": c}), action="snmp trap-community (changed)"))
+    if action == "limit":
+        k = field(data, "key", re.compile(r"^(toner|cpu|disk|temp|ups-load)$"), required=True)
+        return result(*radius_admin(["snmp", "limit", k, field(data, "value", re.compile(r"^\d{1,3}$"), required=True)]))
+    abort(404)
+
+
+@app.post("/api/devices/<int:did>/<action>")
+@login_required("admin")
+def device_action(did, action):
+    data = body()
+    if not q1("SELECT id FROM ml_snmp_device WHERE id=%s", (did,)):
+        abort(404)
+    if action == "name":
+        return result(*radius_admin(["snmp", "name", str(did), field(data, "name", SNMP_NAME_RE, required=True, maxlen=64)]))
+    if action == "kind":
+        return result(*radius_admin(["snmp", "kind", str(did), field(data, "kind", re.compile(r"^(auto|" + "|".join(SNMP_KINDS) + ")$"), required=True)]))
+    if action in ("alerts", "enabled"):
+        return result(*radius_admin(["snmp", action, str(did), "on" if data.get("on") else "off"]))
+    if action == "watch":
+        ifx = field(data, "ifindex", re.compile(r"^\d{1,10}$"), required=True)
+        return result(*radius_admin(["snmp", "watch", str(did), ifx, "on" if data.get("on") else "off"]))
+    if action == "secret":
+        ver, sec = _snmp_secret(data)
+        return result(*radius_admin(["snmp", "secret", str(did), ver], stdin=sec, action=f"snmp secret {did} (changed)"))
+    if action == "poll":
+        ok, out = radius_admin(["snmp", "poll", str(did)], timeout=90)
+        return result(ok, out.splitlines()[-1] if ok and out else out)
+    if action == "del":
+        return result(*radius_admin(["snmp", "del", str(did)]))
+    abort(404)
+
+
 # ------------------------------------------------------------------ intrusion prevention (Suricata): tools/ips.py
 @app.get("/api/ips")
 @login_required()
