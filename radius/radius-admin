@@ -1834,6 +1834,117 @@ for r in json.load(sys.stdin)[-100:]:
     esac
 }
 
+SNMPPY=/usr/local/lib/mikrotiklover/snmp.py
+snmp_py() { python3 -I "$SNMPPY" --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@"; }
+
+snmp_trapd_svc() { # start | stop the trap receiver (UDP 162)
+    local act=$1
+    if [ -d /run/systemd/system ]; then
+        if [ "$act" = start ]; then
+            cat > /etc/systemd/system/mikrotiklover-snmptrap.service <<UNIT
+[Unit]
+Description=MikrotikLover SNMP trap receiver (UDP 162): UPS on battery, port down, printer jam ... -> Devices + alerts
+After=network-online.target mariadb.service
+
+[Service]
+ExecStart=/usr/bin/python3 -I $SNMPPY --cnf $CONF_DIR/my.cnf --db $DB_NAME trapd
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+            systemctl daemon-reload; systemctl enable --now mikrotiklover-snmptrap >/dev/null 2>&1; systemctl restart mikrotiklover-snmptrap
+        else systemctl disable --now mikrotiklover-snmptrap >/dev/null 2>&1 || true; fi
+        return 0
+    fi
+    pkill -f 'mikrotiklover/snmp[.]py .*trapd' 2>/dev/null || true
+    [ "$act" = start ] || return 0
+    mkdir -p /var/log/mikrotik
+    nohup python3 -I "$SNMPPY" --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" trapd >>/var/log/mikrotik/snmptrap.log 2>&1 &
+    sleep 1
+}
+
+cmd_snmp() { # devices on the LAN through SNMP (switch, UPS, printer, MikroTik, server, camera) and their traps (tools/snmp.py)
+    local sub=${1:-list}; shift || true
+    case $sub in
+        list|show|traps|events) snmp_py "$sub" "$@" ;;
+        poll) snmp_py poll "$@" ;;
+        add|test|probe|discover|find)
+            # words -> flags; the community / v3 passwords go on stdin (not visible in the process list)
+            local ip="" ver=2c comm="" user="" auth="" apw="" priv="" ppw="" args=() stdin=0
+            [ "$sub" = find ] && sub=discover
+            [ "$sub" = test ] && sub=probe
+            ip=${1:-}; [ -n "$ip" ] || die "usage: radius-admin snmp $sub IP|NET [community C] [version 1|2c] [v3 USER SHA AUTHPASS AES PRIVPASS] [name N] [kind K] [port P]"
+            shift
+            while [ $# -gt 0 ]; do
+                case $1 in
+                    community) comm=${2:-}; shift 2 ;;
+                    version) ver=${2:-}; shift 2 ;;
+                    v1) ver=1; shift ;; v2c) ver=2c; shift ;;
+                    v3) ver=3; user=${2:-}; auth=${3:-}; apw=${4:-}; priv=${5:-}; ppw=${6:-}; [ -n "$user" ] || die "v3 USER [SHA AUTHPASS [AES PRIVPASS]]"; shift $(( $# < 6 ? $# : 6 )) ;;
+                    name) args+=(--name "${2:-}"); shift 2 ;;
+                    kind) args+=(--kind "${2:-}"); shift 2 ;;
+                    port) valid_int "${2:-}" port; args+=(--port "$2"); shift 2 ;;
+                    --no-check|--json) args+=("$1"); shift ;;
+                    --stdin) stdin=1; shift ;;
+                    *) die "unknown word '$1' (community, version, v3, name, kind, port)" ;;
+                esac
+            done
+            [[ $ver =~ ^(1|2c|3)$ ]] || die "version 1, 2c or 3"
+            if [ "$stdin" = 1 ]; then snmp_py "$sub" "$ip" --version "$ver" --stdin "${args[@]}"
+            else
+                python3 -c 'import json, sys; k = ("community", "user", "auth", "authpass", "priv", "privpass"); print(json.dumps({a: b for a, b in zip(k, sys.argv[1:]) if b}))' \
+                    "$comm" "$user" "$auth" "$apw" "$priv" "$ppw" | snmp_py "$sub" "$ip" --version "$ver" --stdin "${args[@]}"
+            fi ;;
+        secret)
+            local id=${1:-} ver=${2:-}; valid_int "$id" id; [[ $ver =~ ^(1|2c|3)$ ]] || die "usage: radius-admin snmp secret ID 1|2c|3 (JSON on stdin)"
+            snmp_py set "$id" secret "$ver" --stdin ;;
+        name|kind|alerts|enabled)
+            valid_int "${1:-}" id; [ -n "${2:-}" ] || die "usage: radius-admin snmp $sub ID VALUE"
+            snmp_py set "$1" "$sub" "$2" ;;
+        watch)
+            valid_int "${1:-}" id; valid_int "${2:-}" ifindex; [[ ${3:-on} =~ ^(on|off)$ ]] || die "usage: radius-admin snmp watch ID IFINDEX on|off"
+            snmp_py set "$1" watch "${3:-on}" "$2" ;;
+        del|remove) valid_int "${1:-}" id; snmp_py del "$1" ;;
+        trapd|traps-receiver)
+            case ${1:-status} in
+                on) setting_set snmp_trapd 1; snmp_trapd_svc start
+                    if pgrep -f 'mikrotiklover/snmp[.]py .*trapd' >/dev/null; then ok "trap receiver on (UDP 162). Devices: send traps to $(setting_get server_ip 2>/dev/null || echo THIS-SERVER), community: radius-admin snmp trap-community"
+                    else die "trap receiver did not start (port 162 in use? see /var/log/mikrotik/snmptrap.log)"; fi ;;
+                off) setting_set snmp_trapd 0; snmp_trapd_svc stop; ok "trap receiver off" ;;
+                status) if pgrep -f 'mikrotiklover/snmp[.]py .*trapd' >/dev/null; then echo "trap receiver: running (UDP 162)"; else echo "trap receiver: off (radius-admin snmp trapd on)"; fi ;;
+                *) die "usage: radius-admin snmp trapd on|off|status" ;;
+            esac ;;
+        trap-community)
+            if [ -z "${1:-}" ]; then snmp_py trap-community
+            elif [ "$1" = --stdin ]; then snmp_py trap-community --stdin
+            else python3 -c 'import json, sys; print(json.dumps({"community": sys.argv[1]}))' "$1" | snmp_py trap-community --stdin; fi ;;
+        router)
+            # the read-only community for MikroTik routers; the router is added to the list (it answers once its script ran)
+            local rip=${1:-} comm; valid_ip "$rip"
+            comm=$(snmp_py router-community) || die "could not make the router community"
+            if [ "$(echo "SELECT COUNT(*) FROM ml_snmp_device WHERE ip=$(q "$rip") AND port=161" | db)" = 0 ]; then
+                local nm; nm=$(echo "SELECT IFNULL(NULLIF(shortname,''), nasname) FROM nas WHERE nasname=$(q "$rip")" | db)
+                python3 -c 'import json, sys; print(json.dumps({"community": sys.argv[1]}))' "$comm" \
+                    | snmp_py add "$rip" --version 2c --stdin --kind mikrotik --name "${nm:-router $rip}" --no-check >/dev/null || die "router not added"
+            fi
+            echo "$comm" ;;
+        router-script)
+            local rip=${1:-} sip comm; valid_ip "$rip"; sip=$(setting_get server_ip 2>/dev/null || true)
+            [ -n "$sip" ] || die "set the server IP first: radius-admin security quarantine-server SERVER-IP"
+            comm=$(cmd_snmp router "$rip") || exit 1
+            grep -v '^#' "$MIKROTIK_DIR/snmp.rsc" | sed "s/SNMP_COMMUNITY/$comm/g; s/RADIUS_SERVER_IP/$sip/g" ;;
+        limit|threshold)
+            local k=${1:-} v=${2:-}
+            [[ $k =~ ^(toner|cpu|disk|temp|ups-load)$ ]] || die "usage: radius-admin snmp limit toner|cpu|disk|temp|ups-load N"
+            valid_int "$v" value; [ "$v" -ge 1 ] && [ "$v" -le 150 ] || die "1-150"
+            setting_set "snmp_$(echo "$k" | sed 's/toner/toner_pct/; s/cpu/cpu_pct/; s/disk/disk_pct/; s/temp/temp_c/; s/ups-load/ups_load/')" "$v"
+            ok "$k limit $v" ;;
+        *) die "usage: radius-admin snmp list|add|test|find|show|poll|name|kind|alerts|watch|del|traps|events|trapd|trap-community|router|router-script|limit" ;;
+    esac
+}
+
 IPSPY=/usr/local/lib/mikrotiklover/ips.py
 ips_py() { python3 -I "$IPSPY" --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@"; }
 
@@ -3470,6 +3581,10 @@ Blocking policies + router auto-sync (dashboard → Blocking)
   ips bypass on|off|status               inline: join the two cards (traffic unchecked) — also done by itself if Suricata stops
   mail set ip IP domain DOMAIN [host H] [public IP] [dkim SEL] [webmail PORT]   the mail server on the LAN (MDaemon …)
   mail status · mail doors · mail guard|smtp-out on|off · mail rate N · mail trusted OBJECT|none · mail logs · mail checklist KEY on|off
+  snmp add IP [community C] [v1|v2c] [v3 USER SHA AUTHPASS AES PRIVPASS] [name N] [kind K]   watch a device (switch, UPS, printer, server …)
+  snmp list · snmp show ID · snmp find 192.168.88.0/24 [community C] · snmp test IP [community C] · snmp poll · snmp del ID
+  snmp watch ID IFINDEX on|off (port down alert) · snmp alerts ID on|off · snmp name|kind ID VALUE · snmp limit toner|cpu|disk|temp|ups-load N
+  snmp trapd on|off|status · snmp trap-community C · snmp traps · snmp events · snmp router-script ROUTER-IP (MikroTik lines)
   policy on|off NAME                    turn a policy off (kept, users stay in it, no router rules) or on again
   policy build                          rebuild the router rules (+ VPN server list); cron does it every hour
   policy sync                           URL + key for the router auto-sync script (dashboard → Blocking)
@@ -3707,6 +3822,7 @@ case ${1:-help} in
     firewall|fw) shift; cmd_firewall "$@" ;;
     ips) shift; cmd_ips "$@" ;;
     mail) shift; cmd_mail "$@" ;;
+    snmp|devices) shift; cmd_snmp "$@" ;;
     doctor|health) shift; python3 -I /usr/local/lib/mikrotiklover/health.py --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@" ;;
     backups) cmd_backups ;;
     restore) shift; cmd_restore "$@" ;;

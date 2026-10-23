@@ -2710,6 +2710,11 @@ def router_setup_make():
         if not key:
             abort(400, "auto-sync: build the router rules first (Blocking → Build router rules)")
         auto = autosync_text(o["server_ip"], key, router_info())
+    if o["snmp"]:              # the router's read-only community (secret, kept by the server); the router is added to Devices
+        ok, out = radius_admin(["snmp", "router", row["nasname"]], timeout=60, log=False)
+        if not ok or not out.strip():
+            abort(400, out or "SNMP: could not make the router community")
+        o["snmp_community"] = out.strip().splitlines()[-1].strip()
     try:
         text = routersetup.build(o, MIKROTIK_DIR, auto)
     except ValueError as e:

@@ -11,7 +11,7 @@
   alerts.py log [N]                      last N alerts sent
 Common options: --cnf FILE --db NAME (database), --conf FILE (settings), --state FILE.
 
-Events (EVENTS=, comma separated): security quarantine router service jobs disk expiring anomaly requests newapp health summary weekly
+Events (EVENTS=, comma separated): security quarantine router service jobs disk expiring anomaly requests newapp health devices summary weekly
   alerts.py weekly                       this week's report (sent by check on Monday at SUMMARY_HOUR)
   alerts.py monthly [--month YYYY-MM]    security report PDF (sent by check on the 1st at SUMMARY_HOUR)
 Settings live in /etc/mikrotiklover-radius/alerts.conf (root only, mode 600).
@@ -24,8 +24,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # insights.py (
 CONF = "/etc/mikrotiklover-radius/alerts.conf"
 STATE = "/var/lib/mikrotiklover/alerts-state.json"
 UPDATES = "/var/lib/mikrotiklover/updates.txt"
-EVENTS = ("security", "quarantine", "router", "service", "jobs", "disk", "expiring", "anomaly", "requests", "newapp", "health", "summary", "weekly", "monthly")
-DEFAULT_EVENTS = "security,quarantine,router,service,jobs,disk,anomaly,requests,newapp,health,summary,weekly,monthly"
+EVENTS = ("security", "quarantine", "router", "service", "jobs", "disk", "expiring", "anomaly", "requests", "newapp", "health", "devices", "summary", "weekly", "monthly")
+DEFAULT_EVENTS = "security,quarantine,router,service,jobs,disk,anomaly,requests,newapp,health,devices,summary,weekly,monthly"
 HEALTH = "/var/lib/mikrotiklover/health.json"
 KEYS = {
     "TELEGRAM_TOKEN": r"^\d{3,15}:[A-Za-z0-9_-]{20,100}$",
@@ -551,7 +551,7 @@ def compose(found):
     kinds = sorted({k for k, _ in found})
     names = {"security": "security", "quarantine": "quarantine", "router": "routers", "service": "services",
              "jobs": "jobs", "disk": "disk", "expiring": "expiring users", "anomaly": "unusual data use",
-             "requests": "unblock requests", "newapp": "new apps", "health": "health check"}
+             "requests": "unblock requests", "newapp": "new apps", "health": "health check", "devices": "devices (SNMP)"}
     return ",".join(kinds), f"{len(found)} alerts: " + ", ".join(names.get(k, k) for k in kinds), "\n".join(lines)
 
 

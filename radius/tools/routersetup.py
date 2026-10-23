@@ -28,6 +28,7 @@ MODULES = [
     ("autosync", None, "Auto-sync (policies, lists, health, hotspot pages)"),
     ("security", "security.rsc", "Security (scans, password guessing, SYN flood)"),
     ("languard", "lan-guard.rsc", "LAN guard (fake router, ARP spoofing)"),
+    ("snmp", "snmp.rsc", "SNMP for the Devices page (CPU, temperature, ports; traps)"),
 ]
 SERVICES = {"hotspot": "hotspot", "wpa_ros7": "wireless", "wpa_legacy": "wireless", "pppoe": "ppp", "macauth": "wireless,hotspot"}
 NEEDS_BASE = ("logging", "dnslog", "autosync")      # these build on webfilter-base
@@ -133,6 +134,11 @@ def build(o, mikrotik_dir, autosync_text=""):
             body = body.replace("Devices-WiFi", ssid).replace("DevicesWiFiKey123", pw)
         if key == "pppoe":
             body = body.replace("interface=ether2", f"interface={_iface(o.get('pppoe_if') or 'ether2', 'PPPoE interface')}")
+        if key == "snmp":
+            comm = o.get("snmp_community") or ""
+            if not re.match(r"^[A-Za-z0-9]{12,40}$", comm):
+                raise ValueError("SNMP: the server has no router community yet (radius-admin snmp router ROUTER_IP)")
+            body = body.replace("SNMP_COMMUNITY", comm)
         if key == "languard":
             body = body.replace('"bridge"', f'"{lan}"').replace("interface=bridge", f"interface={lan}")
         out += [f"# ---------------- {title} ({fname})", body.strip(), ""]

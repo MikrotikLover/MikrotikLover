@@ -627,3 +627,79 @@ CREATE TABLE IF NOT EXISTS ml_policy_net (
   created DATETIME NOT NULL,
   UNIQUE KEY (policy, target)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- SNMP: devices on the LAN (switches, UPS, printers, MikroTik, servers, cameras) and their traps (tools/snmp.py).
+-- Communities / v3 passwords are not here: /etc/mikrotiklover-radius/snmp-secrets.json (root only).
+CREATE TABLE IF NOT EXISTS ml_snmp_device (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(64) NOT NULL,
+  ip VARCHAR(45) NOT NULL,
+  port SMALLINT UNSIGNED NOT NULL DEFAULT 161,
+  version ENUM('1','2c','3') NOT NULL DEFAULT '2c',
+  kind VARCHAR(16) NOT NULL DEFAULT 'other',
+  kind_auto TINYINT(1) NOT NULL DEFAULT 1,
+  enabled TINYINT(1) NOT NULL DEFAULT 1,
+  alerts TINYINT(1) NOT NULL DEFAULT 1,
+  status ENUM('new','up','down') NOT NULL DEFAULT 'new',
+  last_ok DATETIME NULL,
+  last_poll DATETIME NULL,
+  last_error VARCHAR(255) NOT NULL DEFAULT '',
+  sysname VARCHAR(128) NOT NULL DEFAULT '',
+  sysdescr VARCHAR(500) NOT NULL DEFAULT '',
+  sysobjectid VARCHAR(128) NOT NULL DEFAULT '',
+  location VARCHAR(128) NOT NULL DEFAULT '',
+  uptime BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  line VARCHAR(255) NOT NULL DEFAULT '',
+  info MEDIUMTEXT NULL,
+  created DATETIME NOT NULL,
+  UNIQUE KEY (ip, port)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS ml_snmp_if (
+  device_id INT UNSIGNED NOT NULL,
+  ifindex INT UNSIGNED NOT NULL,
+  name VARCHAR(64) NOT NULL DEFAULT '',
+  alias VARCHAR(128) NOT NULL DEFAULT '',
+  type SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  speed INT UNSIGNED NOT NULL DEFAULT 0,
+  admin VARCHAR(8) NOT NULL DEFAULT '',
+  oper VARCHAR(8) NOT NULL DEFAULT '',
+  in_bps BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  out_bps BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  in_err BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  out_err BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  watch TINYINT(1) NOT NULL DEFAULT 0,
+  changed DATETIME NULL,
+  PRIMARY KEY (device_id, ifindex)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS ml_snmp_sample (
+  device_id INT UNSIGNED NOT NULL,
+  ts DATETIME NOT NULL,
+  k VARCHAR(40) NOT NULL,
+  v DOUBLE NOT NULL,
+  KEY (device_id, k, ts),
+  KEY (ts)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS ml_snmp_event (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  ts DATETIME NOT NULL,
+  device_id INT UNSIGNED NULL,
+  ip VARCHAR(45) NOT NULL DEFAULT '',
+  severity ENUM('high','medium','info') NOT NULL DEFAULT 'info',
+  text VARCHAR(500) NOT NULL,
+  KEY (ts),
+  KEY (device_id, ts)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS ml_snmp_trap (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  ts DATETIME NOT NULL,
+  src_ip VARCHAR(45) NOT NULL,
+  device_id INT UNSIGNED NULL,
+  version VARCHAR(3) NOT NULL DEFAULT '2c',
+  trap_oid VARCHAR(128) NOT NULL DEFAULT '',
+  severity ENUM('high','medium','info') NOT NULL DEFAULT 'info',
+  words VARCHAR(255) NOT NULL DEFAULT '',
+  vars TEXT NULL,
+  alerted TINYINT(1) NOT NULL DEFAULT 0,
+  KEY (ts),
+  KEY (device_id, ts)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
