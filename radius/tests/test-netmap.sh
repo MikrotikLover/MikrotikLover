@@ -34,8 +34,9 @@ sess AA-BB-CC-16-00-01 192.168.160.12 AA-BB-CC-16-00-01
 sess nm-c 192.168.160.13 AA-BB-CC-16-00-13
 db "INSERT INTO ml_device (client_ip, os, username, first_seen, last_seen) VALUES ('192.168.160.11','windows','nm-a',NOW(),NOW())"
 radius-admin ipbind set nm-b 192.168.160.50 >/dev/null
-radius-admin snmp add 127.0.0.1 port 11999 name nm-ap1 kind ap --no-check >/dev/null
-radius-admin snmp add 127.0.0.1 port 11998 name nm-core kind switch --no-check >/dev/null
+radius-admin snmp add 127.0.0.250 port 11999 name nm-ap1 kind ap --no-check >/dev/null
+radius-admin snmp add 127.0.0.251 port 11998 name nm-core kind switch --no-check >/dev/null
+radius-admin snmp add 127.0.0.1 port 11997 name nm-rtr kind mikrotik --no-check >/dev/null
 AP=$(db "SELECT id FROM ml_snmp_device WHERE name='nm-ap1'")
 t "device put in a department (CLI); unknown department refused" "$(radius-admin snmp dept "$AP" nm-office | grep -c 'dept nm-office')$(radius-admin snmp dept "$AP" nosuch 2>&1 | grep -c 'no department')" "11"
 
@@ -52,8 +53,20 @@ t "  its AP shown in it" "$(js "[x['name'] for x in D['nm-office']['devices']]")
 t "online but in no department: shown apart" "$(js "('nm-c' in L, 'nm-a' in L)")" "(True, False)"
 t "a switch in no department: at the top (core)" "$(js "[x['name'] for x in d['core'] if x['name'].startswith('nm-')]")" "['nm-core']"
 t "routers listed with their online count" "$(js "any(r['ip']=='127.0.0.1' and r['online'] >= 3 for r in d['routers'])")" "True"
+t "a router that is also an SNMP device: shown once, as the router (not again in core)" "$(js "([r['name'] for r in d['routers'] if r['ip']=='127.0.0.1'], [x['name'] for x in d['core'] if x['name']=='nm-rtr'])")" "(['nm-rtr'], [])"
+t "routers given as a subnet are not drawn" "$(js "all('/' not in r['ip'] for r in d['routers'])")" "True"
 t "API: move a device to a department and back" "$(api POST "/api/devices/$AP/dept" '{"dept":""}')$(db "SELECT dept FROM ml_snmp_device WHERE id=$AP")-$(api POST "/api/devices/$AP/dept" '{"dept":"nm-office"}')$(db "SELECT dept FROM ml_snmp_device WHERE id=$AP")" "200-200nm-office"
 t "API: bad department name 400" "$(api POST "/api/devices/$AP/dept" '{"dept":"x;y"}')" "400"
 t "device page offers the departments" "$(api GET "/api/devices/$AP")$(python3 -c "import json; d=json.load(open('/tmp/nm.json')); print('nm-office' in d['depts'], d['device']['dept'])")" "200True nm-office"
+# whole network: the core switch sees the AP (and nm-a's phone) on its port 3 -> AP under the core, nm-a under the AP
+CORE=$(db "SELECT id FROM ml_snmp_device WHERE name='nm-core'")
+db "UPDATE ml_snmp_device SET macs='AA-BB-CC-16-0A-01' WHERE id=$AP; UPDATE ml_snmp_device SET macs='AA-BB-CC-16-0C-01' WHERE id=$CORE;
+    INSERT INTO ml_snmp_if (device_id, ifindex, name) VALUES ($CORE, 3, 'Gi0/3');
+    INSERT INTO ml_snmp_fdb (device_id, ifindex, mac, seen) VALUES ($CORE, 3, 'AA-BB-CC-16-0A-01', NOW()), ($CORE, 3, 'AA-BB-CC-16-00-11', NOW()), ($CORE, 9, 'AA-BB-CC-16-0F-FF', NOW())"
+api GET /api/netmap/topology >/dev/null
+t "whole network: AP on the core's port Gi0/3, nm-a's phone under the AP, an unknown MAC counted" \
+  "$(python3 -c "import json; N={n['id']:n for n in json.load(open('/tmp/nm.json'))['nodes']}; print(N['d$AP']['parent']=='d$CORE', N['d$AP']['port'], N['pAA-BB-CC-16-00-11']['parent']=='d$AP', N.get('u-d$CORE',{}).get('count'))")" "True Gi0/3 True 1"
+t "whole network: a person not seen on any switch hangs under the router" "$(python3 -c "import json; N={n['id']:n for n in json.load(open('/tmp/nm.json'))['nodes']}; print(N['pAA-BB-CC-16-00-13']['parent'])")" "d$(db "SELECT id FROM ml_snmp_device WHERE name='nm-rtr'")"
+db "DELETE FROM ml_snmp_if WHERE device_id=$CORE"
 rm -f "$jar" /tmp/nm.json
 [ "$fails" = 0 ] && echo "all network map tests passed" || { echo "$fails FAILED"; exit 1; }

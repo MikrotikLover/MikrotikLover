@@ -3732,7 +3732,74 @@ function nmPerson(p) {
     h("div", { class: "nm-ip" }, p.ip ? h("code", {}, p.ip) : h("span", { class: "muted small" }, "—"), p.fixed ? h("span", { class: "nm-fixed", title: "fixed address (IP binding)" }, "fixed") : null));
 }
 
-ROUTES.netmap = async () => {
+const nmTabs = (tab) => h("div", { class: "tabs" }, [["", "Departments"], ["all", "Whole network"]].map(([k, l]) => h("a", { href: `#/netmap${k ? "/" + k : ""}`, class: k === tab ? "active" : "" }, l)));
+
+function topoNode(n) {
+  const port = n.port ? h("span", { class: "tp-port", title: "port on the device above" }, n.port) : null;
+  if (n.type === "internet") return h("div", { class: "tp-node tp-cloud" }, icon("globe"), h("b", {}, "Internet"));
+  if (n.type === "router") return h("div", { class: "tp-node" }, icon("router"), h("div", {}, h("b", {}, n.name), " ", h("code", {}, n.ip),
+    h("div", { class: "muted small" }, `router · ${n.online} online`)));
+  if (n.type === "device") {
+    const bad = n.status === "down";
+    return h("div", { class: "tp-node" + (bad ? " bad" : "") + (n.guess ? " guess" : "") }, port, icon(NM_DEV_ICON[n.kind] || "device"),
+      h("div", { class: "tp-txt" }, h("a", { href: `#/devices/${n.dev}` }, h("b", {}, n.name)), " ", h("code", {}, n.ip), " ", nmDot(n.status === "up"),
+        h("div", { class: "muted small" }, (DEV_KIND[n.kind] || n.kind) + (bad ? " · NO ANSWER" : n.line ? ` · ${n.line}` : "") + (n.dept ? ` · ${n.dept}` : "")
+          + (n.guess ? " · link not seen (add the router / switch above it as a device)" : ""))));
+  }
+  if (n.type === "person") return h("div", { class: "tp-node tp-person" }, port, nmDot(true), icon(nmPersonIcon(n)),
+    h("div", { class: "tp-txt" }, h("a", { href: n.kind === "mac" ? "#/macs" : `#/users/${encodeURIComponent(n.name)}` }, h("b", {}, n.kind === "mac" ? (n.label || n.name) : n.name)),
+      " ", n.ip ? h("code", {}, n.ip) : null, n.dept ? h("span", { class: "muted small" }, ` · ${n.dept}`) : null));
+  return h("div", { class: "tp-node tp-muted muted small" }, n.type === "unknown" ? icon("device") : null, n.name, n.type === "unknown" ? " (not logged in: IoT, phones on another network …)" : "");
+}
+
+function topoTree(nodes, filter) {
+  const kids = {};
+  nodes.forEach((n) => { if (n.parent) (kids[n.parent] = kids[n.parent] || []).push(n); });
+  const order = { router: 0, device: 1, person: 2, more: 3, unknown: 4 };
+  const match = (n) => !filter || `${n.name} ${n.ip || ""} ${n.label || ""} ${n.port || ""}`.toLowerCase().includes(filter);
+  const keep = {};
+  const mark = (n) => { const c = (kids[n.id] || []).map(mark).some(Boolean); keep[n.id] = match(n) || c; return keep[n.id]; };
+  nodes.filter((n) => !n.parent).forEach(mark);
+  const branch = (n) => {
+    const c = (kids[n.id] || []).filter((x) => keep[x.id]).sort((a, b) => (order[a.type] - order[b.type]) || String(a.name).localeCompare(String(b.name)));
+    const devs = c.filter((x) => x.type !== "person" && x.type !== "more"), ppl = c.filter((x) => x.type === "person" || x.type === "more");
+    const list = [...devs.map((x) => h("li", {}, branch(x)))];
+    if (ppl.length) {
+      const items = h("ul", { class: "tp-ul" }, ppl.map((x) => h("li", {}, topoNode(x))));
+      list.push(h("li", {}, ppl.length > 6 && !filter
+        ? h("details", { class: "tp-group" }, h("summary", {}, `${ppl.filter((x) => x.type === "person").length} computers / phones here`), items)
+        : items));
+    }
+    return h("div", {}, topoNode(n), list.length ? h("ul", { class: "tp-ul" }, list) : null);
+  };
+  return h("div", { class: "tp" }, nodes.filter((n) => !n.parent && keep[n.id]).map(branch));
+}
+
+async function netmapWhole() {
+  const search = h("input", { type: "search", placeholder: "Find a name, IP or port", class: "grow" });
+  const holder = h("div", { class: "card" });
+  let d = await api("GET", "/api/netmap/topology");
+  const draw = () => holder.replaceChildren(topoTree(d.nodes, search.value.trim().toLowerCase()));
+  search.addEventListener("input", draw);
+  draw();
+  every(60000, async () => { try { d = await api("GET", "/api/netmap/topology"); draw(); } catch (e) { /* next minute */ } });
+  shell("Network map", h("div", { class: "stack" }, nmTabs("all"),
+    !d.switches_read ? h("div", { class: "card health-hero warn" }, h("div", { class: "hh-mark" }, "!"), h("div", { class: "grow" },
+      h("div", { class: "hh-title" }, "No switch has told its MAC table yet"),
+      h("div", { class: "muted" }, "Add your switches (and the MikroTik routers) on Devices (SNMP). Every 5 minutes the server reads which device is behind which port, and LLDP neighbours. Until then everyone is shown under their router."),
+      isAdmin() ? h("a", { href: "#/devices", class: "small" }, "Devices (SNMP) →") : null)) : null,
+    h("div", { class: "toolbar wrap" }, search, h("span", { class: "muted small" },
+      `${num(d.online)} online · ${d.switches_read} switch(es) read${d.read_at ? ` at ${d.read_at.slice(11, 16)}` : ""}${d.unplaced ? ` · ${d.unplaced} not seen on a switch` : ""}`)),
+    holder,
+    hint("How the picture is made", h("ul", { class: "g-list" },
+      h("li", {}, "Switches (and MikroTik / APs that answer SNMP) tell which MAC is behind which port and, with LLDP, who is next door. A device hangs on the switch port that sees the fewest MACs — the nearest one."),
+      h("li", {}, "Computers and phones that logged in (RADIUS) are found by their MAC; one on an AP's switch port is shown under that AP (Wi-Fi)."),
+      h("li", {}, "'Other devices' are MACs the switches see that never logged in (IoT, a second network, a device behind a small home switch)."),
+      h("li", {}, "A dashed box: its link up was not seen — add the router or switch above it on Devices (SNMP), or turn on LLDP on the switch.")))));
+}
+
+ROUTES.netmap = async (tab = "") => {
+  if (tab === "all") return netmapWhole();
   let onlyOn = false; try { onlyOn = localStorage.getItem("nm-online") === "1"; } catch (e) { /* private window */ }
   const search = h("input", { type: "search", placeholder: "Find a name, IP or MAC", class: "grow" });
   const onlyBox = h("label", { class: "check inline" + (onlyOn ? " on" : "") }, h("input", { type: "checkbox", checked: onlyOn }), h("div", {}, h("b", {}, "Only online")));
@@ -3750,7 +3817,7 @@ ROUTES.netmap = async () => {
     };
     const top = h("div", { class: "card nm-top" },
       h("div", { class: "nm-node nm-cloud" }, icon("globe"), h("b", {}, "Internet")), h("span", { class: "nm-link" }),
-      h("div", { class: "nm-nodes" }, d.routers.map((r) => h("div", { class: "nm-node" + (r.reporting ? "" : " quiet") }, icon("router"),
+      h("div", { class: "nm-nodes" }, d.routers.map((r) => h(r.dev ? "a" : "div", { class: "nm-node" + (r.reporting ? "" : " quiet"), href: r.dev ? `#/devices/${r.dev}` : null }, icon("router"),
         h("div", {}, h("b", {}, r.name), h("code", {}, r.ip), h("div", { class: "muted small" }, `${r.online} online${r.cpu != null ? ` · CPU ${r.cpu}%` : ""}${r.reporting ? "" : " · no report"}`))))),
       d.core.filter(fitDev).length ? h("span", { class: "nm-link" }) : null,
       d.core.filter(fitDev).length ? h("div", { class: "nm-nodes" }, d.core.filter(fitDev).map((x) => nmDevice(x, isAdmin() ? d.dept_names : null))) : null);
@@ -3772,7 +3839,7 @@ ROUTES.netmap = async () => {
   onlyBox.querySelector("input").addEventListener("change", (e) => { onlyOn = e.target.checked; onlyBox.classList.toggle("on", onlyOn); try { localStorage.setItem("nm-online", onlyOn ? "1" : "0"); } catch (x) { /* ignore */ } draw(); });
   draw();
   every(60000, async () => { try { d = await api("GET", "/api/netmap"); draw(); } catch (e) { /* next minute */ } });
-  shell("Network map", h("div", { class: "stack" },
+  shell("Network map", h("div", { class: "stack" }, nmTabs(""),
     h("div", { class: "toolbar wrap" }, search, onlyBox,
       h("span", { class: "nm-legend muted small" }, nmDot(true), " online ", nmDot(false), " offline ", nmDot(true, true), " needs a look ", h("span", { class: "nm-fixed" }, "fixed"), " own address"),
       h("span", { class: "muted small" }, `${num(d.online)} online now · updates every minute`)),

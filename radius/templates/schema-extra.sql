@@ -705,3 +705,24 @@ CREATE TABLE IF NOT EXISTS ml_snmp_trap (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 -- Network map: an SNMP device (AP, printer, switch …) belongs to a department ('' = core / none)
 ALTER TABLE ml_snmp_device ADD COLUMN IF NOT EXISTS dept VARCHAR(32) NOT NULL DEFAULT '';
+-- Whole-network map: each device's own MACs, the switches' MAC tables (which MAC behind which port) and LLDP neighbours
+ALTER TABLE ml_snmp_device ADD COLUMN IF NOT EXISTS macs TEXT NULL;
+CREATE TABLE IF NOT EXISTS ml_snmp_fdb (
+  device_id INT UNSIGNED NOT NULL,
+  ifindex INT UNSIGNED NOT NULL,
+  mac CHAR(17) NOT NULL,
+  vlan SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  seen DATETIME NOT NULL,
+  PRIMARY KEY (device_id, mac, ifindex),
+  KEY (mac)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS ml_snmp_lldp (
+  device_id INT UNSIGNED NOT NULL,
+  ifindex INT UNSIGNED NOT NULL DEFAULT 0,
+  name VARCHAR(64) NOT NULL DEFAULT '',
+  port VARCHAR(64) NOT NULL DEFAULT '',
+  chassis CHAR(17) NOT NULL DEFAULT '',
+  ip VARCHAR(45) NOT NULL DEFAULT '',
+  seen DATETIME NOT NULL,
+  KEY (device_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

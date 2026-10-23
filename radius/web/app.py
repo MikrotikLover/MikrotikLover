@@ -2420,17 +2420,56 @@ def netmap():
                       "online": sum(1 for p in people if p["online"]), "devices": [x for x in devs if x.get("dept") == d["name"]]})
     known = {d["name"] for d in depts}
     loose = sorted((person(u) for u in online if of.get(u) not in known), key=lambda p: (p["kind"] != "mac", p["name"]))
-    core = [x for x in devs if not x.get("dept") and x["kind"] in ("switch", "mikrotik", "ups", "server")]
-    other = [x for x in devs if not x.get("dept") and x not in core]
+    nas_ips = {n["nasname"] for n in q("SELECT nasname FROM nas")}
+    as_router = {x["ip"]: x for x in devs if x["ip"] in nas_ips}          # a router that is also an SNMP device: shown once, as the router
+    core = [x for x in devs if not x.get("dept") and x["kind"] in ("switch", "mikrotik", "ups", "server") and x["ip"] not in as_router]
+    other = [x for x in devs if not x.get("dept") and x not in core and x["ip"] not in as_router]
     routers = []
     rs = {r["router_ip"]: r for r in q("SELECT router_ip, identity, board, cpu, TIMESTAMPDIFF(SECOND, last_seen, NOW()) AS age FROM ml_router_status")}
     for n in q("SELECT nasname, shortname FROM nas ORDER BY nasname"):
+        if not re.match(r"^\d+(\.\d+){3}$", n["nasname"]):
+            continue                                   # a whole subnet of routers: no single box to draw
         st = rs.get(n["nasname"]) or {}
-        routers.append({"ip": n["nasname"], "name": st.get("identity") or n["shortname"] or n["nasname"], "board": st.get("board") or "", "cpu": st.get("cpu"),
-                        "reporting": st.get("age") is not None and int(st["age"]) < 300,
+        dv = as_router.get(n["nasname"])
+        routers.append({"ip": n["nasname"], "name": (dv or {}).get("name") or st.get("identity") or n["shortname"] or n["nasname"], "board": st.get("board") or "",
+                        "cpu": st.get("cpu") if st.get("cpu") is not None else ((dv or {}).get("info") or {}).get("cpu"), "dev": (dv or {}).get("id"),
+                        "dev_up": (dv or {}).get("status") == "up",
+                        "reporting": (st.get("age") is not None and int(st["age"]) < 300) or (dv or {}).get("status") == "up",
                         "online": sum(1 for o in online.values() if o["nas"] == n["nasname"])})
     return jsonify(routers=routers, core=core, departments=depts, loose=loose[:400], loose_more=max(0, len(loose) - 400),
                    other_devices=other, online=len(online), dept_names=sorted(known))
+
+
+@app.get("/api/netmap/topology")
+@login_required()
+def netmap_topology():
+    """The whole network as a tree (tools/topology.py): from the switches' MAC tables + LLDP and who is logged in."""
+    import topology
+    norm = lambda m: "-".join(re.findall(r"[0-9A-F]{2}", re.sub(r"[^0-9A-Fa-f]", "", m or "").upper())) if len(re.sub(r"[^0-9A-Fa-f]", "", m or "")) == 12 else ""  # noqa: E731
+    of = dept_of_users()
+    macdesc = {r["mac"]: r["description"] for r in q("SELECT mac, description FROM macdevice")}
+    people = []
+    for r in q("""SELECT username, framedipaddress AS ip, callingstationid AS mac, nasipaddress AS nas FROM radacct
+                  WHERE acctstoptime IS NULL AND COALESCE(acctupdatetime, acctstarttime) >= NOW() - INTERVAL 20 MINUTE ORDER BY acctstarttime"""):
+        u = r["username"]
+        people.append({"name": u, "kind": "mac" if u in macdesc else "user", "label": macdesc.get(u, ""), "ip": r["ip"] or "",
+                       "mac": norm(r["mac"]), "nas": r["nas"], "dept": of.get(u, "")})
+    devices = []
+    ports = {}
+    for r in q("SELECT device_id, ifindex, name FROM ml_snmp_if"):
+        ports.setdefault(r["device_id"], {})[str(r["ifindex"])] = r["name"]
+    for r in q("SELECT id, name, ip, kind, status, line, dept, sysname, macs FROM ml_snmp_device WHERE enabled=1"):
+        devices.append({**r, "macs": [m for m in (r["macs"] or "").split(",") if m], "ports": ports.get(r["id"], {})})
+    rs = {r["router_ip"]: r for r in q("SELECT router_ip, identity FROM ml_router_status")}
+    routers = [{"ip": n["nasname"], "name": (rs.get(n["nasname"]) or {}).get("identity") or n["shortname"] or n["nasname"],
+                "online": sum(1 for p in people if p["nas"] == n["nasname"])}
+               for n in q("SELECT nasname, shortname FROM nas ORDER BY nasname") if re.match(r"^\d+(\.\d+){3}$", n["nasname"])]
+    fdb = [(r["device_id"], r["ifindex"], r["mac"]) for r in q("SELECT device_id, ifindex, mac FROM ml_snmp_fdb")]
+    lldp = q("SELECT device_id, ifindex, name, ip, chassis FROM ml_snmp_lldp")
+    t = topology.build(routers, devices, fdb, lldp, people)
+    seen = q1("SELECT MAX(seen) AS at, COUNT(DISTINCT device_id) AS n FROM ml_snmp_fdb") or {}
+    return jsonify(nodes=jsonable(t["nodes"]), unplaced=t["unplaced"], switches_read=int(seen.get("n") or 0), read_at=str(seen.get("at") or ""),
+                   online=len(people))
 
 
 @app.post("/api/departments")

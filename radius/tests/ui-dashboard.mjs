@@ -396,6 +396,18 @@ try {
   }
   ok("devices (SNMP): list, add dialog (v2c / v3 fields, test: no answer), traps, settings (5 limits), device page");
 
+  // network map: departments (routers on top, a card per department) and the whole network tree
+  await go(page, "#/netmap", "Network map");
+  await page.locator(".nm-top").waitFor({ timeout: 15000 });
+  await page.locator(".nm-grid").waitFor();
+  await shot(page, "48-netmap");
+  await go(page, "#/netmap/all", "Network map");
+  await page.locator(".tp .tp-cloud").waitFor({ timeout: 15000 });
+  await page.locator(".tp input, input[type=search]").first().fill("zz-nothing-matches");
+  if (await page.locator(".tp .tp-node").count() !== 0) throw new Error("network map: search did not filter the tree");
+  await shot(page, "49-netmap-whole");
+  ok("network map: departments view, whole network tree, search filters the tree");
+
   // firewall: a policy made in the dialog (country source picked by search), seen in the router order, looked up, deleted
   await go(page, "#/firewall", "Firewall");
   await page.locator(".health-hero").waitFor({ timeout: 15000 });

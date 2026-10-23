@@ -341,6 +341,7 @@ Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein
 | Policy poore network / IP range / ek PC ko (login ke baghair) | Blocking → Policies → Give a policy → Network / IP | `radius-admin policy net add staff 192.168.88.0/24 "Office LAN"` · `policy net list` · `policy net del ID` |
 | Sab blocking ek dam band / wapas (masla ho to) | Setup steps → 1 → If something goes wrong · Dashboard banner | `radius-admin policy pause` · `policy resume` |
 | Devices (SNMP): switch, UPS, printer, server, camera, MikroTik — jawab, CPU, ports, UPS battery, toner; alert foran | Devices (SNMP) → + Add device / Find devices | `radius-admin snmp add 192.168.88.5 community public` · `snmp find 192.168.88.0/24` · `snmp list` |
+| Network map: har department ke computers (IP, online), AP, printer; poore network ka tree (router → switch → AP → log) | Network map → Departments / Whole network | switches Devices (SNMP) mein add · `radius-admin snmp dept ID DEPT` |
 | SNMP traps (device khud batata hai) | Devices → Settings → Trap receiver | `radius-admin snmp trapd on` · `snmp trap-community SECRET` · `snmp traps` |
 | Ye connection kaun si policy le gi? | Firewall → Policy lookup | `radius-admin firewall lookup router 1.2.3.4 203.0.113.1 tcp 8291` |
 | Bahar se kya andar aa raha hai: khule darwaze (port forward, UPnP, router services), kis IP ne kis andar ke IP:port ko chhua | Security → From outside → Who? | naya auto-sync script import + traffic collector |

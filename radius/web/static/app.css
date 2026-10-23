@@ -513,3 +513,20 @@ details.card > summary { font-weight: 700; }
 .nm-empty { padding: 6px 0; }
 .check.inline { padding: 6px 10px; }
 @media (max-width: 640px) { .nm-link { display: none; } .nm-top { flex-direction: column; } .nm-top .nm-dev { flex-basis: auto; } }
+/* whole network tree */
+.tp { overflow-x: auto; }
+.tp-ul { list-style: none; margin: 4px 0 0 13px; padding: 0 0 0 18px; border-left: 2px solid var(--border); }
+.tp-ul > li { position: relative; margin: 6px 0; }
+.tp-ul > li::before { content: ""; position: absolute; left: -18px; top: 19px; width: 14px; border-top: 2px solid var(--border); }
+.tp-node { display: inline-flex; gap: 8px; align-items: center; border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; background: var(--panel); max-width: 100%; }
+.tp-node > svg { width: 20px; height: 20px; flex: none; color: var(--accent); }
+.tp-node.bad { border-color: var(--bad); } .tp-node.guess { border-style: dashed; }
+.tp-cloud > svg { color: var(--muted); }
+.tp-person { border-color: transparent; background: none; padding: 2px 6px; }
+.tp-person > svg { width: 16px; height: 16px; color: var(--muted); }
+.tp-txt { min-width: 0; overflow-wrap: anywhere; }
+.tp-txt a { color: inherit; }
+.tp-port { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+.tp-muted { border-style: dashed; }
+.tp-group > summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 4px 0; }
+a.nm-node { color: inherit; text-decoration: none; }

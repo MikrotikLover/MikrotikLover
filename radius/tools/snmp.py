@@ -398,6 +398,14 @@ IF_COLS = {"descr": "1.3.6.1.2.1.2.2.1.2", "type": "1.3.6.1.2.1.2.2.1.3", "speed
            "outerr": "1.3.6.1.2.1.2.2.1.20"}
 IFX_COLS = {"name": "1.3.6.1.2.1.31.1.1.1.1", "in": "1.3.6.1.2.1.31.1.1.1.6", "out": "1.3.6.1.2.1.31.1.1.1.10",
             "speed": "1.3.6.1.2.1.31.1.1.1.15", "alias": "1.3.6.1.2.1.31.1.1.1.18"}
+IF_PHYS = "1.3.6.1.2.1.2.2.1.6"
+BRIDGE_PORT_IF = "1.3.6.1.2.1.17.1.4.1.2"                       # dot1dBasePortIfIndex: bridge port -> ifIndex
+QFDB_PORT, QFDB_STATUS = "1.3.6.1.2.1.17.7.1.2.2.1.2", "1.3.6.1.2.1.17.7.1.2.2.1.3"   # Q-BRIDGE: vlan.mac -> port
+FDB_PORT, FDB_STATUS = "1.3.6.1.2.1.17.4.3.1.2", "1.3.6.1.2.1.17.4.3.1.3"             # BRIDGE-MIB: mac -> port
+LLDP_REM = {"chassis": "1.0.8802.1.1.2.1.4.1.1.5", "port": "1.0.8802.1.1.2.1.4.1.1.7", "portdesc": "1.0.8802.1.1.2.1.4.1.1.8",
+            "name": "1.0.8802.1.1.2.1.4.1.1.9"}
+LLDP_REM_ADDR = "1.0.8802.1.1.2.1.4.2.1.3"
+LLDP_LOC_PORT = {"id": "1.0.8802.1.1.2.1.3.7.1.3", "desc": "1.0.8802.1.1.2.1.3.7.1.4"}
 HR_CPU = "1.3.6.1.2.1.25.3.3.1.2"
 HR_STORE = {"type": "1.3.6.1.2.1.25.2.3.1.2", "descr": "1.3.6.1.2.1.25.2.3.1.3", "units": "1.3.6.1.2.1.25.2.3.1.4",
             "size": "1.3.6.1.2.1.25.2.3.1.5", "used": "1.3.6.1.2.1.25.2.3.1.6"}
@@ -438,8 +446,69 @@ def table(cl, cols, limit=3000):
     return rows
 
 
-def collect(cl, kind=None):
-    """Read one device -> readings. kind None = first look (read everything to find out what it is)."""
+def mac_of(v):
+    """6 raw bytes (or 'aa:bb..' text) -> 'AA-BB-CC-DD-EE-FF', '' when it is not a usable MAC."""
+    if isinstance(v, bytes) and len(v) == 6:
+        b = v
+    else:
+        h = re.sub(r"[^0-9A-Fa-f]", "", text(v) if isinstance(v, bytes) else str(v or ""))
+        if len(h) != 12:
+            return ""
+        b = bytes.fromhex(h)
+    if b == b"\0" * 6 or b == b"\xff" * 6 or b[0] & 1:          # empty, broadcast, multicast
+        return ""
+    return "-".join(f"{x:02X}" for x in b)
+
+
+def bridge(cl, ifs=None):
+    """Which MAC is behind which port (switch MAC table) and who is next door (LLDP).
+    -> {"fdb": [(ifindex, mac, vlan)], "lldp": [{ifindex, name, port, chassis, ip}]}"""
+    port_if = {o[len(BRIDGE_PORT_IF) + 1:]: str(v) for o, v in cl.walk(BRIDGE_PORT_IF, 2000) if isinstance(v, int)}
+    fdb, seen = [], set()
+    st = {o[len(QFDB_STATUS) + 1:]: v for o, v in cl.walk(QFDB_STATUS, 20000)}
+    for o, v in cl.walk(QFDB_PORT, 20000):
+        idx = o[len(QFDB_PORT) + 1:].split(".")
+        if len(idx) != 7 or not isinstance(v, int) or v == 0 or st.get(".".join(idx)) == 4:     # 4 = the switch's own MAC
+            continue
+        mac = mac_of(bytes(int(x) for x in idx[1:]))
+        if mac and (mac, v) not in seen:
+            seen.add((mac, v))
+            fdb.append((port_if.get(str(v), str(v)), mac, int(idx[0])))
+    if not fdb:
+        st = {o[len(FDB_STATUS) + 1:]: v for o, v in cl.walk(FDB_STATUS, 20000)}
+        for o, v in cl.walk(FDB_PORT, 20000):
+            idx = o[len(FDB_PORT) + 1:].split(".")
+            if len(idx) != 6 or not isinstance(v, int) or v == 0 or st.get(".".join(idx)) == 4:
+                continue
+            mac = mac_of(bytes(int(x) for x in idx))
+            if mac:
+                fdb.append((port_if.get(str(v), str(v)), mac, 0))
+    lldp = []
+    rem = table(cl, LLDP_REM, 2000)
+    if rem:
+        names = {i: text(x.get("name")) for i, x in (ifs or {}).items()}
+        loc = table(cl, LLDP_LOC_PORT, 500)
+        addrs = {}
+        for o, _ in cl.walk(LLDP_REM_ADDR, 2000):
+            p = o[len(LLDP_REM_ADDR) + 1:].split(".")       # timeMark.localPort.remIndex.addrSubtype.len.addr...
+            if len(p) >= 9 and p[3] == "1" and p[4] == "4":
+                addrs[".".join(p[:3])] = ".".join(p[5:9])
+        for idx, r in rem.items():
+            p = idx.split(".")
+            if len(p) < 3:
+                continue
+            lp = p[1]
+            ld = text((loc.get(lp) or {}).get("desc")) or text((loc.get(lp) or {}).get("id"))
+            ifx = lp if (ifs is None or lp in (ifs or {})) else next((i for i, nm in names.items() if nm and nm == ld), lp)
+            ch = r.get("chassis")
+            lldp.append({"ifindex": ifx, "name": text(r.get("name"))[:64], "port": (text(r.get("portdesc")) or text(r.get("port")))[:64],
+                         "chassis": mac_of(ch) if isinstance(ch, bytes) else "", "ip": addrs.get(".".join(p[:3]), "")})
+    return {"fdb": fdb[:20000], "lldp": lldp[:500]}
+
+
+def collect(cl, kind=None, topo=False):
+    """Read one device -> readings. kind None = first look (read everything to find out what it is).
+    topo: also the MAC table and LLDP neighbours (switches, MikroTik, APs; every 5 minutes)."""
     s = cl.get(SYS.values())
     if not s:
         raise Timeout(f"{getattr(cl, 'ip', '?')} answered, but without the basic system values")
@@ -539,6 +608,12 @@ def collect(cl, kind=None):
                     sensors.append({"name": names.get(idx, f"sensor {idx}")[:40], "value": r["value"] / (10 ** int(r.get("precision") or 0)) * 10 ** sc, "unit": "°C"})
     if sensors:
         m["sensors"] = sensors[:30]
+    m["macs"] = sorted({mac_of(v) for o, v in cl.walk(IF_PHYS, 600)} - {""})[:64]
+    if topo or kind is None:
+        try:
+            m["bridge"] = bridge(cl, m.get("ifs"))
+        except Timeout:
+            m["bridge"] = None
     m["rtt"] = round(cl.rtt, 1) if cl.rtt is not None else None
     return m
 
@@ -789,7 +864,8 @@ def poll(db, only=None, state_path=STATE, now=None, workers=16):
     def one(d):
         try:
             cl = client(d, secrets.get(str(d["id"]), {}))
-            return d, collect(cl, d["kind"] if d["kind_auto"] == 0 or d["status"] != "new" else None), None
+            kind = d["kind"] if d["kind_auto"] == 0 or d["status"] != "new" else None
+            return d, collect(cl, kind, topo=bool(sample) and d["kind"] in ("switch", "mikrotik", "ap")), None
         except Timeout as e:
             return d, None, str(e)
         except Exception as e:  # noqa: BLE001 — one odd device must not stop the others
@@ -837,6 +913,16 @@ def poll(db, only=None, state_path=STATE, now=None, workers=16):
                 gone = [int(x) for x in (prev.get("ifs") or {}) if x not in m["ifs"] and x.isdigit()]
                 if gone:
                     db.q("DELETE FROM ml_snmp_if WHERE device_id=%s AND ifindex IN (" + ",".join(["%s"] * len(gone)) + ")", (d["id"], *gone))
+            if m.get("macs") is not None:
+                db.q("UPDATE ml_snmp_device SET macs=%s WHERE id=%s", (",".join(m["macs"]), d["id"]))
+            if m.get("bridge"):
+                db.q("DELETE FROM ml_snmp_fdb WHERE device_id=%s", (d["id"],))
+                db.many("INSERT IGNORE INTO ml_snmp_fdb (device_id, ifindex, mac, vlan, seen) VALUES (%s,%s,%s,%s,%s)",
+                        [(d["id"], int(i), mac, vl, stamp) for i, mac, vl in m["bridge"]["fdb"] if str(i).isdigit()])
+                db.q("DELETE FROM ml_snmp_lldp WHERE device_id=%s", (d["id"],))
+                db.many("INSERT INTO ml_snmp_lldp (device_id, ifindex, name, port, chassis, ip, seen) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                        [(d["id"], int(x["ifindex"]) if str(x["ifindex"]).isdigit() else 0, x["name"], x["port"], x["chassis"], x["ip"], stamp)
+                         for x in m["bridge"]["lldp"]])
             if sample:
                 rows = [(k, v) for k, v in (("cpu", m.get("cpu")), ("mem", m.get("mem")), ("rtt", m.get("rtt")),
                                             ("charge", (m.get("ups") or {}).get("charge")), ("runtime", (m.get("ups") or {}).get("runtime")),
@@ -1307,7 +1393,7 @@ def main():
         r = db.q("SELECT name, ip FROM ml_snmp_device WHERE id=%s", (did,))
         if not r:
             sys.exit(f"ERROR: no device #{did}")
-        for t in ("ml_snmp_if", "ml_snmp_sample", "ml_snmp_event"):
+        for t in ("ml_snmp_if", "ml_snmp_sample", "ml_snmp_event", "ml_snmp_fdb", "ml_snmp_lldp"):
             db.q(f"DELETE FROM {t} WHERE device_id=%s", (did,))
         db.q("UPDATE ml_snmp_trap SET device_id=NULL WHERE device_id=%s", (did,))     # its traps stay, as 'not in the list'
         db.q("DELETE FROM ml_snmp_device WHERE id=%s", (did,))

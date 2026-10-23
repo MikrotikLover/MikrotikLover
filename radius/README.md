@@ -1210,6 +1210,39 @@ sudo radius-admin snmp limit toner 15
 - Health check mein "Devices (SNMP)" group: har minute wala check chal raha hai, kaun jawab nahi de raha, trap receiver.
 - Tests: `tests/test-snmp.py` (44: wire format, nakli device, v1 / bulk, traps ke alfaz, events, counters, v3 output), `tests/test-snmp.sh` (asli net-snmp agent v2c + v3, snmptrap / snmpinform, bijli jana / port down / device band, alerts, router lines lint, health, API).
 
+## 7h6. Network map — departments aur poora network ek nazar mein
+
+Dashboard → **Network map**. Do views, har minute khud update:
+
+**1. Departments:** upar Internet → routers → core devices (switch, UPS, server). Neeche har department ka dabba:
+- shared speed, kitne online / kul
+- us ke devices (AP, printer, camera … Devices (SNMP) se) — status ke saath
+- us ke log aur computers: naam, **IP**, online / offline (hara / grey), Windows / Android / iPhone, policy, "fixed" (IP binding wala pakka IP)
+- MAC devices (printer, TV, CCTV) apne description ke naam se
+- "Not in a department": jo online hain magar kisi department mein nahi
+
+Department mein log: Departments page (user ya poora group). Device (AP, printer …) ko department: map par us ke neeche list se, ya Devices → device → Settings → Department (`radius-admin snmp dept ID sales`).
+
+**2. Whole network:** asli cable ka nakhsha, tree ki shakal mein:
+```
+Internet
+└ hAP-Office (router)
+  └ SW-Core-1            (router ki ether2 par)
+    ├ SW-Floor-2         (Gi1/0/2) → ali (port3), sara (port4) …
+    ├ AP-Lobby           (Gi1/0/3) → Wi-Fi par bilal, eap-ok
+    ├ HP printer         (Gi1/0/5)
+    └ 3 other devices    (login nahi kiya: IoT, doosra network …)
+```
+- Server har 5 minute switches (aur MikroTik / AP) se SNMP par **MAC table** (kis port ke peeche kaun sa MAC) aur **LLDP** (saath wala device) parhta hai. Har device apne MAC bhi batata hai.
+- Har MAC us switch port par lagta hai jo **sab se kam MAC** dekhta hai (sab se nazdeek). AP ke port par aane wale phones AP ke neeche (Wi-Fi).
+- Login wale log un ke MAC se pehchane jate hain; jo kisi switch par nahi dikhe woh apne router ke neeche.
+- Dashed dabba = upar ka link nahi dikha: router / upar wala switch bhi Devices (SNMP) mein add karein, ya switch par LLDP on karein.
+- Search: naam, IP ya port.
+
+Kya chahiye: switches par SNMP (read only) — managed switches (TP-Link JetStream / Omada, D-Link, Cisco, HP / Aruba, MikroTik CRS) MAC table dete hain; sasta unmanaged switch nahi deta (us ke peeche ke devices upar wale switch ke us port par ek saath dikhte hain).
+
+Tests: `tests/test-topology.py` (17: tree ke qaide, LLDP, loop, Wi-Fi under AP, fake switch se MAC table + LLDP parhna), `tests/test-netmap.sh` (17: departments, IPs, fixed, policies, device department, router aik dafa, whole network API).
+
 ## 7h3. Bahar se network mein kya aa raha hai (From outside)
 
 Dashboard → **Security → From outside**. Teen sawaal, teen jawab:
