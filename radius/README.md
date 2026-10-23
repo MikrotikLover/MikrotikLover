@@ -1241,7 +1241,7 @@ Internet
 
 Kya chahiye: switches par SNMP (read only) — managed switches (TP-Link JetStream / Omada, D-Link, Cisco, HP / Aruba, MikroTik CRS) MAC table dete hain; sasta unmanaged switch nahi deta (us ke peeche ke devices upar wale switch ke us port par ek saath dikhte hain).
 
-Tests: `tests/test-topology.py` (17: tree ke qaide, LLDP, loop, Wi-Fi under AP, fake switch se MAC table + LLDP parhna), `tests/test-netmap.sh` (17: departments, IPs, fixed, policies, device department, router aik dafa, whole network API).
+Tests: `tests/test-topology.py` (16: tree ke qaide, LLDP, loop, Wi-Fi under AP, fake switch se MAC table + LLDP parhna), `tests/test-netmap.sh` (17: departments, IPs, fixed, policies, device department, router aik dafa, whole network API).
 
 ## 7h3. Bahar se network mein kya aa raha hai (From outside)
 
