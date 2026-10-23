@@ -52,6 +52,9 @@ const ICONS = {
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14m10 3-5.2-5.2",
   block: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M5.6 5.6l12.8 12.8",
   flag: "M5 21V4m0 0h11l-2 4 2 4H5",
+  map: "M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2zM9 4v14M15 6v14",
+  printer: "M7 8V3h10v5M5 8h14a2 2 0 0 1 2 2v6h-4v4H7v-4H3v-6a2 2 0 0 1 2-2zM7 14h10",
+  camera: "M3 7h4l2-2h6l2 2h4v12H3zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8",
   device: "M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01M12 7h4M12 17h4",
   mail: "M3 6h18v12H3zM3 7l9 6 9-6",
   wall: "M3 5h18v14H3zM3 9.7h18M3 14.3h18M9 5v4.7M15 9.7v4.6M9 14.3V19",
@@ -223,7 +226,7 @@ const legend = () => h("div", { class: "legend" }, h("span", {}, h("i", { class:
 
 // ------------------------------------------------------------------ shell + router
 const NAV = [
-  ["dashboard", "Dashboard", "home"], ["golive", "Setup steps", "flag"], ["users", "Users", "users"], ["groups", "Groups & policies", "groups"], ["departments", "Departments", "team"],
+  ["dashboard", "Dashboard", "home"], ["golive", "Setup steps", "flag"], ["users", "Users", "users"], ["groups", "Groups & policies", "groups"], ["departments", "Departments", "team"], ["netmap", "Network map", "map"],
   ["macs", "MAC devices", "mac"], ["ipbind", "IP binding", "pin"], ["routers", "Routers", "router"], ["devices", "Devices (SNMP)", "device"], ["setup", "Router setup", "term"], "-",
   ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], ["speed", "Speed schedule", "clock"], ["hotspot", "Hotspot page", "brush"], ["social", "Social WiFi", "phone"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["insights", "Insights (samajh)", "bulb"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
@@ -3702,8 +3705,87 @@ function netPolicyCard(meta) {
     nets, "None — e.g. give 'staff' to the whole office LAN: Give a policy → Network / IP."));
 }
 
+// ------------------------------------------------------------------ network map: routers, core devices, departments with their computers and devices
+const NM_DEV_ICON = { switch: "ports", ap: "online", ups: "pulse", printer: "printer", mikrotik: "router", server: "data", camera: "camera", other: "device" };
+const nmPersonIcon = (p) => p.kind === "mac" ? (/print/i.test(p.label) ? "printer" : /cctv|nvr|dvr|camera/i.test(p.label) ? "camera" : /tv/i.test(p.label) ? "mac" : "device")
+  : p.os === "android" || p.os === "apple" ? "phone" : "mac";
+const nmDot = (on, warn) => h("span", { class: `nm-dot ${on ? (warn ? "warn" : "on") : "off"}`, title: on ? (warn ? "needs a look" : "online") : "offline" });
+
+function nmDevice(x, depts) {
+  const bad = x.status === "down", info = x.info || {};
+  const warn = (info.ups && info.ups.source === "battery") || (info.printer && (info.printer.errors || []).length);
+  return h("div", { class: "nm-dev" + (bad ? " bad" : warn ? " warn" : "") },
+    h("a", { href: `#/devices/${x.id}`, class: "nm-dev-main" }, icon(NM_DEV_ICON[x.kind] || "device"),
+      h("div", { class: "nm-dev-txt" }, h("b", {}, x.name), h("code", {}, x.ip), h("div", { class: "muted small" }, bad ? "NO ANSWER" : x.line || x.kind)),
+      nmDot(x.status === "up", warn)),
+    depts && isAdmin() ? h("select", { class: "nm-move", title: "put it in a department", onchange: async (e) => {
+      if (await act(api("POST", `/api/devices/${x.id}/dept`, { dept: e.target.value }), "Moved")) route(); } },
+      h("option", { value: "" }, "— department —"), depts.map((d) => h("option", { value: d, selected: d === x.dept }, d))) : null);
+}
+
+function nmPerson(p) {
+  const href = p.kind === "mac" ? "#/macs" : `#/users/${encodeURIComponent(p.name)}`;
+  return h("a", { href, class: "nm-row" + (p.online ? "" : " off") }, nmDot(p.online), icon(nmPersonIcon(p)),
+    h("div", { class: "nm-who" }, h("b", {}, p.kind === "mac" ? (p.label || p.name) : p.name),
+      h("div", { class: "muted small" }, p.kind === "mac" ? `device · ${p.name}` : ({ android: "Android", apple: "iPhone / Mac", windows: "Windows" }[p.os] || (p.online ? "online" : "offline")),
+        p.policy ? h("span", { class: "nm-pol" }, ` · ${p.policy}`) : null)),
+    h("div", { class: "nm-ip" }, p.ip ? h("code", {}, p.ip) : h("span", { class: "muted small" }, "—"), p.fixed ? h("span", { class: "nm-fixed", title: "fixed address (IP binding)" }, "fixed") : null));
+}
+
+ROUTES.netmap = async () => {
+  let onlyOn = false; try { onlyOn = localStorage.getItem("nm-online") === "1"; } catch (e) { /* private window */ }
+  const search = h("input", { type: "search", placeholder: "Find a name, IP or MAC", class: "grow" });
+  const onlyBox = h("label", { class: "check inline" + (onlyOn ? " on" : "") }, h("input", { type: "checkbox", checked: onlyOn }), h("div", {}, h("b", {}, "Only online")));
+  const holder = h("div", { class: "stack" });
+  let d = await api("GET", "/api/netmap");
+  const open = {};
+  const draw = () => {
+    const f = search.value.trim().toLowerCase();
+    const fit = (p) => (!onlyOn || p.online) && (!f || `${p.name} ${p.label} ${p.ip} ${p.mac} ${p.policy}`.toLowerCase().includes(f));
+    const fitDev = (x) => !f || `${x.name} ${x.ip} ${x.kind}`.toLowerCase().includes(f);
+    const people = (list, key) => {
+      const rows = list.filter(fit), max = open[key] ? 1000 : 24;
+      return [rows.length ? h("div", { class: "nm-rows" }, rows.slice(0, max).map(nmPerson)) : h("div", { class: "muted small nm-empty" }, f || onlyOn ? "nobody matches" : "nobody yet"),
+        rows.length > max ? h("button", { class: "small", onclick: () => { open[key] = true; draw(); } }, `Show all ${rows.length}`) : null];
+    };
+    const top = h("div", { class: "card nm-top" },
+      h("div", { class: "nm-node nm-cloud" }, icon("globe"), h("b", {}, "Internet")), h("span", { class: "nm-link" }),
+      h("div", { class: "nm-nodes" }, d.routers.map((r) => h("div", { class: "nm-node" + (r.reporting ? "" : " quiet") }, icon("router"),
+        h("div", {}, h("b", {}, r.name), h("code", {}, r.ip), h("div", { class: "muted small" }, `${r.online} online${r.cpu != null ? ` · CPU ${r.cpu}%` : ""}${r.reporting ? "" : " · no report"}`))))),
+      d.core.filter(fitDev).length ? h("span", { class: "nm-link" }) : null,
+      d.core.filter(fitDev).length ? h("div", { class: "nm-nodes" }, d.core.filter(fitDev).map((x) => nmDevice(x, isAdmin() ? d.dept_names : null))) : null);
+    const cards = d.departments.map((dp) => h("div", { class: "card nm-dept" },
+      h("div", { class: "nm-head" }, h("div", { class: "grow" }, h("h2", {}, dp.title || dp.name), h("div", { class: "muted small" },
+        `${dp.online} of ${dp.total} online`, dp.down_kbps ? ` · shares ${bps(dp.down_kbps * 1000)} down / ${bps(dp.up_kbps * 1000)} up` : "")),
+        h("a", { href: "#/departments", class: "small" }, "Members")),
+      dp.devices.filter(fitDev).length ? h("div", { class: "nm-devs" }, dp.devices.filter(fitDev).map((x) => nmDevice(x, isAdmin() ? d.dept_names : null))) : null,
+      ...people(dp.people, dp.name)));
+    const loose = d.loose.filter(fit), others = d.other_devices.filter(fitDev);
+    holder.replaceChildren(top, h("div", { class: "nm-grid" }, cards,
+      (loose.length || others.length || !d.departments.length) ? h("div", { class: "card nm-dept nm-none" },
+        h("div", { class: "nm-head" }, h("div", { class: "grow" }, h("h2", {}, "Not in a department"), h("div", { class: "muted small" }, `${d.loose.length} online${d.loose_more ? ` (+${d.loose_more})` : ""}`)),
+          h("a", { href: "#/departments", class: "small" }, "Add departments")),
+        others.length ? h("div", { class: "nm-devs" }, others.map((x) => nmDevice(x, isAdmin() ? d.dept_names : null))) : null,
+        ...people(d.loose, "_none")) : null));
+  };
+  search.addEventListener("input", draw);
+  onlyBox.querySelector("input").addEventListener("change", (e) => { onlyOn = e.target.checked; onlyBox.classList.toggle("on", onlyOn); try { localStorage.setItem("nm-online", onlyOn ? "1" : "0"); } catch (x) { /* ignore */ } draw(); });
+  draw();
+  every(60000, async () => { try { d = await api("GET", "/api/netmap"); draw(); } catch (e) { /* next minute */ } });
+  shell("Network map", h("div", { class: "stack" },
+    h("div", { class: "toolbar wrap" }, search, onlyBox,
+      h("span", { class: "nm-legend muted small" }, nmDot(true), " online ", nmDot(false), " offline ", nmDot(true, true), " needs a look ", h("span", { class: "nm-fixed" }, "fixed"), " own address"),
+      h("span", { class: "muted small" }, `${num(d.online)} online now · updates every minute`)),
+    holder,
+    hint("How the map is made", h("ul", { class: "g-list" },
+      h("li", {}, "People and computers: the department's users and the users of its groups (Departments page). Address: online now, or the fixed address (IP binding)."),
+      h("li", {}, "Devices (AP, printer, switch, UPS, camera …): from Devices (SNMP) — put each in its department here or on the device page. Switches, routers, UPS and servers without a department show at the top."),
+      h("li", {}, "MAC devices (printer, TV, CCTV that log in by MAC) appear with their description in the department of their group."),
+      h("li", {}, "Windows / Android / iPhone is known from what the device asks on the network (Apps on network).")))));
+};
+
 // ------------------------------------------------------------------ devices through SNMP (switch, UPS, printer, MikroTik, server, camera)
-const DEV_KIND = { switch: "Switch", ups: "UPS", printer: "Printer", mikrotik: "MikroTik", server: "Server", camera: "Camera / NVR", other: "Other" };
+const DEV_KIND = { switch: "Switch", ap: "Access point", ups: "UPS", printer: "Printer", mikrotik: "MikroTik", server: "Server", camera: "Camera / NVR", other: "Other" };
 const devStatus = (d) => !d.enabled ? badge("off", "") : d.status === "up" ? (d.info && d.info.ups && d.info.ups.source === "battery" ? badge("ON BATTERY", "bad") : badge("answers", "ok"))
   : d.status === "down" ? badge("NO ANSWER", "bad") : badge("checking…", "info");
 const tonerMeter = (pct) => { const bar = h("i", {}); bar.style.width = `${Math.min(100, Math.max(0, pct))}%`; return h("div", { class: "meter " + (pct <= 10 ? "bad" : pct <= 25 ? "warn" : "ok") }, bar); };
@@ -3813,7 +3895,7 @@ ROUTES.devices = async (sub = "", ...rest) => {
     h("button", { class: "primary", onclick: () => deviceAddDialog(d.kinds) }, "+ Add device"),
     h("button", { onclick: () => deviceFindDialog(d.kinds) }, icon("search"), "Find devices"),
     notAdded.length ? h("button", { onclick: async () => { if (await act(api("POST", "/api/devices/routers", {}))) route(); } }, icon("router"), `Add my MikroTik routers (${notAdded.length})`) : null) : null;
-  const icons = { switch: "ports", ups: "pulse", printer: "reports", mikrotik: "router", server: "data", camera: "online", other: "device" };
+  const icons = { switch: "ports", ap: "online", ups: "pulse", printer: "printer", mikrotik: "router", server: "data", camera: "camera", other: "device" };
   shell("Devices", h("div", { class: "stack" }, devTabs(""),
     h("div", { class: `card health-hero ${state}` }, h("div", { class: "hh-mark" }, state === "ok" ? "✔" : "!"),
       h("div", { class: "grow" }, h("div", { class: "hh-title" }, title), h("div", { class: "muted" }, text)), bar),
@@ -3903,6 +3985,8 @@ async function deviceDetail(id, hours = "24") {
       h("label", { class: "field" }, "Name", h("input", { value: x.name, maxlength: 64, onchange: (e) => doIt("name", { name: e.target.value.trim() }, "Name saved") })),
       h("label", { class: "field" }, "Kind", h("select", { onchange: (e) => doIt("kind", { kind: e.target.value }, "Kind saved") },
         h("option", { value: "auto" }, "find out by itself"), d.kinds.map((k) => h("option", { value: k, selected: !x.kind_auto && k === x.kind }, DEV_KIND[k])))),
+      h("label", { class: "field" }, "Department (map)", h("select", { onchange: (e) => doIt("dept", { dept: e.target.value }, "Saved") },
+        h("option", { value: "" }, "— none / core —"), (d.depts || []).map((n) => h("option", { value: n, selected: n === x.dept }, n)))),
       h("label", { class: "check" + (x.alerts ? " on" : "") }, h("input", { type: "checkbox", checked: !!x.alerts, onchange: (e) => doIt("alerts", { on: e.target.checked }) }), h("div", {}, h("b", {}, "Alerts"), h("span", {}, "Telegram / WhatsApp / email"))),
       h("label", { class: "check" + (x.enabled ? " on" : "") }, h("input", { type: "checkbox", checked: !!x.enabled, onchange: (e) => doIt("enabled", { on: e.target.checked }) }), h("div", {}, h("b", {}, "Check it"), h("span", {}, "off = kept, not asked"))),
       h("button", { class: "small", onclick: () => {

@@ -1920,8 +1920,8 @@ cmd_snmp() { # devices on the LAN through SNMP (switch, UPS, printer, MikroTik, 
         secret)
             local id=${1:-} ver=${2:-}; valid_int "$id" id; [[ $ver =~ ^(1|2c|3)$ ]] || die "usage: radius-admin snmp secret ID 1|2c|3 (JSON on stdin)"
             snmp_py set "$id" secret "$ver" --stdin ;;
-        name|kind|alerts|enabled)
-            valid_int "${1:-}" id; [ -n "${2:-}" ] || die "usage: radius-admin snmp $sub ID VALUE"
+        name|kind|alerts|enabled|dept)
+            valid_int "${1:-}" id; [ -n "${2:-}" ] || die "usage: radius-admin snmp $sub ID VALUE$([ "$sub" = dept ] && echo "   (department name, or - for none / core)")"
             snmp_py set "$1" "$sub" "$2" ;;
         watch)
             valid_int "${1:-}" id; valid_int "${2:-}" ifindex; [[ ${3:-on} =~ ^(on|off)$ ]] || die "usage: radius-admin snmp watch ID IFINDEX on|off"
@@ -1961,7 +1961,7 @@ cmd_snmp() { # devices on the LAN through SNMP (switch, UPS, printer, MikroTik, 
             valid_int "$v" value; [ "$v" -ge 1 ] && [ "$v" -le 150 ] || die "1-150"
             setting_set "snmp_$(echo "$k" | sed 's/toner/toner_pct/; s/cpu/cpu_pct/; s/disk/disk_pct/; s/temp/temp_c/; s/ups-load/ups_load/')" "$v"
             ok "$k limit $v" ;;
-        *) die "usage: radius-admin snmp list|add|test|find|show|poll|name|kind|alerts|watch|del|traps|events|trapd|trap-community|router|router-script|limit" ;;
+        *) die "usage: radius-admin snmp list|add|test|find|show|poll|name|kind|alerts|dept|watch|del|traps|events|trapd|trap-community|router|router-script|limit" ;;
     esac
 }
 
@@ -3603,7 +3603,7 @@ Blocking policies + router auto-sync (dashboard → Blocking)
   mail status · mail doors · mail guard|smtp-out on|off · mail rate N · mail trusted OBJECT|none · mail logs · mail checklist KEY on|off
   snmp add IP [community C] [v1|v2c] [v3 USER SHA AUTHPASS AES PRIVPASS] [name N] [kind K]   watch a device (switch, UPS, printer, server …)
   snmp list · snmp show ID · snmp find 192.168.88.0/24 [community C] · snmp test IP [community C] · snmp poll · snmp del ID
-  snmp watch ID IFINDEX on|off (port down alert) · snmp alerts ID on|off · snmp name|kind ID VALUE · snmp limit toner|cpu|disk|temp|ups-load N
+  snmp watch ID IFINDEX on|off (port down alert) · snmp alerts ID on|off · snmp name|kind ID VALUE · snmp dept ID DEPT|- (network map) · snmp limit toner|cpu|disk|temp|ups-load N
   snmp trapd on|off|status · snmp trap-community C · snmp traps · snmp events · snmp router-script ROUTER-IP (MikroTik lines)
   policy on|off NAME                    turn a policy off (kept, users stay in it, no router rules) or on again
   policy build                          rebuild the router rules (+ VPN server list); cron does it every hour

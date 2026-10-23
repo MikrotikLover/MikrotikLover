@@ -34,7 +34,7 @@ DBNAME = "radius"
 SECRETS = "/etc/mikrotiklover-radius/snmp-secrets.json"
 STATE = "/var/lib/mikrotiklover/snmp-state.json"
 LOCK = "/run/mikrotiklover-snmp.lock"
-KINDS = ("switch", "ups", "printer", "mikrotik", "server", "camera", "other")
+KINDS = ("switch", "ap", "ups", "printer", "mikrotik", "server", "camera", "other")
 
 # ------------------------------------------------------------------ BER (the SNMP wire format)
 INT, OCTETS, NULL, OID, SEQ = 0x02, 0x04, 0x05, 0x06, 0x30
@@ -553,6 +553,8 @@ def guess_kind(m):
         return "mikrotik"
     if re.search(r"hikvision|dahua|\bnvr\b|\bdvr\b|ip ?camera|\bipc\b|uniview|axis", d):
         return "camera"
+    if re.search(r"access point|\buap\b|unifi ap|u6-|\beap\d|omada|aironet|ruckus|wireless ap", d):
+        return "ap"
     if re.search(r"windows|linux|freebsd|vmware|esxi|synology|qnap|truenas|ubuntu|debian", d) and m.get("disks"):
         return "server"
     ether = [i for i in (m.get("ifs") or {}).values() if i["type"] in (6, 117)]
@@ -1261,7 +1263,7 @@ def main():
               else f"Device #{did} added: {name} ({ip}) — {k}" + (f": {summary(k, probe)}" if probe else " (not checked)"))
     elif cmd == "set":
         if len(pos) < 4 or not pos[1].isdigit():
-            sys.exit("usage: snmp.py set ID name|kind|alerts|enabled|watch|secret VALUE [IFINDEX]")
+            sys.exit("usage: snmp.py set ID name|kind|alerts|enabled|watch|dept|secret VALUE [IFINDEX]")
         did, key, val = int(pos[1]), pos[2], pos[3]
         if not db.q("SELECT id FROM ml_snmp_device WHERE id=%s", (did,)):
             sys.exit(f"ERROR: no device #{did}")
@@ -1284,6 +1286,10 @@ def main():
             if not db.q("SELECT 1 FROM ml_snmp_if WHERE device_id=%s AND ifindex=%s", (did, int(pos[4]))):
                 sys.exit(f"ERROR: device #{did} has no interface {pos[4]}")
             db.q("UPDATE ml_snmp_if SET watch=%s WHERE device_id=%s AND ifindex=%s", (1 if val == "on" else 0, did, int(pos[4])))
+        elif key == "dept":
+            if val != "-" and not db.q("SELECT 1 FROM ml_department WHERE name=%s", (val,)):
+                sys.exit(f"ERROR: no department '{val}' (Departments page)")
+            db.q("UPDATE ml_snmp_device SET dept=%s WHERE id=%s", ("" if val == "-" else val, did))
         elif key == "secret":
             sec = secret_from(a)
             s = load_secrets()
@@ -1292,7 +1298,7 @@ def main():
             if val in ("1", "2c", "3"):
                 db.q("UPDATE ml_snmp_device SET version=%s WHERE id=%s", (val, did))
         else:
-            sys.exit("ERROR: name, kind, alerts, enabled, watch or secret")
+            sys.exit("ERROR: name, kind, alerts, enabled, watch, dept or secret")
         print(f"device #{did}: {key} {val}" + (f" ({pos[4]})" if key == "watch" else ""))
     elif cmd == "del":
         if len(pos) < 2 or not pos[1].isdigit():

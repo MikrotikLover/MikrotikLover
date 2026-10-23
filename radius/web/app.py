@@ -2377,6 +2377,62 @@ def departments():
     return jsonify(departments=out, groups=groups)
 
 
+@app.get("/api/netmap")
+@login_required()
+def netmap():
+    """One picture of the LAN: routers, core devices, and per department its people / computers (IP, online, device kind,
+    policy) and its devices (AP, printer, switch … from SNMP). Everything online that is in no department is shown too."""
+    of = dept_of_users()
+    online = {}
+    for r in q("""SELECT username, framedipaddress AS ip, callingstationid AS mac, nasipaddress AS nas, acctstarttime AS since
+                  FROM radacct WHERE acctstoptime IS NULL AND COALESCE(acctupdatetime, acctstarttime) >= NOW() - INTERVAL 20 MINUTE
+                  ORDER BY acctstarttime"""):
+        online[r["username"]] = r
+    bound = {r["username"]: r for r in q("SELECT username, ip, mac FROM ml_ip_bind")}
+    macs = {r["mac"]: r["description"] for r in q("SELECT mac, description FROM macdevice")}
+    own_pol = {r["username"]: r["value"].replace("policy-", "") for r in q("SELECT username, value FROM radreply WHERE attribute='Mikrotik-Address-List'")}
+    grp_pol = {r["username"]: r["value"].replace("policy-", "") for r in q(
+        """SELECT g.username, gr.value FROM radusergroup g JOIN radgroupreply gr ON gr.groupname=g.groupname AND gr.attribute='Mikrotik-Address-List'
+           ORDER BY g.priority DESC""")}
+    ips = {x.get("ip") for x in list(online.values()) + list(bound.values()) if x.get("ip")}
+    os_of = {}
+    if ips:
+        ph = ",".join(["%s"] * len(ips))
+        os_of = {r["client_ip"]: r["os"] for r in q(f"SELECT client_ip, os FROM ml_device WHERE client_ip IN ({ph})", tuple(ips))}
+    last = {}
+
+    def person(u):
+        o, b = online.get(u), bound.get(u)
+        ip = (o or {}).get("ip") or (b or {}).get("ip") or ""
+        kind = "mac" if u in macs else "user"
+        return {"name": u, "kind": kind, "label": macs.get(u, "") if kind == "mac" else "", "ip": ip, "online": bool(o),
+                "fixed": bool(b) and (b or {}).get("ip") == ip, "mac": (o or {}).get("mac") or (b or {}).get("mac") or "",
+                "os": os_of.get(ip, ""), "policy": own_pol.get(u) or grp_pol.get(u) or "", "since": str((o or {}).get("since") or "")}
+
+    devs = [_snmp_dev(r) for r in q("SELECT id, name, ip, kind, status, line, enabled, dept, info FROM ml_snmp_device WHERE enabled=1 ORDER BY name")]
+    for d in devs:
+        d["users"] = 0
+    depts = []
+    for d in q("SELECT name, title, down_kbps, up_kbps FROM ml_department ORDER BY name"):
+        names = [u for u, x in of.items() if x == d["name"]]
+        people = sorted((person(u) for u in names), key=lambda p: (not p["online"], p["kind"] != "mac", p["name"]))
+        depts.append({**d, "people": people[:400], "more": max(0, len(people) - 400), "total": len(people),
+                      "online": sum(1 for p in people if p["online"]), "devices": [x for x in devs if x.get("dept") == d["name"]]})
+    known = {d["name"] for d in depts}
+    loose = sorted((person(u) for u in online if of.get(u) not in known), key=lambda p: (p["kind"] != "mac", p["name"]))
+    core = [x for x in devs if not x.get("dept") and x["kind"] in ("switch", "mikrotik", "ups", "server")]
+    other = [x for x in devs if not x.get("dept") and x not in core]
+    routers = []
+    rs = {r["router_ip"]: r for r in q("SELECT router_ip, identity, board, cpu, TIMESTAMPDIFF(SECOND, last_seen, NOW()) AS age FROM ml_router_status")}
+    for n in q("SELECT nasname, shortname FROM nas ORDER BY nasname"):
+        st = rs.get(n["nasname"]) or {}
+        routers.append({"ip": n["nasname"], "name": st.get("identity") or n["shortname"] or n["nasname"], "board": st.get("board") or "", "cpu": st.get("cpu"),
+                        "reporting": st.get("age") is not None and int(st["age"]) < 300,
+                        "online": sum(1 for o in online.values() if o["nas"] == n["nasname"])})
+    return jsonify(routers=routers, core=core, departments=depts, loose=loose[:400], loose_more=max(0, len(loose) - 400),
+                   other_devices=other, online=len(online), dept_names=sorted(known))
+
+
 @app.post("/api/departments")
 @login_required("admin")
 def department_save():
@@ -3257,7 +3313,7 @@ def mail_action(action):
 
 
 # ------------------------------------------------------------------ devices through SNMP: tools/snmp.py
-SNMP_KINDS = ("switch", "ups", "printer", "mikrotik", "server", "camera", "other")
+SNMP_KINDS = ("switch", "ap", "ups", "printer", "mikrotik", "server", "camera", "other")
 SNMP_LIMITS = (("toner", "snmp_toner_pct", 10), ("cpu", "snmp_cpu_pct", 90), ("disk", "snmp_disk_pct", 90), ("temp", "snmp_temp_c", 70), ("ups-load", "snmp_ups_load", 90))
 SNMP_NAME_RE = re.compile(r"^[\w .()@#&+,/-]{1,64}$")
 
@@ -3334,7 +3390,8 @@ def device_get(did):
         graphs.setdefault(row["k"], []).append([row["t"], round(float(row["v"]), 2)])
     events = jsonable(q("SELECT ts, severity, text FROM ml_snmp_event WHERE device_id=%s ORDER BY id DESC LIMIT 50", (did,)))
     traps = jsonable(q("SELECT ts, severity, words, trap_oid, alerted FROM ml_snmp_trap WHERE device_id=%s ORDER BY id DESC LIMIT 50", (did,)))
-    return jsonify(device=_snmp_dev(r), ifs=ifs, graphs=graphs, events=events, traps=traps, hours=hours, kinds=SNMP_KINDS)
+    depts = [x["name"] for x in q("SELECT name FROM ml_department ORDER BY name")]
+    return jsonify(device=_snmp_dev(r), ifs=ifs, graphs=graphs, events=events, traps=traps, hours=hours, kinds=SNMP_KINDS, depts=depts)
 
 
 @app.get("/api/devices/traps")
@@ -3420,6 +3477,9 @@ def device_action(did, action):
         return result(*radius_admin(["snmp", "kind", str(did), field(data, "kind", re.compile(r"^(auto|" + "|".join(SNMP_KINDS) + ")$"), required=True)]))
     if action in ("alerts", "enabled"):
         return result(*radius_admin(["snmp", action, str(did), "on" if data.get("on") else "off"]))
+    if action == "dept":
+        dept = field(data, "dept", DEPT_RE, maxlen=32)
+        return result(*radius_admin(["snmp", "dept", str(did), dept or "-"]))
     if action == "watch":
         ifx = field(data, "ifindex", re.compile(r"^\d{1,10}$"), required=True)
         return result(*radius_admin(["snmp", "watch", str(did), ifx, "on" if data.get("on") else "off"]))

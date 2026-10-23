@@ -703,3 +703,5 @@ CREATE TABLE IF NOT EXISTS ml_snmp_trap (
   KEY (ts),
   KEY (device_id, ts)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+-- Network map: an SNMP device (AP, printer, switch …) belongs to a department ('' = core / none)
+ALTER TABLE ml_snmp_device ADD COLUMN IF NOT EXISTS dept VARCHAR(32) NOT NULL DEFAULT '';
