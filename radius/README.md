@@ -121,6 +121,29 @@ Dashboard → **MAC devices**: Policy column (apni, ya "(group)"), **Policy** bu
 - Group ki speed limit / VLAN MAC devices par bhi lagti hai.
 - **Yaad rakhein:** MAC address copy (spoof) ho sakta hai. MAC auth ko akela security na samjhein; devices ke liye alag SSID (WPA2-PSK + MAC check) aur alag VLAN rakhein — `mikrotik/mac-auth.rsc` yahi karta hai.
 
+### Device yaad rakho (random MAC wale Android / iPhone)
+
+Android 10+ aur iPhone har Wi-Fi ke liye nakli (random) MAC istemal karte hain — MAC badle to MAC login fail. Hal:
+
+1. Dashboard → **Hotspot page → Remember devices** on (`radius-admin remember on`).
+2. Router par hotspot pehle MAC try kare: **Router setup → Hotspot → "Remember devices (MAC login)"**, ya Terminal:
+   `/ip hotspot profile set [find name=hsprof1] login-by=mac,http-chap,cookie mac-auth-mode=mac-as-username`
+3. User **ek dafa** username/password (ya PIN / Social WiFi) se login kare → server us phone ka MAC us ke naam yaad rakh leta hai.
+4. Agli dafa phone **bina login page** andar — **usi user** ke taur par: plan, quota, expiry, policy, speed, data hisaab sab us user ka.
+5. Phone naya random MAC le aaye → sirf ek dafa password login, phir se yaad.
+
+| Setting | Default | CLI |
+|---|---|---|
+| Itne din istemal na ho to bhool jao | 30 | `remember days 30` |
+| Har user ke kitne phone | 2 (naya aaye to sab se purana bhoola) | `remember max 2` |
+| Kis ke phone yaad hain | — | `remember list [USER]` |
+| Bhoolna | — | `remember forget MAC` ya `remember forget USER` (dashboard: user page → Remembered phones → Forget) |
+
+- **Password badla → us ke sab phone bhool jate hain.** User disable / package khatam → yaad rakha phone bhi andar nahi (login page par wajah).
+- MAC devices (`mac add` — printer, TV) apni jagah; un par asar nahi. Kisi aur device par MAC type kar ke login nahi ho sakta (Calling-Station-Id check).
+- **Hifazat:** jo koi yaad rakha MAC copy kare woh us user ke naam andar aa sakta hai (MAC auth ki aam kamzori). Hotspot users / guests ke liye theek; staff ke liye WPA-Enterprise behtar.
+- Test: `tests/test-remember.sh` — asli FreeRADIUS (radclient) se: off / on, pehli dafa password, phir MAC se usi user ki policy aur speed, doosre device par MAC, accounting user ke naam, 2 phone ki had, disable, expiry, 30 din, password badla, MAC device, PIN, ghalat password, API.
+
 ## 4. MikroTik configuration
 
 `mikrotik/` folder mein ready scripts hain. File mein `RADIUS_SERVER_IP`, `RADIUS_SECRET` aur SSID replace karein, Winbox → Files mein upload karein, phir Terminal mein `/import file-name=...`.

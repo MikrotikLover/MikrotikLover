@@ -134,6 +134,9 @@ def build(o, mikrotik_dir, autosync_text=""):
             body = body.replace("Devices-WiFi", ssid).replace("DevicesWiFiKey123", pw)
         if key == "pppoe":
             body = body.replace("interface=ether2", f"interface={_iface(o.get('pppoe_if') or 'ether2', 'PPPoE interface')}")
+        if key == "hotspot" and o.get("hotspot_mac"):
+            # MAC login first (remembered phones, MAC devices); unknown devices still get the login page
+            body = body.replace("login-by=http-chap,cookie", "login-by=mac,http-chap,cookie mac-auth-mode=mac-as-username")
         if key == "snmp":
             comm = o.get("snmp_community") or ""
             if not re.match(r"^[A-Za-z0-9]{12,40}$", comm):

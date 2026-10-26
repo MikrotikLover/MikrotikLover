@@ -133,14 +133,14 @@ cmd_user() {
         shift; valid_name "$u" username; parse_pass_opts "$@"
         user_exists "$u" || die "No such user '$u'"
         read_pass
-        { echo "START TRANSACTION;"; password_sql "$u"; echo "COMMIT;"; } | db
-        ok "Password changed for '$u'"
+        { echo "START TRANSACTION;"; password_sql "$u"; echo "DELETE FROM ml_remember WHERE username=$(q "$u");"; echo "COMMIT;"; } | db
+        ok "Password changed for '$u'$( [ "$(setting_get remember_on 2>/dev/null)" = 1 ] && echo " — remembered devices forgotten (they log in with the new password once)")"
         [ "$GENERATED" = 0 ] || echo "   Password: $PASS"
         ;;
     del|delete|rm)
         local u=${1:-}; valid_name "$u" username
         user_exists "$u" || die "No such user '$u'"
-        echo "DELETE FROM radcheck WHERE username=$(q "$u"); DELETE FROM radreply WHERE username=$(q "$u"); DELETE FROM radusergroup WHERE username=$(q "$u"); DELETE FROM ml_account WHERE username=$(q "$u"); DELETE FROM ml_contact WHERE username=$(q "$u"); DELETE FROM ml_ip_bind WHERE username=$(q "$u"); DELETE FROM ml_dept_member WHERE kind='user' AND name=$(q "$u");" | db
+        echo "DELETE FROM radcheck WHERE username=$(q "$u"); DELETE FROM radreply WHERE username=$(q "$u"); DELETE FROM radusergroup WHERE username=$(q "$u"); DELETE FROM ml_account WHERE username=$(q "$u"); DELETE FROM ml_contact WHERE username=$(q "$u"); DELETE FROM ml_ip_bind WHERE username=$(q "$u"); DELETE FROM ml_dept_member WHERE kind='user' AND name=$(q "$u"); DELETE FROM ml_remember WHERE username=$(q "$u");" | db
         ok "User '$u' deleted"
         ;;
     disable)
@@ -407,7 +407,8 @@ cmd_mac() {
                 INSERT INTO radcheck (username,attribute,op,value) VALUES
                   ($(q "$m"),'Calling-Station-Id','==',$(q "$m")),
                   ($(q "$m"),'Auth-Type',':=','Accept');
-                REPLACE INTO macdevice (mac,description) VALUES ($(q "$m"),$(q "$d"));"
+                REPLACE INTO macdevice (mac,description) VALUES ($(q "$m"),$(q "$d"));
+                DELETE FROM ml_remember WHERE mac=$(q "$m");"
           [ -z "$g" ] || echo "INSERT INTO radusergroup (username,groupname,priority) VALUES ($(q "$m"),$(q "$g"),1);"
           [ -z "$pol" ] || echo "INSERT INTO radreply (username,attribute,op,value) VALUES ($(q "$m"),'Mikrotik-Address-List',':=',$(q "policy-$pol"));"
           echo "COMMIT;"; } | db
@@ -1181,6 +1182,48 @@ ipbind_auto() {
         fi
     done <<<"$rows"
     echo "$n"
+}
+
+cmd_remember() { # "remember this device": after one password login a phone logs in by its MAC as that user (random MACs)
+    local sub=${1:-status}; shift || true
+    case $sub in
+    status)
+        echo "Remember devices : $([ "$(setting_get remember_on)" = 1 ] && echo on || echo off)   (radius-admin remember on|off)"
+        echo "Forget after     : $(setting_get remember_days | grep . || echo 30) day(s) not seen   (remember days N)"
+        echo "Devices per user : $(setting_get remember_max | grep . || echo 2)   (remember max N; the oldest is forgotten)"
+        echo "Remembered now   : $(echo "SELECT COUNT(*), COUNT(DISTINCT username) FROM ml_remember" | db | awk -F'\t' '{print $1 " device(s) of " $2 " user(s)"}')"
+        echo "Router           : hotspot profile login-by must include mac — Router setup → Hotspot → 'Remember devices', or:"
+        echo "                   /ip hotspot profile set [find name=hsprof1] login-by=mac,http-chap,cookie mac-auth-mode=mac-as-username" ;;
+    on|off)
+        setting_set remember_on "$([ "$sub" = on ] && echo 1 || echo 0)"
+        if [ "$sub" = on ]; then ok "Remember devices on: after one login with a password a phone is let in by its MAC (as that user). Router: hotspot login-by=mac (radius-admin remember status)"
+        else ok "Remember devices off: MAC logins of remembered phones are refused (the login page shows); the list is kept"; fi ;;
+    days)
+        valid_int "${1:-}" days; [ "$1" -ge 1 ] && [ "$1" -le 3650 ] || die "days: 1-3650"
+        setting_set remember_days "$1"; ok "a remembered device not seen for $1 day(s) logs in with the password again" ;;
+    max)
+        valid_int "${1:-}" max; [ "$1" -ge 1 ] && [ "$1" -le 20 ] || die "max: 1-20 devices per user"
+        setting_set remember_max "$1"; ok "up to $1 remembered device(s) per user (a new one replaces the oldest)" ;;
+    list)
+        local w=""; [ -z "${1:-}" ] || { valid_name "$1" username; w="WHERE r.username=$(q "$1")"; }
+        echo "SELECT r.username AS user, r.mac, IF(SUBSTRING(r.mac,2,1) IN ('2','6','A','E'),'random','device') AS mac_kind,
+                     r.created AS remembered, r.last_seen,
+                     IF(r.last_seen > NOW() - INTERVAL $(setting_get remember_days | grep -E '^[0-9]+$' || echo 30) DAY,'yes','expired') AS valid
+              FROM ml_remember r $w ORDER BY r.username, r.last_seen DESC" | dbt ;;
+    forget)
+        local x=${1:-}; [ -n "$x" ] || die "usage: radius-admin remember forget MAC|USER"
+        if [[ ${x//[-:.]/} =~ ^[0-9A-Fa-f]{12}$ ]]; then
+            local m; m=$(norm_mac "$x")
+            [ "$(echo "SELECT COUNT(*) FROM ml_remember WHERE mac=$(q "$m")" | db)" != 0 ] || die "$m is not remembered"
+            echo "DELETE FROM ml_remember WHERE mac=$(q "$m")" | db; ok "$m forgotten (that phone sees the login page again)"
+        else
+            valid_name "$x" username
+            local n; n=$(echo "SELECT COUNT(*) FROM ml_remember WHERE username=$(q "$x")" | db)
+            [ "$n" != 0 ] || die "'$x' has no remembered device"
+            echo "DELETE FROM ml_remember WHERE username=$(q "$x")" | db; ok "$n device(s) of '$x' forgotten"
+        fi ;;
+    *) die "usage: radius-admin remember status | on | off | days N | max N | list [USER] | forget MAC|USER" ;;
+    esac
 }
 
 cmd_ipbind() {
@@ -3782,6 +3825,8 @@ Web dashboard (https://SERVER:8443)
 MAC authentication (devices without username/password: printers, CCTV, TVs, POS)
   mac add MAC [-g GROUP] [-d "Reception printer"] [--policy NAME]   any format: aa:bb:.., AABB.CCDD.EEFF
   mac del|disable|enable MAC | mac group MAC GROUP|- | mac policy MAC POLICY|- | mac list
+  remember on|off|status · remember days N · remember max N · remember list [USER] · remember forget MAC|USER
+                                        a phone that logged in with a password logs in by its MAC next time (random MACs)
 
 Routers (MikroTik = NAS)
   nas add IP[/PREFIX] [SECRET] [NAME]   (no SECRET: random one is generated)
@@ -3843,6 +3888,7 @@ case ${1:-help} in
     ips) shift; cmd_ips "$@" ;;
     mail) shift; cmd_mail "$@" ;;
     snmp|devices) shift; cmd_snmp "$@" ;;
+    remember) shift; cmd_remember "$@" ;;
     doctor|health) shift; python3 -I /usr/local/lib/mikrotiklover/health.py --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@" ;;
     backups) cmd_backups ;;
     restore) shift; cmd_restore "$@" ;;

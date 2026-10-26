@@ -726,3 +726,12 @@ CREATE TABLE IF NOT EXISTS ml_snmp_lldp (
   seen DATETIME NOT NULL,
   KEY (device_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+-- "Remember this device": a phone that logged in with a password logs in by its MAC next time, as that user
+-- (random / private MACs: one password login per new MAC). radius-admin remember ...
+CREATE TABLE IF NOT EXISTS ml_remember (
+  mac CHAR(17) NOT NULL PRIMARY KEY,
+  username VARCHAR(64) NOT NULL,
+  created DATETIME NOT NULL,
+  last_seen DATETIME NOT NULL,
+  KEY (username)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

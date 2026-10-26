@@ -431,10 +431,12 @@ def user_detail(name):
                  ORDER BY SUM(bytes_down+bytes_up) DESC LIMIT 15""", (name,))
     contact = q1("SELECT phone FROM ml_contact WHERE username=%s", (name,))
     notice = q1("SELECT ml_notice(%s) AS t", (name,))
+    remembered = q("SELECT mac, created, last_seen FROM ml_remember WHERE username=%s ORDER BY last_seen DESC", (name,))
     return jsonify(name=name, group=grp["groupname"] if grp else "", account=account_info(name),
                    phone=contact["phone"] if contact else "", notice=(notice or {}).get("t") or "",
                    check=jsonable(check), reply=jsonable(reply),
-                   sessions=jsonable(sessions), logins=jsonable(logins), usage=jsonable(usage), sites=jsonable(sites))
+                   sessions=jsonable(sessions), logins=jsonable(logins), usage=jsonable(usage), sites=jsonable(sites),
+                   remembered=jsonable(remembered))
 
 
 @app.post("/api/users")
@@ -2801,7 +2803,7 @@ def router_setup_make():
     o = {k: (str(v).strip()[:128] if v is not None else "") for k, v in o.items()}
     for k, _, _ in routersetup.MODULES:
         o[k] = bool(data.get(k))
-    o["hotspot_create"], o["base_done"] = bool(data.get("hotspot_create")), bool(data.get("base_done"))
+    o["hotspot_create"], o["base_done"], o["hotspot_mac"] = bool(data.get("hotspot_create")), bool(data.get("base_done")), bool(data.get("hotspot_mac"))
     try:
         routersetup._ip(o["server_ip"], "server IP")
     except ValueError as e:
@@ -3349,6 +3351,52 @@ def mail_action(action):
             radius_admin(["mail", "check"], timeout=300, log=False)
         return result(ok, msg)
     return result(*radius_admin(["mail", "remove"], timeout=300))
+
+
+# ------------------------------------------------------------------ "remember this device": MAC login after one password login
+@app.get("/api/remember")
+@login_required()
+def remember_get():
+    st = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k IN ('remember_on','remember_days','remember_max')")}
+    days = int(st.get("remember_days") or 30)
+    rows = q("""SELECT r.mac, r.username, r.created, r.last_seen, r.last_seen > NOW() - INTERVAL %s DAY AS valid
+                FROM ml_remember r ORDER BY r.last_seen DESC LIMIT 1000""", (days,))
+    for r in rows:
+        r["valid"], r["random"] = bool(r["valid"]), r["mac"][1:2] in "26AE"
+    return jsonify(on=st.get("remember_on") == "1", days=days, max=int(st.get("remember_max") or 2), devices=jsonable(rows),
+                   total=(q1("SELECT COUNT(*) AS n FROM ml_remember") or {}).get("n", 0))
+
+
+@app.post("/api/remember")
+@login_required("admin")
+def remember_set():
+    data = body()
+    msgs = []
+    if "on" in data:
+        ok, m = radius_admin(["remember", "on" if data.get("on") else "off"])
+        if not ok:
+            return result(ok, m)
+        msgs.append(m)
+    for k, lo, hi in (("days", 1, 3650), ("max", 1, 20)):
+        if k in data:
+            v = str(data.get(k)).strip()
+            if not re.match(r"^\d{1,4}$", v) or not lo <= int(v) <= hi:
+                abort(400, f"{k}: {lo}-{hi}")
+            ok, m = radius_admin(["remember", k, str(int(v))])
+            if not ok:
+                return result(ok, m)
+            msgs.append(m)
+    return result(True, " · ".join(msgs) or "saved")
+
+
+@app.post("/api/remember/forget")
+@login_required("admin")
+def remember_forget():
+    data = body()
+    who = field(data, "mac", MAC_RE) or field(data, "user", NAME_RE)
+    if not who:
+        abort(400, "mac or user")
+    return result(*radius_admin(["remember", "forget", who]))
 
 
 # ------------------------------------------------------------------ devices through SNMP: tools/snmp.py

@@ -408,6 +408,13 @@ try {
   await shot(page, "49-netmap-whole");
   ok("network map: departments view, whole network tree, search filters the tree");
 
+  // remember devices: the card on the Hotspot page (switch, days, phones per user, router line)
+  await go(page, "#/hotspot", "Hotspot page");
+  const rmc = page.locator(".card", { has: page.locator("h2", { hasText: "Remember devices" }) });
+  await rmc.waitFor({ timeout: 15000 });
+  if ((await rmc.locator("input[type=number]").count()) !== 2 || !(await rmc.locator("pre", { hasText: "login-by=mac" }).count())) throw new Error("remember devices card incomplete");
+  ok("hotspot page: remember devices card (switch, days, phones per user, router line)");
+
   // firewall: a policy made in the dialog (country source picked by search), seen in the router order, looked up, deleted
   await go(page, "#/firewall", "Firewall");
   await page.locator(".health-hero").waitFor({ timeout: 15000 });

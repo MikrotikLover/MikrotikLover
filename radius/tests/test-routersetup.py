@@ -57,6 +57,12 @@ t("hotspot only: service=hotspot", "service=hotspot " in s and "/ppp" not in s a
 t("LAN guard uses the LAN interface", 'lanIf "vlan20"' in s and '"bridge"' not in s)
 ok, out = lint(s)
 t("small script passes the lint", ok, out)
+s = rs.build(dict(BASE, hotspot=1, hotspot_mac=1), MK)
+t("remember devices: the hotspot tries the MAC first (MAC as user name), login page for the rest",
+  "login-by=mac,http-chap,cookie mac-auth-mode=mac-as-username" in s and s.count("login-by=") == 1)
+ok, out = lint(s)
+t("  ... passes the lint", ok, out)
+t("without the option the hotspot keeps the login page only", "login-by=http-chap,cookie" in rs.build(dict(BASE, hotspot=1), MK))
 s = rs.build(dict(BASE, logging=1, base_done=1), MK)
 t("base already on the router: not added again", "webfilter-base" not in s and "/radius add" not in s)
 s = rs.build(dict(BASE, wpa_legacy=1), MK)

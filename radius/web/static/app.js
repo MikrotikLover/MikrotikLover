@@ -428,6 +428,11 @@ async function userDetail(name) {
       tile("Data 30 days", bytes(days.reduce((a, x) => a + x.down + x.up, 0)))),
     d.notice ? h("div", { class: "note warn-note" }, h("b", {}, "⚠ Warning this user sees now: "), d.notice) : null,
     subCard,
+    (d.remembered || []).length ? ((el) => { el.querySelectorAll("table").forEach((x) => x.classList.add("rw-table")); return el; })(card("Remembered phones", "they log in by MAC (no password) — Hotspot page → Remember devices", table([
+      { label: "MAC", render: (r) => h("span", {}, h("code", {}, r.mac), r.mac[1] && "26AE".includes(r.mac[1]) ? h("span", { class: "muted small" }, " random") : null) },
+      { label: "Last login", render: (r) => h("span", {}, ago(r.last_seen), h("div", { class: "muted small" }, `remembered ${ago(r.created)}`)) },
+      { label: "", render: (r) => isAdmin() ? h("button", { class: "small danger", onclick: async () => {
+        if (await act(api("POST", "/api/remember/forget", { mac: r.mac }), "Forgotten")) route(); } }, "Forget") : null }], d.remembered))) : null,
     h("div", { class: "grid g-2" }, adminBox,
       card("Settings", null, table([{ label: "Type", key: "t" }, { label: "Attribute", key: "attribute" }, { label: "Value", key: "value", wrap: true }],
         [...d.check.map((c) => ({ ...c, t: "check" })), ...d.reply.map((r) => ({ ...r, t: "reply" }))]))),
@@ -1385,6 +1390,8 @@ ROUTES.setup = async (preset = "blocking") => {
   extra.hotspot = h("div", { class: "form cols sub-opts" },
     h("label", { class: "check full" }, h("input", { type: "checkbox", name: "hotspot_create" }),
       h("div", {}, h("b", {}, "Make the hotspot too"), h("span", {}, "Only if this router has no hotspot yet. Else it uses the one made by IP → Hotspot → Hotspot Setup."))),
+    h("label", { class: "check full" }, h("input", { type: "checkbox", name: "hotspot_mac" }),
+      h("div", {}, h("b", {}, "Remember devices (MAC login)"), h("span", {}, "A phone that logged in with a password once is let in by its MAC next time — also MAC devices (printer, TV). Turn on 'Remember devices' in Hotspot page too."))),
     fld("Router's LAN address", "lan_net", { placeholder: "192.168.88.1/24" }), fld("Login page name", "dns_name", { placeholder: "login.wifi" }));
   extra.wpa_ros7 = h("div", { class: "form cols sub-opts" }, fld("Staff Wi-Fi name", "staff_ssid", { placeholder: "Office-WiFi", maxlength: 32 }));
   extra.wpa_legacy = h("div", { class: "form cols sub-opts" }, fld("Staff Wi-Fi name", "staff_ssid_legacy", { placeholder: "Office-WiFi", maxlength: 32 }));
@@ -1504,9 +1511,24 @@ ROUTES.hotspot = async (pageName = "login.html") => {
   const push = h("label", { class: "check" + (st.hs_push === "1" ? " on" : "") }, h("input", { type: "checkbox", checked: st.hs_push === "1", disabled: !isAdmin(),
     onchange: async (e) => { await act(api("POST", "/api/hotspot/push", { on: e.target.checked })); route(); } }),
     h("div", {}, h("b", {}, "Put these pages on the routers automatically"), h("span", {}, "Router auto-sync downloads login.html, status.html and alogin.html into every hotspot profile's folder (within 15 minutes after a change). Off = the routers keep their own pages.")));
+  const rm = await api("GET", "/api/remember").catch(() => null);
+  const rmCard = rm ? (() => {
+    const days = h("input", { type: "number", min: 1, max: 3650, value: rm.days, class: "w-num", disabled: !isAdmin() });
+    const max = h("input", { type: "number", min: 1, max: 20, value: rm.max, class: "w-num", disabled: !isAdmin() });
+    return card("Remember devices", `${num(rm.total)} phone(s) remembered`,
+      h("label", { class: "check" + (rm.on ? " on" : "") }, h("input", { type: "checkbox", checked: rm.on, disabled: !isAdmin(),
+        onchange: async (e) => { if (await act(api("POST", "/api/remember", { on: e.target.checked }))) route(); } }),
+        h("div", {}, h("b", {}, "Log in once, then by the phone's MAC"),
+          h("span", {}, "Android / iPhone use a private (random) MAC per Wi-Fi. After one login with the password the server remembers that MAC: next time the phone is let in without the login page, as that user (plan, quota, policy, speed). A new random MAC = one more password login."))),
+      h("div", { class: "toolbar wrap" }, h("span", {}, "Forget after"), days, h("span", {}, "days unused · up to"), max, h("span", {}, "phones per user"),
+        isAdmin() ? h("button", { class: "small", onclick: async () => { if (await act(api("POST", "/api/remember", { days: days.value, max: max.value }))) route(); } }, "Save") : null),
+      h("div", { class: "muted small" }, "Router: the hotspot must try the MAC first — Router setup → Hotspot → 'Remember devices (MAC login)', or in the router's Terminal:"),
+      h("pre", { class: "code-box" }, "/ip hotspot profile set [find name=hsprof1] login-by=mac,http-chap,cookie mac-auth-mode=mac-as-username"),
+      h("div", { class: "muted small" }, "A changed password forgets the user's phones. Someone who copies a remembered MAC could log in as that user — keep staff on WPA-Enterprise; this is for hotspot users and guests."));
+  })() : null;
   shell("Hotspot page", h("div", { class: "grid hs-grid" },
     h("div", { class: "stack" }, card("Login page design", d.version ? `design ${d.version}` : "not made yet", f, logoBox), card("Routers", null, push,
-      h("div", { class: "muted small" }, "By hand instead: Winbox → Files → hotspot/ → upload the 3 files from the server folder /var/lib/mikrotiklover/router/hotspot/."))),
+      h("div", { class: "muted small" }, "By hand instead: Winbox → Files → hotspot/ → upload the 3 files from the server folder /var/lib/mikrotiklover/router/hotspot/.")), rmCard),
     card("Preview", "phone size", tabs, h("div", { class: "hs-phone" }, frame))));
   load(pageName);
 };

@@ -123,3 +123,48 @@ mikrotiklover_eap_account {
 		}
 	}
 }
+
+# "Remember this device": a MAC login (hotspot login-by=mac) of a phone that logged in with a password before
+# becomes that user — plan, quota, expiry, policy and speed are the user's (ml_remember_find, functions.sql).
+# A disabled / expired user is still refused by the normal checks that follow.
+mikrotiklover_remember {
+	if (!&EAP-Message && &User-Name && &Calling-Station-Id && (&User-Name =~ /^([0-9A-F]{2}-){5}[0-9A-F]{2}$/)) {
+		update control {
+			&Tmp-String-7 := "%{sql:SELECT ml_remember_find('%{User-Name}', '%{Calling-Station-Id}')}"
+		}
+		if (&control:Tmp-String-7 && (&control:Tmp-String-7 != "")) {
+			update request {
+				&User-Name := &control:Tmp-String-7
+			}
+			update control {
+				&Auth-Type := Accept
+			}
+			update reply {
+				&User-Name := &control:Tmp-String-7
+			}
+		}
+	}
+}
+
+# post-auth: an accepted password login remembers its device (a MAC login just notes it was seen)
+mikrotiklover_remember_learn {
+	if (!&EAP-Message && &Calling-Station-Id) {
+		update control {
+			&Tmp-String-8 := "%{sql:SELECT ml_remember_learn('%{User-Name}', '%{Calling-Station-Id}')}"
+		}
+	}
+}
+
+# accounting of a remembered device comes with the MAC as the name: count it for the user
+mikrotiklover_remember_account {
+	if (&User-Name && &Calling-Station-Id && (&User-Name =~ /^([0-9A-F]{2}-){5}[0-9A-F]{2}$/)) {
+		update control {
+			&Tmp-String-7 := "%{sql:SELECT r.username FROM ml_remember r WHERE r.mac = '%{User-Name}' AND r.mac = '%{Calling-Station-Id}' AND NOT EXISTS (SELECT 1 FROM radcheck c WHERE c.username = r.mac) LIMIT 1}"
+		}
+		if (&control:Tmp-String-7 && (&control:Tmp-String-7 != "")) {
+			update request {
+				&User-Name := &control:Tmp-String-7
+			}
+		}
+	}
+}

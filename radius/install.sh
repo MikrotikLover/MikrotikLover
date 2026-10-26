@@ -175,10 +175,10 @@ sed -i '/^session {/,/^}/ s/^#[[:space:]]*sql$/\tsql/' "$RADDB/sites-available/d
 
 # MAC authentication: normalise MAC user names before the SQL lookup and in accounting.
 install -m 644 "$SCRIPT_DIR/templates/policy" "$RADDB/policy.d/mikrotiklover"
-sed -i -e '/^authorize {/,/^}/ s/^\tpreprocess$/\tpreprocess\n\tmikrotiklover_mac_normalize/' \
+sed -i -e '/^authorize {/,/^}/ s/^\tpreprocess$/\tpreprocess\n\tmikrotiklover_mac_normalize\n\tmikrotiklover_remember/' \
        -e '/^authorize {/,/^}/ s/^\t-sql$/\t-sql\n\tmikrotiklover_limits/' \
-       -e '/^post-auth {/,/^}/ s/^\t-sql$/\tmikrotiklover_activate\n\t-sql/' \
-       -e '/^preacct {/,/^}/ s/^\tpreprocess$/\tpreprocess\n\tmikrotiklover_mac_normalize\n\tmikrotiklover_eap_account/' \
+       -e '/^post-auth {/,/^}/ s/^\t-sql$/\tmikrotiklover_activate\n\tmikrotiklover_remember_learn\n\t-sql/' \
+       -e '/^preacct {/,/^}/ s/^\tpreprocess$/\tpreprocess\n\tmikrotiklover_mac_normalize\n\tmikrotiklover_eap_account\n\tmikrotiklover_remember_account/' \
        "$RADDB/sites-available/default"
 
 # WPA-Enterprise (PEAP/TTLS): the same plan limits inside the tunnel, where the real user logs in

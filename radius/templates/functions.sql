@@ -186,3 +186,47 @@ CREATE OR REPLACE FUNCTION ml_notice(u VARCHAR(64)) RETURNS VARCHAR(255)
     READS SQL DATA
     RETURN LEFT(CONCAT_WS(' | ', NULLIF(ml_notice_expiry(u), ''), NULLIF(ml_notice_quota(u), '')), 250) //
 DELIMITER ;
+
+-- "Remember this device" (ml_remember). Settings: remember_on (0/1), remember_days (30), remember_max (2 per user).
+-- ml_remember_find: a MAC login -> the user it belongs to ('' = not remembered). The MAC must be the device's own
+-- (Calling-Station-Id), not typed on another one; a MAC device (radius-admin mac add) keeps its own entry.
+DELIMITER //
+CREATE OR REPLACE FUNCTION ml_remember_find(p_mac VARCHAR(64), p_csid VARCHAR(64)) RETURNS VARCHAR(64)
+    READS SQL DATA
+BEGIN
+    DECLARE u VARCHAR(64) DEFAULT '';
+    DECLARE d INT DEFAULT 30;
+    DECLARE since DATETIME;
+    IF ml_setting_get('remember_on', '0') <> '1' OR p_mac <> p_csid OR p_mac NOT REGEXP '^([0-9A-F]{2}-){5}[0-9A-F]{2}$'
+       OR EXISTS (SELECT 1 FROM radcheck c WHERE c.username = p_mac) THEN
+        RETURN '';
+    END IF;
+    -- the day limit first, into a variable (a function called inside the SELECT below made MariaDB skip the date test)
+    SET d = GREATEST(1, CAST(ml_setting_get('remember_days', '30') AS UNSIGNED));
+    SET since = NOW() - INTERVAL d DAY;
+    SET u = (SELECT r.username FROM ml_remember r
+              WHERE r.mac = p_mac AND r.last_seen > since
+                AND EXISTS (SELECT 1 FROM radcheck c WHERE c.username = r.username) LIMIT 1);
+    RETURN COALESCE(u, '');
+END //
+
+-- After every accepted login (post-auth): remember this MAC for the user (or just note it was seen). Keeps the newest
+-- remember_max devices of the user. Not for MAC devices, not for a MAC as user name, only when switched on.
+CREATE OR REPLACE FUNCTION ml_remember_learn(p_user VARCHAR(64), p_mac VARCHAR(64)) RETURNS VARCHAR(8)
+    MODIFIES SQL DATA
+BEGIN
+    DECLARE n INT DEFAULT 2;
+    IF ml_setting_get('remember_on', '0') <> '1' OR p_mac NOT REGEXP '^([0-9A-F]{2}-){5}[0-9A-F]{2}$'
+       OR p_user REGEXP '^([0-9A-Fa-f]{2}[-:.]?){5}[0-9A-Fa-f]{2}$'
+       OR EXISTS (SELECT 1 FROM radcheck c WHERE c.username = p_mac)
+       OR NOT EXISTS (SELECT 1 FROM radcheck c WHERE c.username = p_user) THEN
+        RETURN '';
+    END IF;
+    INSERT INTO ml_remember (mac, username, created, last_seen) VALUES (p_mac, p_user, NOW(), NOW())
+        ON DUPLICATE KEY UPDATE created = IF(username = VALUES(username), created, NOW()), username = VALUES(username), last_seen = NOW();
+    SET n = GREATEST(1, CAST(ml_setting_get('remember_max', '2') AS UNSIGNED));
+    DELETE FROM ml_remember WHERE username = p_user AND mac NOT IN
+        (SELECT mac FROM (SELECT mac FROM ml_remember WHERE username = p_user ORDER BY last_seen DESC, created DESC LIMIT n) keep);
+    RETURN 'ok';
+END //
+DELIMITER ;
