@@ -19,6 +19,8 @@ cleanup() {
 }
 trap cleanup EXIT
 cleanup
+# off before the sample data: the 5-minute cron enforce must not cut the PC off mid-test
+radius-admin security ransomware-auto off >/dev/null
 n=700
 look() { n=$((n+1)); local ts; ts=$(date -u +%Y-%m-%dT%H:%M:%S+00:00)
     printf '%s 127.0.0.1 dnsmasq[1]: %s %s/5000 query[A] %s from %s\n%s 127.0.0.1 dnsmasq[1]: %s %s/5000 reply %s is 203.0.113.250\n' \
