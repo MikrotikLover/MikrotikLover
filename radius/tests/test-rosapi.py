@@ -80,5 +80,32 @@ open(f, "w").write(script)
 lint = subprocess.run([sys.executable, os.path.join(HERE, "lint-rsc.py"), f], capture_output=True, text=True).stdout
 check("router script passes the RouterOS lint", lint.startswith("ok"), lint)
 check("password file is root-only (0600)", oct(os.stat(os.environ["ML_ROUTER_API"]).st_mode & 0o777) == "0o600")
+
+# auto-sync: the same set-up for every router, safe every 15 minutes
+PW = "Abcdefgh12345678Abcdefgh12345678"
+auto = rosapi.auto_script("192.168.88.10", PW)
+check("auto-sync script: user made once, only from the server, password set again only when it changed (marker)",
+      ':if ([:len [/user find name="mlapi"]] = 0) do={' in auto and "address=192.168.88.10/32" in auto
+      and auto.count("comment=\"MikrotikLover IPS auto ") == 2 and ':if ([/user get [find name="mlapi"] comment] != "MikrotikLover IPS auto ' in auto
+      and "user remove" not in auto)
+check("  ... api-ssl only for the server, set only when it differs; certificate made only once",
+      "address=192.168.88.10/32 disabled=no" in auto and ':if ([:len [/certificate find name="ml-api"]] = 0) do={' in auto)
+check("  ... a new password gives a new marker (routers take it)", rosapi.auto_script("192.168.88.10", PW[::-1]).split("IPS auto ")[1][:10] != auto.split("IPS auto ")[1][:10])
+f = os.path.join(d, "auto.rsc")
+open(f, "w").write(auto + rosapi.auto_off_script())
+lint = subprocess.run([sys.executable, os.path.join(HERE, "lint-rsc.py"), f], capture_output=True, text=True).stdout
+check("  ... and the 'off' lines pass the RouterOS lint", lint.startswith("ok"), lint)
+check("off: removes only the user auto-sync made", 'comment~"^MikrotikLover IPS auto"' in rosapi.auto_off_script())
+rosapi.save({"10.9.9.9": {"port": 8729, "user": "mlapi", "password": "byhand", "plain": False, "fingerprint": "x"}})
+ch = rosapi.sync(["10.0.0.1", "10.0.0.2", "10.9.9.9"], PW)
+st = rosapi.load()
+check("sync: new routers added (auto), a router set up by hand left as it is", ch["added"] == ["10.0.0.1", "10.0.0.2"] and st["10.9.9.9"]["password"] == "byhand"
+      and st["10.0.0.1"]["auto"] and st["10.0.0.1"]["password"] == PW, (ch, st))
+ch = rosapi.sync(["10.0.0.1", "10.9.9.9"], PW[::-1])
+st = rosapi.load()
+check("sync: router gone -> its auto entry removed; new password -> updated", ch["removed"] == ["10.0.0.2"] and ch["updated"] == ["10.0.0.1"]
+      and st["10.0.0.1"]["password"] == PW[::-1] and "10.0.0.2" not in st, ch)
+ch = rosapi.sync([], "")
+check("auto off: all auto entries gone, the hand-made one stays", list(rosapi.load()) == ["10.9.9.9"], rosapi.load())
 print("all router API tests passed" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

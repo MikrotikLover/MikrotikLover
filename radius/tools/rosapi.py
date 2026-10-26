@@ -225,6 +225,64 @@ def router_script(server_ip, user, password, port=8729, plain=False):
     return "\n".join(lines) + "\n"
 
 
+def auto_script(server_ip, password, user="mlapi", port=8729):
+    """The same set-up for every router, as part of auto-sync (sync.rsc), safe to run every 15 minutes: the user is made
+    once and its password only set again when the server's password changed (marker in the comment)."""
+    tag = hashlib.sha256(password.encode()).hexdigest()[:10]
+    return "\n".join([
+        "# IPS instant blocks (radius-admin ips api auto on): an API user that can only log in from this server",
+        ":do {",
+        ':if ([:len [/user group find name="mikrotiklover-api"]] = 0) do={',
+        '    /user group add name=mikrotiklover-api policy=api,read,write comment="MikrotikLover IPS: address lists"',
+        "}",
+        f':if ([:len [/user find name="{user}"]] = 0) do={{',
+        f'    /user add name={user} group=mikrotiklover-api address={server_ip}/32 password="{password}" comment="MikrotikLover IPS auto {tag}"',
+        "} else={",
+        f'    :if ([/user get [find name="{user}"] comment] != "MikrotikLover IPS auto {tag}") do={{',
+        f'        /user set [find name="{user}"] group=mikrotiklover-api address={server_ip}/32 password="{password}" comment="MikrotikLover IPS auto {tag}"',
+        "    }",
+        "}",
+        ':if ([:len [/certificate find name="ml-api"]] = 0) do={',
+        "    /certificate add name=ml-api common-name=ml-api days-valid=3650 key-size=2048 key-usage=digital-signature,key-encipherment,tls-server",
+        "    /certificate sign ml-api",
+        "    :delay 8s",
+        "}",
+        f':if (([/ip service get api-ssl certificate] != "ml-api") || ([/ip service get api-ssl disabled] = true) || ([/ip service get api-ssl port] != {port})) do={{',
+        f"    /ip service set api-ssl certificate=ml-api port={port} address={server_ip}/32 disabled=no",
+        "}",
+        '} on-error={ :log warning "ml-sync: IPS instant-block user not set" }',
+        ""])
+
+
+def auto_off_script(user="mlapi"):
+    """Auto-sync switched off: take away only the user auto-sync made (its comment says so)."""
+    return "\n".join([
+        "# IPS instant blocks by auto-sync: off",
+        ':do { /user remove [find name="' + user + '" comment~"^MikrotikLover IPS auto"] } on-error={}',
+        ""])
+
+
+def sync(routers, password, user="mlapi", port=8729):
+    """Keep one entry per router for auto-sync: add the new ones, new password for the old ones, drop routers that are gone.
+    Routers set up by hand (ips api add) are left alone."""
+    d = load()
+    changed = {"added": [], "removed": [], "updated": []}
+    for ip in routers:
+        r = d.get(ip)
+        if r is None:
+            d[ip] = {"port": port, "user": user, "password": password, "plain": False, "fingerprint": "", "auto": True,
+                     "added": time.strftime("%Y-%m-%d %H:%M"), "status": "waiting for auto-sync (15 min)", "last": ""}
+            changed["added"].append(ip)
+        elif r.get("auto") and r.get("password") != password:
+            r["password"] = password
+            changed["updated"].append(ip)
+    for ip in [k for k, r in d.items() if r.get("auto") and k not in routers]:
+        del d[ip]
+        changed["removed"].append(ip)
+    save(d)
+    return changed
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -236,6 +294,12 @@ def main(argv=None):
     p.add_argument("--server", default="", help="this server's IP as the router sees it")
     p.add_argument("--password", default="", help="use this password instead of a new one")
     sub.add_parser("list")
+    p = sub.add_parser("auto-rsc")
+    p.add_argument("--server", required=True)
+    p.add_argument("--off", action="store_true")
+    p = sub.add_parser("sync")
+    p.add_argument("routers", nargs="*")
+    p.add_argument("--off", action="store_true")
     for k in ("test", "del", "forget-cert"):
         sub.add_parser(k).add_argument("ip")
     p = sub.add_parser("block")
@@ -249,6 +313,19 @@ def main(argv=None):
             ipaddress.IPv4Address(a.ip)
         except ValueError:
             raise SystemExit(f"bad address '{a.ip}'")
+    if a.cmd in ("auto-rsc", "sync"):
+        pw = sys.stdin.read().strip() if not a.off else ""
+        if not a.off and not re.match(r"^[A-Za-z0-9]{16,64}$", pw):
+            raise SystemExit("the shared API password comes on stdin (16-64 letters / digits)")
+        if a.cmd == "auto-rsc":
+            if not a.off:
+                ipaddress.IPv4Address(a.server)
+            sys.stdout.write(auto_off_script() if a.off else auto_script(a.server, pw))
+            return 0
+        for ip in a.routers:
+            ipaddress.IPv4Address(ip)
+        print(json.dumps(sync([] if a.off else a.routers, pw)))
+        return 0
     d = load()
     if a.cmd == "add":
         if not re.match(r"^[A-Za-z0-9_-]{1,32}$", a.user):

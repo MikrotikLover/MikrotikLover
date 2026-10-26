@@ -1184,6 +1184,22 @@ ipbind_auto() {
     echo "$n"
 }
 
+ips_api_rsc() { # router part of sync.rsc: the API user for IPS instant blocks on every router (radius-admin ips api auto on)
+    local st sip R=(python3 -I /usr/local/lib/mikrotiklover/rosapi.py)
+    st=$(setting_get ips_api_auto 2>/dev/null || true); sip=$(setting_get server_ip 2>/dev/null || true)
+    if [ "$st" = 1 ] && [[ $sip =~ ^[0-9]+(\.[0-9]+){3}$ ]] && [ -s "$CONF_DIR/router-api.pass" ]; then
+        local routers; routers=$(echo "SELECT nasname FROM nas WHERE nasname REGEXP '^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+\$'" | db 2>/dev/null | tr '\n' ' ')
+        # shellcheck disable=SC2086
+        "${R[@]}" sync $routers < "$CONF_DIR/router-api.pass" >/dev/null 2>&1 || true
+        "${R[@]}" auto-rsc --server "$sip" < "$CONF_DIR/router-api.pass" 2>/dev/null || echo "# IPS instant blocks: not built"
+    elif [ "$st" = 0 ]; then
+        "${R[@]}" sync --off </dev/null >/dev/null 2>&1 || true
+        "${R[@]}" auto-rsc --off --server 0.0.0.0 </dev/null 2>/dev/null || true
+    else
+        echo "# IPS instant blocks by auto-sync: not used (radius-admin ips api auto on)"
+    fi
+}
+
 hotspot_mac_rsc() { # router part of sync.rsc: hotspot tries the MAC first while "remember devices" is on (nothing to do on the router)
     # Only profiles that use RADIUS. What auto-sync added is noted in the script ml-hotspot-mac, so "off" takes back only that
     # (a MAC login the admin set by hand stays).
@@ -2280,6 +2296,21 @@ cmd_ips() { # intrusion prevention: Suricata on a copy of the routers' internet 
                     echo "$out" > "$ROUTER_DIR/api-$1.rsc"; chmod 600 "$ROUTER_DIR/api-$1.rsc"
                     echo "$out"
                     ok "Paste these lines in the router's Terminal ($1), then: radius-admin ips api test $1" ;;
+                auto)
+                    case ${1:-} in
+                        on)
+                            local sip; sip=$(setting_get server_ip)
+                            [[ $sip =~ ^[0-9]+(\.[0-9]+){3}$ ]] || die "Set the server's IP as the routers see it first: radius-admin security quarantine-server 192.168.88.10"
+                            [ -s "$CONF_DIR/router-api.pass" ] || { (umask 077; gen_pass 32 | tr -dc 'A-Za-z0-9' | head -c 32 > "$CONF_DIR/router-api.pass"); }
+                            setting_set ips_api_auto 1; cmd_policy build >/dev/null || die "router rules not built"
+                            ok "every router gets its instant-block API user by auto-sync (15 min); nothing to do on the routers. Check: radius-admin ips api list" ;;
+                        off) setting_set ips_api_auto 0; cmd_policy build >/dev/null || true
+                             ok "auto-sync takes the API user away again; routers set up by hand stay (radius-admin ips api list)" ;;
+                        new-password) [ "$(setting_get ips_api_auto)" = 1 ] || die "auto-sync for instant blocks is off"
+                             (umask 077; gen_pass 32 | tr -dc 'A-Za-z0-9' | head -c 32 > "$CONF_DIR/router-api.pass"); cmd_policy build >/dev/null
+                             ok "new API password: the routers take it at the next auto-sync (15 min)" ;;
+                        *) die "usage: radius-admin ips api auto on|off|new-password" ;;
+                    esac ;;
                 json) "${R[@]}" list ;;
                 list) "${R[@]}" list | python3 -c '
 import json, sys
@@ -2291,7 +2322,7 @@ if not d:
                 test|del|forget-cert) [ -n "${1:-}" ] || die "usage: radius-admin ips api $act ROUTER-IP"
                     local out; out=$("${R[@]}" "$act" "$1" 2>&1) || die "$out"; [ "$act" = del ] && rm -f "$ROUTER_DIR/api-$1.rsc"; ok "$out" ;;
                 script) [ -s "$ROUTER_DIR/api-${1:-x}.rsc" ] || die "no script for ${1:-?} (radius-admin ips api add ROUTER-IP)"; cat "$ROUTER_DIR/api-$1.rsc" ;;
-                *) die "usage: radius-admin ips api add|list|test|del|script|forget-cert [ROUTER-IP]" ;;
+                *) die "usage: radius-admin ips api auto on|off|new-password | add|list|test|del|script|forget-cert [ROUTER-IP]" ;;
             esac ;;
         restart) [ "$(setting_get ips_on)" = 1 ] || die "IPS is off (radius-admin ips on)"; ips_py config >/dev/null; ips_svc start; ok "IPS restarted" ;;
         scan) [ "$(setting_get ips_on)" = 1 ] || [ "${1:-}" = --force ] || return 0; ips_py scan ;;
@@ -2593,6 +2624,8 @@ RSC
             ips_rsc
             echo
             mail_rsc
+            echo
+            ips_api_rsc
             echo
             hotspot_mac_rsc
             echo
@@ -3713,6 +3746,7 @@ Blocking policies + router auto-sync (dashboard → Blocking)
   ips alerts [--days N] · ips update · ips rule on|off SID · ips autoblock on|off · ips level high|medium
   ips hours N · ips mirror first|all · ips block|unblock|allow|disallow IP
   ips api add|test|del|script ROUTER-IP · ips api list   instant blocks (~1 s) through the router's API (api-ssl)
+  ips api auto on|off|new-password       the same for every router by auto-sync (nothing to do on the routers)
   ips inline on WAN-IF LAN-IF [alert|drop]  Suricata in the traffic path (first packet stopped); ips inline drop|alert|off|status
   ips bypass on|off|status               inline: join the two cards (traffic unchecked) — also done by itself if Suricata stops
   mail set ip IP domain DOMAIN [host H] [public IP] [dkim SEL] [webmail PORT]   the mail server on the LAN (MDaemon …)
