@@ -1184,6 +1184,67 @@ ipbind_auto() {
     echo "$n"
 }
 
+hotspot_mac_rsc() { # router part of sync.rsc: hotspot tries the MAC first while "remember devices" is on (nothing to do on the router)
+    # Only profiles that use RADIUS. What auto-sync added is noted in the script ml-hotspot-mac, so "off" takes back only that
+    # (a MAC login the admin set by hand stays).
+    local on=false; [ "$(setting_get remember_on 2>/dev/null)" = 1 ] && on=true
+    cat <<RSC
+# Remember devices (radius-admin remember on|off): hotspot login-by=mac first
+:do {
+:local on $on
+:local mark [/system script find name="ml-hotspot-mac"]
+:local changed ";"
+:if ([:len \$mark] > 0) do={ :set changed [/system script get \$mark source] }
+:if (\$on) do={
+    :foreach p in=[/ip hotspot profile find where use-radius=yes] do={
+        :local lb [/ip hotspot profile get \$p login-by]
+        :if ([:typeof [:find \$lb "mac"]] = "nil") do={
+            :local s "mac"
+            :foreach x in=\$lb do={ :set s (\$s . "," . \$x) }
+            /ip hotspot profile set \$p login-by=\$s mac-auth-mode=mac-as-username
+            :set changed (\$changed . [/ip hotspot profile get \$p name] . ";")
+        }
+    }
+    :if ([:len \$mark] = 0) do={
+        /system script add name="ml-hotspot-mac" source=\$changed comment="mlsync: hotspot profiles where auto-sync added MAC login"
+    } else={ /system script set \$mark source=\$changed }
+} else={
+    :if ([:len \$mark] > 0) do={
+        :foreach p in=[/ip hotspot profile find] do={
+            :if ([:typeof [:find \$changed (";" . [/ip hotspot profile get \$p name] . ";")]] != "nil") do={
+                :local s ""
+                :foreach x in=[/ip hotspot profile get \$p login-by] do={ :if (\$x != "mac") do={ :set s (\$s . "," . \$x) } }
+                :if ([:len \$s] > 0) do={ /ip hotspot profile set \$p login-by=[:pick \$s 1 [:len \$s]] }
+            }
+        }
+        /system script remove \$mark
+    }
+}
+} on-error={ :log warning "ml-sync: hotspot MAC login not set" }
+RSC
+}
+
+snmp_routers_rsc() { # router part of sync.rsc: SNMP for the Devices page / network map (read only, for this server only)
+    local sip comm; sip=$(setting_get server_ip 2>/dev/null || true)
+    if [ "$(setting_get snmp_routers 2>/dev/null)" != 1 ] || ! [[ $sip =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
+        echo "# SNMP for the routers: off (Devices → Add my MikroTik routers)"; return 0
+    fi
+    comm=$(snmp_py router-community 2>/dev/null) || return 0
+    [[ $comm =~ ^[A-Za-z0-9]{12,40}$ ]] || return 0
+    cat <<RSC
+# SNMP for the Devices page and the network map: read only, only this server; traps here unless another target is set
+:do {
+:if ([:len [/snmp community find name="$comm"]] = 0) do={
+    /snmp community add name="$comm" addresses=$sip/32 read-access=yes write-access=no
+} else={ /snmp community set [find name="$comm"] addresses=$sip/32 read-access=yes write-access=no }
+/snmp set enabled=yes
+:if ([:len [/snmp get trap-target]] = 0) do={
+    /snmp set trap-community="$comm" trap-target=$sip trap-version=2 trap-generators=interfaces,start-trap,temp-exception trap-interfaces=all
+}
+} on-error={ :log warning "ml-sync: SNMP not set" }
+RSC
+}
+
 cmd_remember() { # "remember this device": after one password login a phone logs in by its MAC as that user (random MACs)
     local sub=${1:-status}; shift || true
     case $sub in
@@ -1196,8 +1257,9 @@ cmd_remember() { # "remember this device": after one password login a phone logs
         echo "                   /ip hotspot profile set [find name=hsprof1] login-by=mac,http-chap,cookie mac-auth-mode=mac-as-username" ;;
     on|off)
         setting_set remember_on "$([ "$sub" = on ] && echo 1 || echo 0)"
-        if [ "$sub" = on ]; then ok "Remember devices on: after one login with a password a phone is let in by its MAC (as that user). Router: hotspot login-by=mac (radius-admin remember status)"
-        else ok "Remember devices off: MAC logins of remembered phones are refused (the login page shows); the list is kept"; fi ;;
+        cmd_policy build >/dev/null 2>&1 || warn "router rules not rebuilt (radius-admin policy build)"
+        if [ "$sub" = on ]; then ok "Remember devices on: after one login with a password a phone is let in by its MAC (as that user). Routers turn on MAC login by auto-sync (15 min)"
+        else ok "Remember devices off: MAC logins of remembered phones are refused (the login page shows); routers take back the MAC login auto-sync added; the list is kept"; fi ;;
     days)
         valid_int "${1:-}" days; [ "$1" -ge 1 ] && [ "$1" -le 3650 ] || die "days: 1-3650"
         setting_set remember_days "$1"; ok "a remembered device not seen for $1 day(s) logs in with the password again" ;;
@@ -1987,12 +2049,19 @@ cmd_snmp() { # devices on the LAN through SNMP (switch, UPS, printer, MikroTik, 
             # the read-only community for MikroTik routers; the router is added to the list (it answers once its script ran)
             local rip=${1:-} comm; valid_ip "$rip"
             comm=$(snmp_py router-community) || die "could not make the router community"
+            if [ "$(setting_get snmp_routers 2>/dev/null)" != 1 ]; then setting_set snmp_routers 1; cmd_policy build >/dev/null 2>&1 || true; fi
             if [ "$(echo "SELECT COUNT(*) FROM ml_snmp_device WHERE ip=$(q "$rip") AND port=161" | db)" = 0 ]; then
                 local nm; nm=$(echo "SELECT IFNULL(NULLIF(shortname,''), nasname) FROM nas WHERE nasname=$(q "$rip")" | db)
                 python3 -c 'import json, sys; print(json.dumps({"community": sys.argv[1]}))' "$comm" \
                     | snmp_py add "$rip" --version 2c --stdin --kind mikrotik --name "${nm:-router $rip}" --no-check >/dev/null || die "router not added"
             fi
             echo "$comm" ;;
+        routers-sync)
+            case ${1:-} in
+                on) setting_set snmp_routers 1; snmp_py router-community >/dev/null; cmd_policy build >/dev/null; ok "routers get their SNMP settings by auto-sync (15 min)" ;;
+                off) setting_set snmp_routers 0; cmd_policy build >/dev/null; ok "auto-sync no longer sets SNMP on the routers (what is there stays)" ;;
+                *) die "usage: radius-admin snmp routers-sync on|off" ;;
+            esac ;;
         router-script)
             local rip=${1:-} sip comm; valid_ip "$rip"; sip=$(setting_get server_ip 2>/dev/null || true)
             [ -n "$sip" ] || die "set the server IP first: radius-admin security quarantine-server SERVER-IP"
@@ -2524,6 +2593,10 @@ RSC
             ips_rsc
             echo
             mail_rsc
+            echo
+            hotspot_mac_rsc
+            echo
+            snmp_routers_rsc
         } > "$lists/sync.rsc"
         install -m 644 "$lists/webfilter-policies.rsc" "$lists/vpn-servers.rsc" "$lists/sync.rsc" "$ROUTER_DIR/"
         sha256sum "$ROUTER_DIR/sync.rsc" | cut -c1-16 > "$ROUTER_DIR/version.tmp"

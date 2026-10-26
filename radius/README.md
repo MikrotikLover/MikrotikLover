@@ -126,8 +126,8 @@ Dashboard → **MAC devices**: Policy column (apni, ya "(group)"), **Policy** bu
 Android 10+ aur iPhone har Wi-Fi ke liye nakli (random) MAC istemal karte hain — MAC badle to MAC login fail. Hal:
 
 1. Dashboard → **Hotspot page → Remember devices** on (`radius-admin remember on`).
-2. Router par hotspot pehle MAC try kare: **Router setup → Hotspot → "Remember devices (MAC login)"**, ya Terminal:
-   `/ip hotspot profile set [find name=hsprof1] login-by=mac,http-chap,cookie mac-auth-mode=mac-as-username`
+2. **Router par kuch nahi karna:** auto-sync 15 minute mein har router ki hotspot (RADIUS wali profiles) mein MAC login khud on kar deta hai — off karne par sirf wahi wapas leta hai jo us ne khud joda tha (admin ka apna MAC login rehta hai). Jis router par auto-sync nahi, us par ek dafa:
+   `/ip hotspot profile set [find name=hsprof1] login-by=mac,http-chap,cookie mac-auth-mode=mac-as-username` (ya Router setup → Hotspot → "Remember devices")
 3. User **ek dafa** username/password (ya PIN / Social WiFi) se login kare → server us phone ka MAC us ke naam yaad rakh leta hai.
 4. Agli dafa phone **bina login page** andar — **usi user** ke taur par: plan, quota, expiry, policy, speed, data hisaab sab us user ka.
 5. Phone naya random MAC le aaye → sirf ek dafa password login, phir se yaad.
@@ -1211,7 +1211,7 @@ Alerts Telegram / WhatsApp / email par **foran** jate hain (5 minute ka intezar 
 1. Device par SNMP on karein — read only, community (password), sirf is server ka IP allowed.
 2. Devices → **+ Add device** → IP + community → **Test** → **Add**. Kis qisam ka hai (UPS / printer / switch …) server khud pehchanta hai.
 3. Ya **Find devices** → `192.168.88.0/24` → jo jawab dein unki list → Add.
-4. MikroTik: **Router setup → SNMP** tick (router ko apni secret read-only community milti hai, sirf is server ke liye, aur traps server ko), ya Devices → **Add my MikroTik routers**.
+4. MikroTik: Devices → **Add my MikroTik routers** — bas. Auto-sync 15 minute mein har router par SNMP on kar deta hai (secret read-only community, sirf is server ke liye; traps server ko, agar router par pehle se koi aur trap target na ho). Router par kuch nahi karna (`radius-admin snmp routers-sync on|off`).
 5. SNMP **v3** (user + password + AES encryption) bhi chalta hai — jahan device mein ho wahi behtar hai.
 
 **Traps** (device khud foran batata hai): Devices → Settings → **Receive traps** on (UDP 162). Device par trap receiver = is server ka IP, v2c, wohi community (ya `radius-admin snmp trap-community SECRET`). UPS on battery (UPS-MIB, APC), port down/up, restart, printer alert, ghalat community — sab saaf alfaz mein; switch ke port down par alert sirf **watched** port ka (PC band hone par shor nahi). Ghalat community wale traps phenk diye jate hain; ek device minute mein 60 se zyada bheje to baqi chhor diye.

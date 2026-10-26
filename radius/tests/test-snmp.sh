@@ -142,6 +142,16 @@ if [ -n "$RIP" ] && [ -n "$(db "SELECT v FROM ml_setting WHERE k='server_ip'")" 
     t "the router is in the device list (kind MikroTik)" "$(db "SELECT kind FROM ml_snmp_device WHERE ip='$RIP' AND port=161")" "mikrotik"
     [ "$had" = 0 ] && radius-admin snmp del "$(db "SELECT id FROM ml_snmp_device WHERE ip='$RIP' AND port=161")" >/dev/null
 fi
+was_rs=$(db "SELECT v FROM ml_setting WHERE k='snmp_routers'")
+radius-admin snmp routers-sync on >/dev/null
+SY=/var/lib/mikrotiklover/router/sync.rsc
+comm=$(python3 -c 'import json; print(json.load(open("/etc/mikrotiklover-radius/snmp-secrets.json"))["router_community"])')
+t "auto-sync sets SNMP on every router: read-only community for this server, traps only if no other target" \
+  "$(grep -c "/snmp community add name=\"$comm\" addresses=$(db "SELECT v FROM ml_setting WHERE k='server_ip'")/32 read-access=yes write-access=no" $SY)$(grep -c ':if (\[:len \[/snmp get trap-target\]\] = 0)' $SY)" "11"
+t "  ... passes the RouterOS lint" "$(python3 "$HERE/lint-rsc.py" $SY | head -1)" "ok   sync.rsc"
+radius-admin snmp routers-sync off >/dev/null
+t "  ... off: no SNMP lines" "$(grep -c '/snmp community' $SY)" "0"
+[ "${was_rs:-0}" = 1 ] && radius-admin snmp routers-sync on >/dev/null
 t "health check: Devices (SNMP) group" "$(radius-admin doctor 2>&1 | grep -c 'Device checks every minute\|Trap receiver (UDP 162)')" "2"
 
 # ---- dashboard API

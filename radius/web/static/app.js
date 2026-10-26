@@ -1522,7 +1522,7 @@ ROUTES.hotspot = async (pageName = "login.html") => {
           h("span", {}, "Android / iPhone use a private (random) MAC per Wi-Fi. After one login with the password the server remembers that MAC: next time the phone is let in without the login page, as that user (plan, quota, policy, speed). A new random MAC = one more password login."))),
       h("div", { class: "toolbar wrap" }, h("span", {}, "Forget after"), days, h("span", {}, "days unused · up to"), max, h("span", {}, "phones per user"),
         isAdmin() ? h("button", { class: "small", onclick: async () => { if (await act(api("POST", "/api/remember", { days: days.value, max: max.value }))) route(); } }, "Save") : null),
-      h("div", { class: "muted small" }, "Router: the hotspot must try the MAC first — Router setup → Hotspot → 'Remember devices (MAC login)', or in the router's Terminal:"),
+      h("div", { class: "muted small" }, "Nothing to do on the routers: auto-sync turns the hotspot's MAC login on within 15 minutes (and takes it back when switched off). Only a router without auto-sync needs this line once:"),
       h("pre", { class: "code-box" }, "/ip hotspot profile set [find name=hsprof1] login-by=mac,http-chap,cookie mac-auth-mode=mac-as-username"),
       h("div", { class: "muted small" }, "A changed password forgets the user's phones. Someone who copies a remembered MAC could log in as that user — keep staff on WPA-Enterprise; this is for hotspot users and guests."));
   })() : null;
@@ -4116,7 +4116,7 @@ function devicesSettings(d) {
     card("When to alert", "for all devices", h("div", { class: "grid g-tiles" }, lim("toner", "Toner / ink low at", "%"), lim("cpu", "CPU high at (5 min)", "%"), lim("disk", "Disk full at", "%"),
       lim("temp", "Too hot at", "°C"), lim("ups-load", "UPS load too high at", "%"))),
     card("Setting up the devices", null, h("ul", { class: "g-list" },
-      h("li", {}, h("b", {}, "MikroTik: "), "Router setup → tick SNMP → the router gets a secret read-only community for this server only, and sends traps here. Or: Devices → Add my MikroTik routers."),
+      h("li", {}, h("b", {}, "MikroTik: "), "Devices → Add my MikroTik routers — auto-sync then gives every router a secret read-only community for this server only and sends traps here (15 min, nothing to do on the router)."),
       h("li", {}, h("b", {}, "Switch (TP-Link, D-Link, Cisco, HP …): "), "web page → SNMP → on, community (read only), allowed host = this server; Trap = this server."),
       h("li", {}, h("b", {}, "UPS (APC, Eaton …): "), "needs a network card (APC AP9630 / NMC, Eaton Network-M2 …) → SNMP v1/v3 on, access for this server, trap receiver = this server."),
       h("li", {}, h("b", {}, "Printer: "), "printer web page → Networking → SNMP on (often v1/v2 'public' read only)."),

@@ -3539,7 +3539,7 @@ def devices_action(action):
                 if ok:
                     added.append(r["nasname"])
         audit(f"snmp routers {' '.join(added)}", "ok")
-        return result(bool(added), f"{len(added)} router(s) in the list. Router setup → SNMP gives each router its lines (read-only, only this server)"
+        return result(bool(added), f"{len(added)} router(s) in the list — auto-sync sets SNMP on them within 15 minutes (read only, only this server)"
                       if added else "no router with a single IP on the Routers page")
     if action == "trapd":
         return result(*radius_admin(["snmp", "trapd", "on" if data.get("on") else "off"], timeout=60))

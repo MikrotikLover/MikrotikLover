@@ -74,6 +74,16 @@ t "not seen for more than 30 days: password once more" "$(mac $P3 | cut -d'|' -f
 radius-admin user passwd rm-ali -p 'Rm-New-456' >/dev/null
 t "password changed: all remembered phones forgotten" "$(db "SELECT COUNT(*) FROM ml_remember WHERE username='rm-ali'") $(mac $P2 | cut -d'|' -f1)" "0 reject"
 
+echo "-- the routers set themselves (auto-sync, nothing to do on the router)"
+SY=/var/lib/mikrotiklover/router/sync.rsc
+radius-admin remember on >/dev/null
+t "on: the router file turns MAC login on in RADIUS hotspot profiles, notes what it changed" \
+  "$(grep -c '^:local on true' $SY)$(grep -c 'find where use-radius=yes' $SY)$(grep -c 'login-by=\$s mac-auth-mode=mac-as-username' $SY)$(grep -c 'name="ml-hotspot-mac"' $SY)" "1112"
+radius-admin remember off >/dev/null
+t "off: the router file takes back only what auto-sync added" "$(grep -c '^:local on false' $SY)$(grep -c '/system script remove \$mark' $SY)" "11"
+t "router file passes the RouterOS lint" "$(python3 "$(dirname "$0")/lint-rsc.py" $SY | head -1)" "ok   sync.rsc"
+radius-admin remember on >/dev/null
+
 echo "-- other kinds of login are not touched"
 radius-admin mac add AA:BB:CC:17:00:01 -d "rm printer" >/dev/null
 t "a MAC device (mac add) logs in as itself, never remembered for a user" "$(mac AA:BB:CC:17:00:01 | cut -d'|' -f1-2)$(db "SELECT COUNT(*) FROM ml_remember WHERE mac='AA-BB-CC-17-00-01'")" "accept|0"
