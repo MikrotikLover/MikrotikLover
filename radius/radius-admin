@@ -1039,7 +1039,8 @@ live_rsc() {
     echo ':do {'
     echo "  :local r [/tool fetch url=\"$base/live.rsc?key=$key\" check-certificate=yes-without-crl output=user as-value]"
     echo '  :if (($r->"status") = "finished") do={ :local f [:parse ($r->"data")]; $f }'
-    echo '} on-error={ :log warning "ml-live: not downloaded from the RADIUS server" }'
+    # a big list (many IPS blocks) is more than "output=user" takes (RouterOS 6: 4 KB, 7: 64 KB): then through a file
+    echo "} on-error={ :do { /tool fetch url=\"$base/live.rsc?key=$key\" check-certificate=yes-without-crl dst-path=ml-live.rsc; :delay 1s; /import file-name=ml-live.rsc } on-error={ :log warning \"ml-live: not downloaded from the RADIUS server\" } }"
     echo '}'
     echo '/system scheduler remove [find name="ml-live"]'
     echo '/system scheduler add name=ml-live interval=1m start-time=startup on-event="/system script run ml-live" comment="mikrotiklover: departments + temporary exceptions"'
@@ -2636,6 +2637,15 @@ RSC
         install -m 640 -g "$(id -gn mlweb 2>/dev/null || echo root)" "$lists/sync.rsc" "$ROUTER_DIR/"
         sha256sum "$ROUTER_DIR/sync.rsc" | cut -c1-16 > "$ROUTER_DIR/version.tmp"
         mv "$ROUTER_DIR/version.tmp" "$ROUTER_DIR/version"; chmod 644 "$ROUTER_DIR/version"
+        # RouterOS 6 routers ask for their own copy (same rules, written the v6 way; autosync.rsc picks it by version)
+        if python3 -I /usr/local/lib/mikrotiklover/rosv6.py convert --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" \
+               < "$lists/sync.rsc" > "$lists/sync6.rsc" 2>/dev/null && [ -s "$lists/sync6.rsc" ]; then
+            install -m 640 -g "$(id -gn mlweb 2>/dev/null || echo root)" "$lists/sync6.rsc" "$ROUTER_DIR/"
+            sha256sum "$ROUTER_DIR/sync6.rsc" | cut -c1-16 > "$ROUTER_DIR/version6.tmp"
+            mv "$ROUTER_DIR/version6.tmp" "$ROUTER_DIR/version6"; chmod 644 "$ROUTER_DIR/version6"
+        else
+            warn "RouterOS 6 copy of the router rules not made (rosv6.py)"
+        fi
         [ -s "$ROUTER_DIR/key" ] || gen_pass 32 > "$ROUTER_DIR/key"
         router_key_perms
         local nsrv npol

@@ -1372,7 +1372,7 @@ ROUTES.setup = async (preset = "blocking") => {
   const DEF = { ...(SETUP_PRESETS[preset] || SETUP_PRESETS.blocking) };
   const HELP = {
     hotspot: "Login page with vouchers / social WiFi on the LAN",
-    wpa_ros7: "Staff log in with their own username + password (RouterOS 7 routers: hAP ax, cAP ax …)",
+    wpa_ros7: "Staff log in with their own username + password (RouterOS 7 'wifi' routers: hAP ax, cAP ax …; a RouterOS 6 router gets the old-wireless version by itself)",
     wpa_legacy: "Same, for older routers with the 'wireless' menu (hAP ac², RB951 …)",
     pppoe: "Customers dial in with PPPoE (ISP style)",
     macauth: "Printers, TVs, CCTV join a separate Wi-Fi by MAC address",
@@ -1468,7 +1468,7 @@ ROUTES.setup = async (preset = "blocking") => {
     timer = setInterval(poll, 4000);
   }
   shell("Router setup", h("div", { class: "stack" },
-    h("div", { class: "muted" }, "Makes one script for a MikroTik with this server's address, the router's secret and your names filled in. No file editing — copy one line into the router's terminal."),
+    h("div", { class: "muted" }, "Makes one script for a MikroTik with this server's address, the router's secret and your names filled in. No file editing — copy one line into the router's terminal. Works on RouterOS 7 and RouterOS 6.47+: the router tells its version and gets the script written for it."),
     f));
 };
 
@@ -2357,7 +2357,7 @@ async function blockingGuide() {
         h("li", {}, "HTTPS site par block page nahi dikh sakta (certificate ke baghair); browser apna error dikhata hai. http:// par dikhta hai."),
         h("li", {}, "Agar device router ka DNS na le (apna DoH / private DNS), naam wali rokawat kamzor; HTTPS naam (tls-host) phir bhi kaam karta hai."),
         h("li", {}, "Naye VPN apps pehli dafa nikal sakte hain; server unhein seekh kar list mein daal deta hai."),
-        h("li", {}, "'Sirf chuni hui apps' aur 'hamesha khuli' ke naam wali address lists ke liye RouterOS 7.15+ chahiye."),
+        h("li", {}, "'Sirf chuni hui apps' aur 'hamesha khuli' naam wali lists RouterOS 7 par router khud DNS se bharta hai; RouterOS 6.47+ par server apne DNS log se addresses bhejta hai (har ghante) — naya address agle build tak reh sakta hai."),
         h("li", {}, "Policy user name par lagti hai — device ko login (Hotspot / PPPoE / WPA-Enterprise) se aana zaroori hai."))),
     hint("Sawal ho to: Activity → Why blocked? har site aur user ke liye bata deta hai ke kya, kyun aur kab.")));
 }

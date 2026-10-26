@@ -385,6 +385,8 @@ CREATE TABLE IF NOT EXISTS ml_router_setup (
   expires DATETIME NOT NULL,
   KEY (expires)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+-- the same set-up written for RouterOS 6 (the router asks for it with ?v=6)
+ALTER TABLE ml_router_setup ADD COLUMN IF NOT EXISTS script6 MEDIUMTEXT NULL;
 
 -- IP binding: every user keeps the address DHCP gave them (or the one the admin chose); routers get DHCP static leases
 CREATE TABLE IF NOT EXISTS ml_ip_bind (

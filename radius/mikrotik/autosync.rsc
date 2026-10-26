@@ -1,4 +1,4 @@
-# MikrotikLover — router AUTO-SYNC (RouterOS 7)
+# MikrotikLover — router AUTO-SYNC (RouterOS 7, and RouterOS 6.47 or newer: the router asks for the v6 copy itself)
 # Every 15 minutes the router asks the RADIUS server whether its rules changed, and only then
 # downloads and imports them: the policies (dashboard → Blocking), the app block lists that grow
 # by themselves (CDN detective) and the VPN server list (VPN watch).
@@ -14,7 +14,7 @@ add name=radius.example.lan address=192.168.88.10 comment="mikrotiklover-sync"
 # 2. trust the server's own certificate authority (downloaded once)
 /tool fetch url="https://192.168.88.10:8443/static/ca.pem" dst-path=mikrotiklover-ca.pem check-certificate=no
 :delay 2s
-:if ([:len [/certificate find where name~"mikrotiklover-ca"]] = 0) do={ /certificate import file-name=mikrotiklover-ca.pem passphrase="" name=mikrotiklover-ca }
+:if ([:len [/certificate find where name~"mikrotiklover-ca"]] = 0) do={ /certificate import file-name=mikrotiklover-ca.pem passphrase="" }
 
 # 3. the sync script and its schedule
 /system script
@@ -24,9 +24,12 @@ add name=ml-sync policy=read,write,policy,test source={
 :local base "https://radius.example.lan:8443/api/public/router"
 :local key "PUT-THE-KEY-HERE"
 :do {
-  :local v ([/tool fetch url="$base/version?key=$key" check-certificate=yes-without-crl output=user as-value]->"data")
+  # RouterOS 6 gets its own copy of the rules (same rules, written the v6 way)
+  :local q ""
+  :if ([:pick [/system resource get version] 0 1] = "6") do={ :set q "&v=6" }
+  :local v ([/tool fetch url="$base/version?key=$key$q" check-certificate=yes-without-crl output=user as-value]->"data")
   :if ($v != $mlSyncVer) do={
-    /tool fetch url="$base/sync.rsc?key=$key" check-certificate=yes-without-crl dst-path=ml-sync.rsc
+    /tool fetch url="$base/sync.rsc?key=$key$q" check-certificate=yes-without-crl dst-path=ml-sync.rsc
     :delay 2s
     /import file-name=ml-sync.rsc
     :set mlSyncVer $v

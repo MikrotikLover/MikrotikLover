@@ -9,6 +9,7 @@ import http.cookiejar, json, os, re, ssl, subprocess, sys, tempfile, urllib.erro
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 import routersetup as rs  # noqa: E402
+import rosv6  # noqa: E402
 
 MK = os.path.join(HERE, "..", "mikrotik")
 fails = 0
@@ -68,6 +69,19 @@ t("base already on the router: not added again", "webfilter-base" not in s and "
 s = rs.build(dict(BASE, wpa_legacy=1), MK)
 t("old wireless: default SSID kept", 'ssid="Office-WiFi"' in s and "service=wireless " in s)
 
+# RouterOS 6: the same parts, written the v6 way (old wireless for the Wi-Fi parts)
+AUTO = open(os.path.join(MK, "autosync.rsc"), encoding="utf-8").read()
+s6 = rs.build(ALL, MK, AUTO, ros="6")
+t("RouterOS 6: no RouterOS-7-only line left", not rosv6.check(s6), rosv6.check(s6)[:5])
+t("  ... Wi-Fi parts on the old wireless package", "/interface wifi" not in s6.replace("# /interface wifi", "")
+  and "/interface wireless security-profiles" in s6 and "radius-mac-authentication=yes" in s6 and 'ssid="Staff Net"' in s6 and 'ssid="Dev"' in s6)
+t("  ... DNS rules as RouterOS 6 regexp, IPv6 part only with the ipv6 package",
+  'regexp="(^|\\\\.)dns\\\\.google\\$"' in s6 and 'name="ipv6" disabled=no' in s6, [l for l in s6.splitlines() if "dns" in l and "google" in l][:2])
+t("  ... the same RADIUS entry and server", s6.count("/radius add") == 1 and 'address=10.10.10.10 secret="Sekret123"' in s6)
+ok, out = lint(s6)
+t("  ... passes the RouterOS lint", ok, out)
+t("RouterOS 7 script unchanged by the v6 build", rs.build(ALL, MK, AUTO) == rs.build(ALL, MK, AUTO, ros="7"))
+
 t("nothing chosen refused", "at least one" in err(dict(BASE)))
 t("both Wi-Fi kinds refused", "not both" in err(dict(BASE, wpa_ros7=1, wpa_legacy=1)))
 t("bad server IP refused", "server IP" in err(dict(BASE, server_ip="10.0.0.300", hotspot=1)))
@@ -109,7 +123,9 @@ if URL:
         rip = routers[0]
         st, r = call("POST", "/api/router-setup", {"router": rip, "server_ip": "10.10.10.10", "hotspot": True, "logging": True,
                                                    "security": True, "autosync": True})
-        t("API: script made", st == 200 and r.get("line", "").startswith("/tool fetch url=\"https://10.10.10.10:"), r)
+        t("API: script made", st == 200 and r.get("line", "").startswith("/tool fetch url=(\"https://10.10.10.10:"), r)
+        t("API: the one-liner asks for its RouterOS version's script (? written \\? for the terminal)",
+          '.rsc\\?v=" . [:pick [/system resource get version] 0 1])' in r.get("line", ""), r.get("line"))
         if st == 200:
             tok = r["token"]
             t("API: one-liner imports and removes the file", "/import file-name=ml-setup.rsc; /file remove ml-setup.rsc" in r["line"])
@@ -123,8 +139,13 @@ if URL:
             with anon.open(URL + f"/api/public/setup/{tok}.rsc", timeout=30) as resp:
                 body = resp.read().decode()
             t("router download (no login) gives the same script", body == r["script"])
+            with anon.open(URL + f"/api/public/setup/{tok}.rsc?v=6", timeout=30) as resp:
+                body6 = resp.read().decode()
+            t("RouterOS 6 router (?v=6) gets the v6 script", body6 == r["script6"] and not rosv6.check(body6) and body6 != body)
+            with anon.open(URL + f"/api/public/setup/{tok}.rsc?v=7", timeout=30) as resp:
+                t("RouterOS 7 router (?v=7) gets the v7 script", resp.read().decode() == r["script"])
             st, s1 = call("GET", f"/api/router-setup/{tok}")
-            t("API: shows it was fetched", s1.get("fetched") == 1, s1)
+            t("API: shows it was fetched", s1.get("fetched") == 3, s1)
             for bad in ("0" * 32, "../../etc/passwd", "abc"):
                 try:
                     anon.open(URL + f"/api/public/setup/{bad}.rsc", timeout=30)

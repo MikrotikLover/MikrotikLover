@@ -146,6 +146,17 @@ Android 10+ aur iPhone har Wi-Fi ke liye nakli (random) MAC istemal karte hain �
 
 ## 4. MikroTik configuration
 
+### RouterOS 6 aur 7 — dono par
+
+Router **RouterOS 7** ho ya **RouterOS 6.47+** (6.49 long-term behtar), sab kuch chalta hai — router par kuch alag nahi karna:
+
+- **Auto-sync:** router har 15 minute apna version khud batata hai (`[/system resource get version]`) aur server us ke liye likhi hui file deta hai: RouterOS 7 ko `sync.rsc`, RouterOS 6 ko `sync6.rsc` (`radius-admin policy build` dono banata hai, apna apna version).
+- **Router setup (ek line):** line khud version bhejti hai (`?v=6` / `?v=7`); RouterOS 6 ko Wi-Fi wale hisse purane **wireless** package ke (`wpa-enterprise-wireless-legacy.rsc`, `mac-auth-wireless-legacy.rsc`) milte hain.
+- **RouterOS 6 copy mein kya badalta hai:** DNS naam `match-subdomain` ki jagah `regexp` (naam + har subdomain); "naam → address list" (allow-only apps, allow-site) RouterOS 6 khud DNS se nahi bhar sakta, is liye **server apne DNS log aur apni lookup se addresses bhejta hai** (har ghante naya build, 1 din timeout); `/ip dns adlist` (7.15+) aur naya `/interface wifi` chhod diye jate hain; IPv6 wala hissa sirf tab chalta hai jab `ipv6` package on ho (RouterOS 6 par aksar off hota hai, warna import ruk jata).
+- **Check:** `python3 /usr/local/lib/mikrotiklover/rosv6.py check FILE.rsc` batata hai koi RouterOS-7-only line to nahi bachi; `rosv6.py convert < v7.rsc > v6.rsc` haath se v6 copy banata hai.
+- Health check par RouterOS 6 router ka "has the newest rules" us ki v6 copy ke version se milaya jata hai.
+- Test: `tests/test-rosv6.py` (har `mikrotik/*.rsc` ki v6 copy: koi v7-only line nahi, lint ok), `tests/test-ros6.sh` (server: sync6.rsc, `?v=6`, DNS log se addresses, health), `tests/test-routersetup.py` (v6 setup script). Asli RouterOS 6 / 7 (CHR) par import yahan nahi chala — is sandbox se `download.mikrotik.com` band hai.
+
 `mikrotik/` folder mein ready scripts hain. File mein `RADIUS_SERVER_IP`, `RADIUS_SECRET` aur SSID replace karein, Winbox → Files mein upload karein, phir Terminal mein `/import file-name=...`.
 
 | Script | Kis ke liye |
@@ -154,6 +165,7 @@ Android 10+ aur iPhone har Wi-Fi ke liye nakli (random) MAC istemal karte hain �
 | `wpa-enterprise-wireless-legacy.rsc` | Purana **wireless** package (RouterOS 6, hAP ac lite, cAP ac, SXT, …) |
 | `hotspot.rsc` | Hotspot captive portal login |
 | `mac-auth.rsc` | MAC authentication: (A) wifi package `query-radius`, (B) legacy wireless, (C) hotspot `login-by=mac` |
+| `mac-auth-wireless-legacy.rsc` | MAC authentication purane **wireless** package par (RouterOS 6, wlan1) — alag SSID, WPA2-PSK + RADIUS MAC check |
 | `webfilter-*.rsc` | Website category blocking — section 5b |
 | `webfilter-policies.rsc` | Single user / group / IP range ki alag policies, time ke saath |
 | `webfilter-logging.rsc` | Blocked attempts server par (`radius-admin blocked`) |

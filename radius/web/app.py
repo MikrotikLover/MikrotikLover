@@ -2187,21 +2187,27 @@ def note_fetch(what, version=""):
         pass
 
 
+def _ros6():
+    """the router asked for the RouterOS 6 copy (autosync.rsc adds v=6 on RouterOS 6)"""
+    return request.args.get("v", "") == "6"
+
+
 @app.get("/api/public/router/version")
 def router_version():
-    v = _router_file("version").strip()
-    note_fetch("version", v)
+    v = _router_file("version6" if _ros6() else "version").strip()
+    note_fetch("version", ("v6:" if _ros6() else "") + v)
     return app.response_class(v, mimetype="text/plain")
 
 
 @app.get("/api/public/router/sync.rsc")
 def router_sync():
-    body = _router_file("sync.rsc")
+    six = _ros6()
+    body = _router_file("sync6.rsc" if six else "sync.rsc")
     try:
-        v = open(os.path.join(ROUTER_DIR, "version"), encoding="utf-8").read().strip()
+        v = open(os.path.join(ROUTER_DIR, "version6" if six else "version"), encoding="utf-8").read().strip()
     except OSError:
         v = ""
-    note_fetch("sync", v)
+    note_fetch("sync", ("v6:" if six else "") + v)
     return app.response_class(body, mimetype="text/plain")
 
 
@@ -2826,19 +2832,22 @@ def router_setup_make():
         o["snmp_community"] = out.strip().splitlines()[-1].strip()
     try:
         text = routersetup.build(o, MIKROTIK_DIR, auto)
+        text6 = routersetup.build(o, MIKROTIK_DIR, auto, ros="6")       # the router picks by its version
     except ValueError as e:
         abort(400, str(e))
     except OSError:
         abort(500, "router script files are missing (run install.sh again)")
     token = secrets.token_hex(16)
     q("DELETE FROM ml_router_setup WHERE expires < NOW()")
-    q("INSERT INTO ml_router_setup (token, router_ip, script, expires) VALUES (%s,%s,%s, NOW() + INTERVAL 1 HOUR)",
-      (token, row["nasname"], text))
+    q("INSERT INTO ml_router_setup (token, router_ip, script, script6, expires) VALUES (%s,%s,%s,%s, NOW() + INTERVAL 1 HOUR)",
+      (token, row["nasname"], text, text6))
     audit(f"router setup script for {row['nasname']}", "ok")
     url = f"https://{o['server_ip']}:{web_port()}/api/public/setup/{token}.rsc"
-    line = (f'/tool fetch url="{url}" check-certificate=no dst-path=ml-setup.rsc; :delay 2s; '
-            f'/import file-name=ml-setup.rsc; /file remove ml-setup.rsc')
-    return jsonify(ok=True, token=token, url=url, line=line, lines=text.count("\n"), script=text)
+    # RouterOS 6 and 7 alike: the router adds its main version (?v=6 / ?v=7) and gets the script written for it
+    # written \\? because a bare ? typed or pasted in the RouterOS terminal opens the help instead
+    line = (f'/tool fetch url=("{url}\\?v=" . [:pick [/system resource get version] 0 1]) check-certificate=no dst-path=ml-setup.rsc; '
+            f':delay 2s; /import file-name=ml-setup.rsc; /file remove ml-setup.rsc')
+    return jsonify(ok=True, token=token, url=url, line=line, lines=text.count("\n"), script=text, script6=text6)
 
 
 @app.get("/api/public/setup/<token>.rsc")
@@ -2846,11 +2855,12 @@ def router_setup_fetch(token):
     """The router downloads its setup script here (the token is valid for one hour)."""
     if not SETUP_TOKEN_RE.match(token):
         abort(404)
-    row = q1("SELECT script FROM ml_router_setup WHERE token=%s AND expires > NOW()", (token,))
+    row = q1("SELECT script, script6 FROM ml_router_setup WHERE token=%s AND expires > NOW()", (token,))
     if not row:
         abort(404)
     q("UPDATE ml_router_setup SET fetched=fetched+1 WHERE token=%s", (token,))
-    return app.response_class(row["script"], mimetype="text/plain",
+    text = row["script6"] if _ros6() and row.get("script6") else row["script"]
+    return app.response_class(text, mimetype="text/plain",
                               headers={"Content-Disposition": 'attachment; filename="ml-setup.rsc"', "Cache-Control": "no-store"})
 
 

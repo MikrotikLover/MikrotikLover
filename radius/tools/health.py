@@ -335,6 +335,10 @@ class Checks:
         except OSError:
             ver = ""
         try:
+            ver6 = open(f"{rdir}/version6", encoding="utf-8").read().strip()
+        except OSError:
+            ver6 = ""
+        try:
             rows = self.sql("SELECT router_ip, what, TIMESTAMPDIFF(SECOND, at, NOW()), version FROM ml_router_fetch ORDER BY router_ip")
         except RuntimeError:
             rows = []
@@ -344,9 +348,12 @@ class Checks:
         if not routers:
             self.add("sync", g, "Routers take the rules", "warn", "no router has fetched the auto-sync script yet",
                      "import the auto-sync script on each router once: Blocking → Overview → Router auto-sync")
+        newest = ver
         for ip, r in sorted(routers.items()):
             age, _ = r.get("version", (10 ** 9, ""))
             s_age, s_ver = r.get("sync", (None, ""))
+            # a RouterOS 6 router takes its own copy (version noted as v6:...)
+            ver = ("v6:" + ver6 if ver6 else "") if s_ver.startswith("v6:") else newest
             if age > 3600:
                 self.add(f"sync:{ip}", g, f"Router {ip} takes the rules", "fail",
                          f"last asked for new rules {age_text(age)}" + (f", has version {s_ver[:12]}" if s_ver else ""),

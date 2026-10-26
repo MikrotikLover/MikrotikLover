@@ -54,12 +54,21 @@ def _strip_radius(text):
     return text
 
 
-def build(o, mikrotik_dir, autosync_text=""):
+# RouterOS 6 has no "wifi" package: these parts use the old wireless files there
+ROS6_FILES = {"wpa_ros7": "wpa-enterprise-wireless-legacy.rsc", "macauth": "mac-auth-wireless-legacy.rsc"}
+
+
+def build(o, mikrotik_dir, autosync_text="", ros="7"):
+    """ros="6": the same set-up for RouterOS 6.47+ (old wireless for Wi-Fi parts, every line written the v6 way)"""
     sel = [k for k, _, _ in MODULES if o.get(k)]
     if not sel:
         raise ValueError("choose at least one part")
     if o.get("wpa_ros7") and o.get("wpa_legacy"):
         raise ValueError("staff Wi-Fi: RouterOS 7 (wifi) or old wireless, not both")
+    if ros == "6":
+        text = build({**o, "_ros6": True}, mikrotik_dir, autosync_text)
+        import rosv6
+        return rosv6.convert(text.replace("# MikrotikLover router setup - ", "# MikrotikLover router setup (RouterOS 6) - ", 1))
     if any(k in sel for k in NEEDS_BASE) and "webfilter" not in sel and not o.get("base_done"):
         sel.insert(0, "webfilter")
     server = _ip(o.get("server_ip"), "server IP")
@@ -118,6 +127,8 @@ def build(o, mikrotik_dir, autosync_text=""):
                 raise ValueError("auto-sync: build the router rules first (Blocking → Build)")
             out += [f"# ---------------- {title}", autosync_text.strip(), ""]
             continue
+        if o.get("_ros6") and key in ROS6_FILES:
+            fname = ROS6_FILES[key]
         text = open(os.path.join(mikrotik_dir, fname), encoding="utf-8").read()
         body = "\n".join(l for l in text.splitlines() if not l.startswith("#"))
         body = _strip_radius(body.strip() + "\n")

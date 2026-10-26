@@ -34,7 +34,7 @@ Yeh guide ek khali server se le kar poore chalte hue system tak har qadam batati
 |---|---|---|
 | Server | 2 CPU, 2 GB RAM, 20 GB disk | 4 CPU, 4–8 GB RAM, SSD 100 GB (zyada users / lambi history) |
 | OS | Ubuntu 22.04 / 24.04 ya Debian 12 (64-bit, saaf install) | Ubuntu 24.04 LTS |
-| Router | MikroTik RouterOS 7.x (security, auto-sync, `tls-host`, adlists ke liye) | RouterOS 7.15+ |
+| Router | MikroTik RouterOS 6.47+ ya 7.x — server har router ko us ke version ki file deta hai (RouterOS 6 par adlists nahi; naam wali lists server bharta hai) | RouterOS 7.15+ |
 | Network | Server ka **fixed IP** | Server **alag VLAN/subnet** mein ya **WireGuard** se router tak |
 
 **Zaroori:** server clients wale subnet mein **na** ho, warna DNS logger ke jawab router ko bypass kar jayenge. Alag VLAN (misaal `10.10.10.0/24`) ya WireGuard tunnel sab se behtar hai. Server internet par (VPS) ho to router aur VPS ke darmiyan WireGuard zaroor lagayein, kyunki RADIUS attributes encrypted nahi hote.
@@ -335,6 +335,7 @@ Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein
 | IPS (Suricata): hamle pehchanna aur hamla karne wale IP ko minute mein band | Security → Intrusion prevention | `radius-admin ips install` · `ips on` · `ips status` · `ips alerts` |
 | IPS block ~1 second mein (MikroTik API, api-ssl) | Security → Intrusion prevention → Instant blocks → + Add a router | `radius-admin ips api add 192.168.88.1` · `ips api test 192.168.88.1` · `ips api list` |
 | Instant blocks har router par khud (auto-sync, kuch paste nahi) | Instant blocks → "Every router by auto-sync" | `radius-admin ips api auto on` · `ips api auto off` · `ips api auto new-password` |
+| RouterOS 6 aur 7 dono (router khud version batata hai) | kuch nahi — auto-sync aur Router setup line khud sahi file lete hain | `radius-admin policy build` (sync.rsc + sync6.rsc) · `python3 /usr/local/lib/mikrotiklover/rosv6.py check FILE.rsc` |
 | Inline IPS (pehla packet ruke) + khud bypass agar Suricata band / atke | Security → Intrusion prevention → Mode → Inline | `radius-admin ips inline on eth1 eth2` · `ips inline drop` · `ips bypass on|off` · `ips inline off` |
 | Mail server (MDaemon) ki hifazat: safe ports, password guessing band, spam bots, DNS / blacklist / certificate checks | Mail server | `radius-admin mail set ip 192.168.88.30 domain example.com` · `mail doors` · `mail status` |
 | MAC device (printer, TV, CCTV) ki apni policy | MAC devices → Policy | `radius-admin mac policy MAC no-video` · `mac add MAC --policy P` |
