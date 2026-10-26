@@ -3598,11 +3598,14 @@ async function ipsPage(tabs) {
           } }]);
         };
         return card("Instant blocks (router API)", "~1 second instead of up to 2 minutes", h("div", { class: "stack" },
-          table([{ label: "Router", render: (r) => h("code", {}, r.ip) }, { label: "How", render: (r) => r.plain ? badge("API 8728 (no TLS)", "warn") : `API-SSL ${r.port}` },
+          isAdmin() ? h("label", { class: "chip" }, h("input", { type: "checkbox", checked: !!d.settings.api_auto, onchange: (e) => doIt("api-auto", { on: e.target.checked },
+              e.target.checked ? null : "Stop auto-sync for instant blocks? Auto-sync takes its API user off the routers again; routers you added by hand stay.").then(() => { e.target.checked = !!d.settings.api_auto; }) }),
+            "Every router by auto-sync — nothing to paste on the routers (they take it within 15 minutes)") : null,
+          table([{ label: "Router", render: (r) => h("code", {}, r.ip) }, { label: "How", render: (r) => h("span", {}, r.plain ? badge("API 8728 (no TLS)", "warn") : `API-SSL ${r.port}`, r.auto ? h("span", {}, " ", badge("auto-sync", "info")) : null) },
             { label: "Status", render: (r) => r.status === "ok" ? badge("working", "ok") : r.status && r.status.startsWith("failed") ? h("span", { class: "small" }, badge("failed", "bad"), " ", r.status.slice(8)) : h("span", { class: "muted small" }, r.status || "—"), wrap: true },
             { label: "Last", render: (r) => (r.last || "").slice(5, 16) || "—" },
             { label: "", render: (r) => isAdmin() ? h("div", { class: "row-actions" }, h("button", { class: "small", onclick: () => doIt("api-test", { router: r.ip }) }, "Test"),
-              h("button", { class: "small danger", onclick: () => doIt("api-del", { router: r.ip }, `Stop instant blocks on ${r.ip}? The 1-minute list keeps working.`) }, "Remove")) : null }],
+              r.auto ? null : h("button", { class: "small danger", onclick: () => doIt("api-del", { router: r.ip }, `Stop instant blocks on ${r.ip}? The 1-minute list keeps working.`) }, "Remove")) : null }],
             routers, "No router yet — blocks reach the routers through the 1-minute list."),
           isAdmin() ? h("div", { class: "toolbar" }, h("button", { class: "primary", onclick: addOne }, "+ Add a router"),
             h("span", { class: "muted small" }, "The server puts a blocked attacker straight into the router's list the moment Suricata sees it.")) : null));

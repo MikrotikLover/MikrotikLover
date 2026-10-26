@@ -3649,7 +3649,8 @@ def ips_get():
         pass
     return jsonify(ifaces=ifaces, api_routers=api_routers, status=st, settings={"on": sett.get("ips_on") == "1", "autoblock": sett.get("ips_autoblock", "1") != "0",
                                         "level": sett.get("ips_block_level") or "high", "hours": int(sett.get("ips_block_hours") or 24),
-                                        "mirror": sett.get("ips_mirror") or "first", "server_ip": sett.get("server_ip", "")},
+                                        "mirror": sett.get("ips_mirror") or "first", "server_ip": sett.get("server_ip", ""),
+                                        "api_auto": sett.get("ips_api_auto") == "1"},
                    counts={r["severity"]: {"hits": int(r["hits"]), "sources": int(r["sources"])} for r in counts},
                    top=jsonable(top), rows=jsonable(rows), blocks=jsonable(blocks), allow=jsonable(allow), days=days,
                    disabled=sorted(disabled), countries=fwmod.COUNTRIES)
@@ -3659,9 +3660,11 @@ def ips_get():
 @login_required("admin")
 def ips_action(action):
     if action not in ("on", "off", "update", "restart", "install", "autoblock", "level", "hours", "mirror", "rule", "block", "unblock", "allow", "disallow",
-                      "api-add", "api-test", "api-del", "inline", "bypass"):
+                      "api-add", "api-test", "api-del", "api-auto", "inline", "bypass"):
         abort(404)
     data = body()
+    if action == "api-auto":
+        return result(*radius_admin(["ips", "api", "auto", "on" if data.get("on") else "off"], timeout=120))
     if action == "inline":
         what = field(data, "what", re.compile(r"^(on|drop|alert|off)$"), required=True)
         if what == "on":

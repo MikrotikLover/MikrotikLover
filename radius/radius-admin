@@ -2631,7 +2631,9 @@ RSC
             echo
             snmp_routers_rsc
         } > "$lists/sync.rsc"
-        install -m 644 "$lists/webfilter-policies.rsc" "$lists/vpn-servers.rsc" "$lists/sync.rsc" "$ROUTER_DIR/"
+        install -m 644 "$lists/webfilter-policies.rsc" "$lists/vpn-servers.rsc" "$ROUTER_DIR/"
+        # sync.rsc can carry the routers' API password (ips api auto): root and the dashboard only
+        install -m 640 -g "$(id -gn mlweb 2>/dev/null || echo root)" "$lists/sync.rsc" "$ROUTER_DIR/"
         sha256sum "$ROUTER_DIR/sync.rsc" | cut -c1-16 > "$ROUTER_DIR/version.tmp"
         mv "$ROUTER_DIR/version.tmp" "$ROUTER_DIR/version"; chmod 644 "$ROUTER_DIR/version"
         [ -s "$ROUTER_DIR/key" ] || gen_pass 32 > "$ROUTER_DIR/key"

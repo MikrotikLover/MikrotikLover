@@ -82,6 +82,23 @@ kill $FPID 2>/dev/null; sleep 1
 t "router down: the block is still saved (1-minute list), the failure shown" "$(radius-admin ips block $A5 test 2>&1 | grep -c 'within a minute') $(radius-admin ips api list | grep -c 'failed')" "1 1"
 radius-admin ips unblock $A5 >/dev/null
 
+# the same for every router by auto-sync: nothing to paste on the routers
+RT=/var/lib/mikrotiklover/router/sync.rsc RJ=/etc/mikrotiklover-radius/router-api.json
+was_api_auto=$(db "SELECT v FROM ml_setting WHERE k='ips_api_auto'")
+radius-admin ips api auto on >/dev/null
+t "api auto on: the API user in sync.rsc, only from this server" "$(grep -c 'add name=mlapi group=mikrotiklover-api address=.*/32 password=' $RT)" "1"
+t "  ... sync.rsc readable by root and the dashboard only (it has the password)" "$(stat -c %a $RT)" "640"
+t "  ... RouterOS script check passes" "$(python3 "$HERE/lint-rsc.py" $RT | grep -c '^ok')" "1"
+t "  ... every router in the server's list, the hand-made one left as it was" \
+  "$(python3 -c "import json; d=json.load(open('$RJ')); print(d['127.0.0.1'].get('auto', False), all(v.get('auto') for k, v in d.items() if k != '127.0.0.1'), len(d) > 1)")" "False True True"
+tag1=$(grep -o 'MikrotikLover IPS auto [0-9a-f]*' $RT | head -1)
+radius-admin ips api auto new-password >/dev/null
+t "new password: the routers set it again (new marker)" "$([ "$(grep -o 'MikrotikLover IPS auto [0-9a-f]*' $RT | head -1)" != "$tag1" ] && echo changed)" "changed"
+radius-admin ips api auto off >/dev/null
+t "api auto off: the routers remove only the auto-sync user" "$(grep -c 'remove \[find name="mlapi" comment~"^MikrotikLover IPS auto"\]' $RT) $(grep -c 'add name=mlapi' $RT)" "1 0"
+t "  ... auto routers gone from the list, the hand-made one stays" "$(python3 -c "import json; print(sorted(json.load(open('$RJ'))))")" "['127.0.0.1']"
+db "REPLACE INTO ml_setting (k, v) VALUES ('ips_api_auto', '${was_api_auto:-}')"
+
 if [ -n "${URL:-}" ]; then
     jar=$(mktemp)
     csrf=$(curl -sk -c "$jar" -H 'Content-Type: application/json' -d "{\"username\":\"$USER\",\"password\":\"$PASS\"}" "$URL/api/login" | python3 -c 'import json,sys; print(json.load(sys.stdin)["csrf"])')
@@ -96,6 +113,8 @@ if [ -n "${URL:-}" ]; then
     t "API: add a router -> the script to paste" "$(api POST /api/ips/api-add '{"router":"127.0.0.1"}')$(js "'/user add name=mlapi' in d['script']")" "200True"
     t "API: test (router down) -> 400 with why; remove" "$(api POST /api/ips/api-test '{"router":"127.0.0.1"}')$(api POST /api/ips/api-del '{"router":"127.0.0.1"}')" "400200"
     t "API: bad router address 400" "$(api POST /api/ips/api-add '{"router":"x;y"}')" "400"
+    t "API: auto-sync switch on / off" "$(api POST /api/ips/api-auto '{"on":true}')$(api GET '/api/ips?days=1')$(js "str(d['settings']['api_auto']) + ' ' + str(any(r.get('auto') for r in d['api_routers']))")$(api POST /api/ips/api-auto '{"on":false}')" "200200True True200"
+    db "REPLACE INTO ml_setting (k, v) VALUES ('ips_api_auto', '${was_api_auto:-}')"
     rm -f "$jar" /tmp/ipst.json
 fi
 radius-admin ips api del 127.0.0.1 >/dev/null 2>&1; rm -f "$FS"

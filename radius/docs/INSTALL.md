@@ -334,6 +334,7 @@ Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein
 | Mulk band karna (Geo-IP), andar aate ya bahar jaate | Firewall → Countries | `radius-admin firewall geo update` · `firewall rule add X --dir wan --src geo:CN --action deny` |
 | IPS (Suricata): hamle pehchanna aur hamla karne wale IP ko minute mein band | Security → Intrusion prevention | `radius-admin ips install` · `ips on` · `ips status` · `ips alerts` |
 | IPS block ~1 second mein (MikroTik API, api-ssl) | Security → Intrusion prevention → Instant blocks → + Add a router | `radius-admin ips api add 192.168.88.1` · `ips api test 192.168.88.1` · `ips api list` |
+| Instant blocks har router par khud (auto-sync, kuch paste nahi) | Instant blocks → "Every router by auto-sync" | `radius-admin ips api auto on` · `ips api auto off` · `ips api auto new-password` |
 | Inline IPS (pehla packet ruke) + khud bypass agar Suricata band / atke | Security → Intrusion prevention → Mode → Inline | `radius-admin ips inline on eth1 eth2` · `ips inline drop` · `ips bypass on|off` · `ips inline off` |
 | Mail server (MDaemon) ki hifazat: safe ports, password guessing band, spam bots, DNS / blacklist / certificate checks | Mail server | `radius-admin mail set ip 192.168.88.30 domain example.com` · `mail doors` · `mail status` |
 | MAC device (printer, TV, CCTV) ki apni policy | MAC devices → Policy | `radius-admin mac policy MAC no-video` · `mac add MAC --policy P` |
