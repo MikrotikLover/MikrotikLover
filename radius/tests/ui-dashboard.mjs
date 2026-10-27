@@ -269,6 +269,10 @@ try {
   await wu.waitFor({ timeout: 15000 });
   for (const b of ["Allowed", "Off in office hours", "Off always"]) await wu.getByRole("button", { name: b, exact: true }).waitFor();
   ok("blocking overview: Windows Update switch (allowed / office hours / always)");
+  const wp = page.locator(".card", { has: page.locator("h2", { hasText: /^Wi-Fi users: policy by MAC/ }) });
+  await wp.waitFor({ timeout: 15000 });
+  await wp.locator("label.chip input[type=checkbox]").waitFor({ timeout: 15000 });
+  ok("blocking overview: Wi-Fi users policy by MAC (switch + list)");
   await go(page, "#/blocking/policies", "Blocking");
   await page.getByRole("button", { name: "+ New policy" }).click();
   const ed = page.locator("dialog[open]");

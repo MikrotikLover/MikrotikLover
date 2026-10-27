@@ -2219,12 +2219,37 @@ async function blockingOverview() {
       { label: "Policy", render: (r) => badge(r.policy, "info") }, { label: "Blocked by", render: (r) => badge(r.reason, "bad") }, { label: "Times", key: "count", num: true }],
       topBlocked, "Nothing blocked today."), topBlocked.length ? h("div", { class: "toolbar" }, h("a", { class: "btn small", href: "#/blocking/logs" }, "All activity")) : null),
     routerSyncCard(sum.router),
+    wifiPolicyCard(),
     hint("How blocking works",
       h("ol", {},
         h("li", {}, h("b", {}, "Policy"), " — what is blocked: categories, single apps, sites, VPN, internet off, or only some apps. Each rule can have its own time."),
         h("li", {}, h("b", {}, "Give it"), " to a user or a group. The user gets it at the next login."),
         h("li", {}, h("b", {}, "Router auto-sync"), " — the router gets every change by itself."),
         h("li", {}, h("b", {}, "Users see a block page"), " with a code and can ask to open the site (Requests).")))));
+}
+
+// Wi-Fi (WPA-Enterprise) users and MAC devices: policy by MAC, the router finds the IP (DHCP, else ARP) — no VLAN
+function wifiPolicyCard() {
+  const box = h("div", { class: "muted small" }, "Loading…");
+  const c = card("Wi-Fi users: policy by MAC", "WPA-Enterprise + MAC devices, no VLAN", box);
+  (async () => {
+    let d;
+    try { d = await api("GET", "/api/wifipolicy"); } catch { box.textContent = "Not available."; return; }
+    const sw = isAdmin() ? h("label", { class: "chip" }, h("input", { type: "checkbox", checked: d.on, onchange: async (e) => {
+      if (!e.target.checked && !(await confirmDlg("Policy by MAC", "Wi-Fi (WPA-Enterprise) users and MAC devices lose their policy on the routers within a minute (hotspot and PPPoE stay). Turn off?", "Turn off"))) { e.target.checked = true; return; }
+      if (await act(api("POST", "/api/wifipolicy", { on: e.target.checked }))) route(); else e.target.checked = !e.target.checked; } }),
+      "On — every minute the router puts each phone's IP (DHCP, else ARP for a fixed IP) in its user's policy list") : null;
+    const content = h("div", { class: "stack" }, sw,
+      table([{ label: "User", render: (r) => h("a", { href: `#/users/${encodeURIComponent(r.user)}` }, r.user) },
+        { label: "Device (MAC)", render: (r) => h("code", {}, r.mac) },
+        { label: "Policy", render: (r) => h("span", {}, ...r.lists.map((l) => badge(l.replace(/^policy-/, ""), l === "ml-quarantine" ? "bad" : "info"))) },
+        { label: "IP on the router", render: (r) => r.ip ? h("span", {}, h("code", {}, r.ip), h("span", { class: "muted small" }, ` ${r.router}`)) : h("span", { class: "muted small" }, d.on ? "waiting (≤ 1 min)" : "—"), wrap: true }],
+        d.rows, "No Wi-Fi user or MAC device with a policy right now. Give a policy to a user or group; it reaches their phone at the next login."),
+      h("div", { class: "muted small" }, "Hotspot and PPPoE users get their policy at login as before. A device with a fixed IP set on the device is found through the router's ARP table."));
+    content.querySelectorAll("table").forEach((t) => t.classList.add("rw-table"));     // cards on a phone
+    box.replaceWith(content);
+  })();
+  return c;
 }
 
 // ------------------------------------------------------------------ Blocking guide (Roman Urdu): every policy in words, how to apply

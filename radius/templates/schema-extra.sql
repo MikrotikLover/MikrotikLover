@@ -737,3 +737,13 @@ CREATE TABLE IF NOT EXISTS ml_remember (
   last_seen DATETIME NOT NULL,
   KEY (username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- policy by MAC for Wi-Fi users (tools/macpolicy.py): the IP a router found for a MAC (DHCP lease, else ARP)
+CREATE TABLE IF NOT EXISTS ml_mac_ip (
+  mac CHAR(17) NOT NULL PRIMARY KEY,
+  ip VARCHAR(45) NOT NULL DEFAULT '',
+  router VARCHAR(45) NOT NULL DEFAULT '',
+  at DATETIME NOT NULL,
+  KEY (ip),
+  KEY (router)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

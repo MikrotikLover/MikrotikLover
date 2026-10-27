@@ -1262,6 +1262,28 @@ snmp_routers_rsc() { # router part of sync.rsc: SNMP for the Devices page / netw
 RSC
 }
 
+MACPOLPY=/usr/local/lib/mikrotiklover/macpolicy.py
+cmd_wifipolicy() { # policy by MAC for Wi-Fi (WPA-Enterprise) users and MAC devices: router finds the IP (DHCP, else ARP)
+    local sub=${1:-status}; shift || true
+    mp() { python3 -I "$MACPOLPY" "$@" --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME"; }
+    case $sub in
+    status)
+        echo "Policy by MAC (Wi-Fi) : $([ "$(setting_get wifi_policy)" = 0 ] && echo off || echo on)   (radius-admin wifipolicy on|off)"
+        echo "Users / devices now   : $(mp list --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d), "with a policy,", sum(1 for r in d if r["ip"]), "found on a router")')"
+        echo "How                   : every minute (ml-live) the router puts the IP of each MAC (DHCP lease, else ARP) in the user's policy list" ;;
+    on|off)
+        setting_set wifi_policy "$([ "$sub" = on ] && echo 1 || echo 0)"
+        if [ "$sub" = on ]; then ok "Wi-Fi users get their policy by MAC: the routers put the IP in the policy list within a minute (no VLAN needed)"
+        else ok "policy by MAC off: the routers take those entries out within a minute (hotspot / PPPoE policies stay)"; fi ;;
+    list) [ "${1:-}" = --json ] && { mp list --json; return; }
+          printf '%-20s %-17s  %-30s %-15s %s\n' USER MAC POLICY IP ROUTER; mp list ;;
+    report) # MAC|IP lines from a router (dashboard: /api/public/router/macip)
+        [[ ${1:-} =~ ^[0-9]+(\.[0-9]+){3}$ ]] || die "usage: radius-admin wifipolicy report ROUTER-IP < lines"
+        mp report "$1" >/dev/null ;;
+    *) die "usage: radius-admin wifipolicy status|on|off|list [--json]" ;;
+    esac
+}
+
 cmd_remember() { # "remember this device": after one password login a phone logs in by its MAC as that user (random MACs)
     local sub=${1:-status}; shift || true
     case $sub in
@@ -3945,6 +3967,7 @@ MAC authentication (devices without username/password: printers, CCTV, TVs, POS)
   mac add MAC [-g GROUP] [-d "Reception printer"] [--policy NAME]   any format: aa:bb:.., AABB.CCDD.EEFF
   mac del|disable|enable MAC | mac group MAC GROUP|- | mac policy MAC POLICY|- | mac list
   remember on|off|status · remember days N · remember max N · remember list [USER] · remember forget MAC|USER
+  wifipolicy on|off|status · wifipolicy list   Wi-Fi (WPA-Enterprise) users + MAC devices: policy by MAC, no VLAN (router: DHCP, else ARP)
                                         a phone that logged in with a password logs in by its MAC next time (random MACs)
 
 Routers (MikroTik = NAS)
@@ -4008,6 +4031,7 @@ case ${1:-help} in
     mail) shift; cmd_mail "$@" ;;
     snmp|devices) shift; cmd_snmp "$@" ;;
     remember) shift; cmd_remember "$@" ;;
+    wifipolicy) shift; cmd_wifipolicy "$@" ;;
     doctor|health) shift; python3 -I /usr/local/lib/mikrotiklover/health.py --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@" ;;
     backups) cmd_backups ;;
     restore) shift; cmd_restore "$@" ;;

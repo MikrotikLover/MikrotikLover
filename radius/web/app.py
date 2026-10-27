@@ -2250,8 +2250,49 @@ def router_live():
     """Every minute from each router (sync.rsc: ml-live): department members + temporary exceptions."""
     if not _router_key_ok():
         abort(403)
-    text = (dept_script() if q1("SELECT 1 FROM ml_department LIMIT 1") else "") + temp_script() + ips_script()
+    text = (dept_script() if q1("SELECT 1 FROM ml_department LIMIT 1") else "") + temp_script() + ips_script() + macpol_script()
     return app.response_class(text, mimetype="text/plain", headers={"Cache-Control": "no-store"})
+
+
+def macpol_script():
+    """Wi-Fi (WPA-Enterprise) users and MAC devices: policy by MAC, the router finds the IP (tools/macpolicy.py)"""
+    import macpolicy
+    on = (q1("SELECT v FROM ml_setting WHERE k='wifi_policy'") or {}).get("v") != "0"
+    dom = (q1("SELECT v FROM ml_setting WHERE k='radius_domain'") or {}).get("v") or "radius.local"
+    try:
+        rows = macpolicy.rows(q) if on else []
+    except pymysql.MySQLError:             # an old database without ml_mac_ip: leave the part out this minute
+        return ""
+    return macpolicy.script(rows, f"https://{dom}:{web_port()}/api/public/router", router_key(), on)
+
+
+@app.post("/api/public/router/macip")
+def router_macip():
+    """A router tells which IP each MAC of the Wi-Fi policy list has (ml-live, only when it changed)."""
+    if not _router_key_ok():
+        abort(403)
+    if (request.content_length or 0) > 262144:
+        abort(413)
+    import macpolicy
+    found = macpolicy.parse_report(request.get_data(as_text=True))
+    text = "".join(f"{m}|{ip}\n" for m, ip in found.items())
+    ok, out = radius_admin(["wifipolicy", "report", client_ip()], stdin=text, log=False, timeout=60)
+    return app.response_class("ok" if ok else "failed", mimetype="text/plain", status=200 if ok else 500)
+
+
+@app.get("/api/wifipolicy")
+@login_required()
+def wifipolicy_get():
+    import macpolicy
+    on = (q1("SELECT v FROM ml_setting WHERE k='wifi_policy'") or {}).get("v") != "0"
+    return jsonify(on=on, rows=macpolicy.rows(q))
+
+
+@app.post("/api/wifipolicy")
+@login_required("admin")
+def wifipolicy_set():
+    data = body()
+    return result(*radius_admin(["wifipolicy", "on" if data.get("on") else "off"]))
 
 
 def ips_script():

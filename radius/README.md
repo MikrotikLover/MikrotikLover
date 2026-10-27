@@ -289,7 +289,23 @@ strict-ech            # Encrypted Client Hello bhi band (site ka naam chhupne na
 | **IP Range** | `/ip firewall address-list add list=policy-students address=192.168.88.100-192.168.88.150` |
 | **Subnet / VLAN** | `/ip firewall address-list add list=policy-staff address=192.168.20.0/24` |
 | **Group** (hotspot) | `sudo radius-admin group add class-9 --policy students` — group ke sab users |
-| **Group** (WPA-Enterprise) | Group ko VLAN dein (`--vlan 20`) aur us subnet ko policy list mein daalein |
+| **User / Group** (WPA-Enterprise, bina VLAN) | Bilkul hotspot ki tarah: `radius-admin user policy ali staff` ya group ko policy — router phone ka IP MAC se dhoond kar list mein daal deta hai (neeche "Wi-Fi users: policy by MAC") |
+| **Group** (WPA-Enterprise, VLAN ke saath) | Group ko VLAN dein (`--vlan 20`) aur us subnet ko policy list mein daalein |
+
+#### Wi-Fi users: policy by MAC (WPA-Enterprise, simple network — VLAN ki zaroorat nahi)
+
+Hotspot / PPPoE login par router user ke IP ko policy list mein khud daal deta hai. WPA-Enterprise (802.1X) login par router ke paas us waqt IP nahi hota — is liye yeh tareeqa:
+
+1. Phone login karta hai → server ko phone ka **MAC** aur asal user milta hai (phone "anonymous" bheje tab bhi).
+2. **Har minute** (auto-sync ka `ml-live`) router ko "MAC → policy" list milti hai. Router IP **DHCP lease** mein dhoondta hai; na mile (device par haath se fixed IP) to **ARP table** mein. Woh IP user ki policy list (`policy-NAAM`) mein jata hai (comment `mlmac: USER`); jo ab sahi nahi woh nikal jata hai.
+3. Router jo IP mila woh server ko batata hai (sirf jab badle) → server use user ki khuli session mein likhta hai. Is se **reports, Why blocked?, quarantine, departments, temporary unblock** sab username se kaam karte hain.
+
+- Kuch nahi karna: user / group ko policy dein (dashboard ya `radius-admin user policy …`), bas. Default **on**. Wi-Fi par MAC wale devices (printer waghera, group ki policy) bhi isi se.
+- Quarantine: device ko sirf `ml-quarantine` list milti hai (internet band, warning page).
+- Dashboard: **Blocking → Overview → "Wi-Fi users: policy by MAC"** — switch, kaun, kaunsa MAC, kaunsi policy, router par kaunsa IP.
+- CLI: `radius-admin wifipolicy status|on|off|list`
+- Hadood: login ke baad policy ~1 minute mein lagti hai. Groups alag network mein nahi hote (alehdagi chahiye to VLAN). RouterOS 6 aur 7 dono.
+- Test: `tests/test-wifipolicy.sh` (asli PEAP login eapol_test se, anonymous naam, MAC → policy, group policy, MAC device, hotspot session ko nahi chhuta, router report → session IP, IP badla, quarantine, policy badli, off / on, API), `tests/test-macpolicy.py` (script: lint, RouterOS 6, user naam se script toot nahi sakti). Asli router par abhi nahi chalaya (CHR yahan band tha).
 
 #### Facebook / YouTube / TikTok video block — 3 users ka test
 

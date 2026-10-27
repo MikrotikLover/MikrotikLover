@@ -336,6 +336,7 @@ Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein
 | IPS block ~1 second mein (MikroTik API, api-ssl) | Security → Intrusion prevention → Instant blocks → + Add a router | `radius-admin ips api add 192.168.88.1` · `ips api test 192.168.88.1` · `ips api list` |
 | Instant blocks har router par khud (auto-sync, kuch paste nahi) | Instant blocks → "Every router by auto-sync" | `radius-admin ips api auto on` · `ips api auto off` · `ips api auto new-password` |
 | RouterOS 6 aur 7 dono (router khud version batata hai) | kuch nahi — auto-sync aur Router setup line khud sahi file lete hain | `radius-admin policy build` (sync.rsc + sync6.rsc) · `python3 /usr/local/lib/mikrotiklover/rosv6.py check FILE.rsc` |
+| WPA-Enterprise users ki policy bina VLAN (MAC → IP: DHCP, phir ARP) | Blocking → Overview → "Wi-Fi users: policy by MAC" (default on) | `radius-admin wifipolicy status|on|off|list` |
 | Inline IPS (pehla packet ruke) + khud bypass agar Suricata band / atke | Security → Intrusion prevention → Mode → Inline | `radius-admin ips inline on eth1 eth2` · `ips inline drop` · `ips bypass on|off` · `ips inline off` |
 | Mail server (MDaemon) ki hifazat: safe ports, password guessing band, spam bots, DNS / blacklist / certificate checks | Mail server | `radius-admin mail set ip 192.168.88.30 domain example.com` · `mail doors` · `mail status` |
 | MAC device (printer, TV, CCTV) ki apni policy | MAC devices → Policy | `radius-admin mac policy MAC no-video` · `mac add MAC --policy P` |
