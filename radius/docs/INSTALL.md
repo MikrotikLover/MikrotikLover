@@ -105,11 +105,11 @@ Server ko fixed IP dein (netplan / router DHCP reservation).
 
 **ZIP se (jo file aap ke paas hai):**
 ```bash
-# 1) zip server par bhejein (apne PC se):   scp MikrotikLover-RADIUS.zip root@SERVER_IP:/root/
+# 1) zip server par bhejein (apne PC se):   scp MikrotikLover-*.zip root@SERVER_IP:/root/
 # 2) server par:
 sudo apt -y install unzip
-cd /root && unzip MikrotikLover-RADIUS.zip
-cd MikrotikLover-RADIUS/radius
+cd /root && unzip MikrotikLover-*.zip
+cd MikrotikLover*/radius          # zip ke andar ka folder (MikrotikLover/ ya MikrotikLover-RADIUS/)
 sudo RADIUS_DOMAIN=radius.mycompany.lan bash install.sh
 ```
 2–5 minute lagte hain. Aakhir mein **dashboard ka address aur pehla admin password** print hota hai — foran likh lein. Phir: `sudo radius-admin doctor` (sab sabz hona chahiye; router ke bina "routers" peela hona normal hai).
@@ -190,8 +190,9 @@ Dashboard → **Routers** se bhi add kar sakte hain. IP wahi likhein jis se rout
 3. Jo cheezein chahiyein un par tick lagayein (Hotspot, Staff Wi-Fi, PPPoE, logs, auto-sync, security …). Hotspot pehli dafa ho to "Make the hotspot too" + LAN address (`192.168.88.1/24`).
 4. **Make the script** dabayein. Ek line milti hai, maslan:
    ```
-   /tool fetch url="https://10.10.10.10:8443/api/public/setup/9ffd…rsc" check-certificate=no dst-path=ml-setup.rsc; :delay 2s; /import file-name=ml-setup.rsc; /file remove ml-setup.rsc
+   /tool fetch url=("https://10.10.10.10:8443/api/public/setup/9ffd….rsc\?v=" . [:pick [/system resource get version] 0 1]) check-certificate=no dst-path=ml-setup.rsc; :delay 2s; /import file-name=ml-setup.rsc; /file remove ml-setup.rsc
    ```
+   Line router ka version (6 / 7) khud bhejti hai aur usi ke liye likhi script leti hai.
 5. Winbox → **New Terminal** → line paste → **Enter**. Page par "router downloaded it ✔" aa jata hai; akhir mein terminal mein `MikrotikLover setup finished` likha aata hai.
 
 Baatein:
