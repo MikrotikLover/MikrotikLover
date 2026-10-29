@@ -2268,7 +2268,11 @@ async function certCard() {
         h("div", {}, h("span", { class: "muted" }, "Issued by: "), (c.issuer || "").replace(/^.*CN ?= ?/, "")),
         days !== null ? h("div", {}, h("span", { class: "muted" }, "Valid: "), badge(`${days} more days`, days < 14 ? "bad" : days < 30 ? "warn" : "ok"),
           pub && (c.method === "http" || c.method === "cloudflare") ? h("span", { class: "muted small" }, " — renewed by itself") : null) : null),
-      pub ? h("div", { class: "muted small" }, "Android: CA certificate ", h("b", {}, "Use system certificates"), ", Domain ", h("code", {}, c.domain), ". The connect guide says so by itself.")
+      pub ? h("div", { class: "muted small" }, "Android: CA certificate ", h("b", {}, "Use system certificates"), ", Domain ", h("code", {}, c.domain), ". The connect guide says so by itself.") : null,
+      isAdmin() ? h("label", { class: "chip" }, h("input", { type: "checkbox", checked: !!c.captive, onchange: async (e) => {
+          if (!(await act(api("POST", "/api/captive", { on: e.target.checked })))) e.target.checked = !e.target.checked; } }),
+        pub ? "Hotspot: phones open the login page by themselves (captive portal API)" : "Hotspot: phones open the login page by themselves (captive portal API) — starts once a public certificate is in use") : null,
+      pub ? null
         : h("div", { class: "muted small" }, "With your own domain and a free Let's Encrypt certificate no phone needs a certificate installed, and the browser trusts the dashboard."),
       isAdmin() ? h("div", { class: "toolbar" },
         h("button", { class: pub ? "small" : "primary", onclick: le }, pub ? "Change" : "Get a Let's Encrypt certificate"),

@@ -35,6 +35,8 @@ PROPS = {
         "unicast-ciphers", "group-ciphers", "radius-eap-accounting", "wpa2-pre-shared-key",
         "radius-mac-authentication", "radius-mac-accounting", "radius-mac-mode", "radius-mac-format"},
     "/interface wireless": {"security-profile", "ssid", "mode", "disabled", "master-interface", "name", "vlan-mode"},
+    "/ip dhcp-server option": {"name", "code", "value", "comment"},
+    "/ip dhcp-server network": {"address", "gateway", "dns-server", "dhcp-option", "comment", "netmask", "domain"},
     "/ip traffic-flow": {"enabled", "interfaces", "active-flow-timeout", "inactive-flow-timeout", "cache-entries"},
     "/ip traffic-flow target": {"dst-address", "port", "version", "src-address"},
     "/ip pool": {"name", "ranges", "comment"},

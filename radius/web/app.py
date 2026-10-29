@@ -2286,15 +2286,77 @@ def router_macip():
     return app.response_class("ok" if ok else "failed", mimetype="text/plain", status=200 if ok else 500)
 
 
+# ------------------------------------------------------------------ captive portal API (RFC 8908 / 8910)
+def _public_base():
+    """https://<public name>:<port> when a public certificate is in use (phones only follow a trusted https API), else ''"""
+    st = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k IN ('cert_mode','public_domain')")}
+    if st.get("cert_mode") == "public" and st.get("public_domain"):
+        return f"https://{st['public_domain']}:{web_port()}"
+    return ""
+
+
+@app.get("/api/public/captive")
+def captive_api():
+    """The phone asks (DHCP option 114 gave it this address): am I behind the login page, how much is left?"""
+    ip = client_ip()
+    row = q1("""SELECT username FROM radacct WHERE framedipaddress=%s AND acctstoptime IS NULL
+                ORDER BY acctstarttime DESC LIMIT 1""", (ip,)) if ip else None
+    base = _public_base()
+    out = {"captive": True}
+    if row:
+        chk = (q1("SELECT ml_check(%s) AS c", (row["username"],)) or {}).get("c") or ""
+        part = chk.split(":")
+        if part and part[0] in ("ok", "fup"):
+            out = {"captive": False}
+            try:
+                if int(part[1]) > 0:
+                    out["seconds-remaining"] = int(part[1])
+                if part[0] == "ok" and len(part) >= 5 and part[4] == "1":
+                    out["bytes-remaining"] = int(part[2]) + int(part[3]) * 4294967296
+            except (ValueError, IndexError):
+                pass
+            out["can-extend-session"] = True
+    if base:
+        out["user-portal-url"] = f"{base}/portal"
+        out["venue-info-url"] = f"{base}/connect"
+    resp = app.response_class(json.dumps(out), mimetype="application/captive+json")
+    resp.headers["Cache-Control"] = "private, no-store"
+    return resp
+
+
+@app.get("/portal")
+def captive_portal():
+    """user-portal-url must be https: this page sends the phone on to the hotspot's login page (plain http on the router)."""
+    from html import escape
+    url = settings_get()["hotspot_url"].rstrip("/")
+    if not re.match(r"^https?://[A-Za-z0-9.-]{1,120}(:\d{1,5})?$", url):
+        url = "http://login.wifi"
+    target = escape(url + "/login")
+    page = (f'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'<meta http-equiv="refresh" content="0;url={target}"><title>Login</title></head>'
+            f'<body style="font-family:system-ui;margin:2em"><p><a href="{target}">Login page</a></p></body></html>')
+    resp = app.response_class(page, mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 # ------------------------------------------------------------------ public certificate (Let's Encrypt / bought)
 @app.get("/api/cert")
 @login_required("admin")
 def cert_get():
     ok, out = radius_admin(["cert", "json"], log=False, timeout=30)
     try:
-        return jsonify(json.loads(out.splitlines()[-1]) if ok else {"mode": "own"})
+        d = json.loads(out.splitlines()[-1]) if ok else {"mode": "own"}
     except (ValueError, IndexError):
-        return jsonify(mode="own")
+        d = {"mode": "own"}
+    d["captive"] = (q1("SELECT v FROM ml_setting WHERE k='captive_api'") or {}).get("v") != "0"
+    return jsonify(d)
+
+
+@app.post("/api/captive")
+@login_required("admin")
+def captive_set():
+    return result(*radius_admin(["captive", "on" if body().get("on") else "off"], timeout=120))
 
 
 @app.post("/api/cert/<action>")

@@ -1201,6 +1201,64 @@ ips_api_rsc() { # router part of sync.rsc: the API user for IPS instant blocks o
     fi
 }
 
+captive_rsc() { # router part of sync.rsc: DHCP option 114 (RFC 8910) on the hotspot networks -> phones ask the captive API
+    local dom sip on url; dom=$(setting_get public_domain 2>/dev/null || true); sip=$(setting_get server_ip 2>/dev/null || true)
+    on=$(setting_get captive_api 2>/dev/null || true)
+    echo "# Captive portal API (radius-admin captive): phones learn from DHCP where to ask 'am I logged in?'"
+    if [ "$on" != 0 ] && [ "$(setting_get cert_mode 2>/dev/null || true)" = public ] && [[ $dom =~ ^[a-z0-9.-]+$ ]] && [[ $sip =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
+        url="https://$dom:${WEB_PORT:-8443}/api/public/captive"
+        cat <<RSC
+/ip dhcp-server option
+:if ([:len [find name="ml-captive"]] = 0) do={ add name=ml-captive code=114 value="'$url'" } else={ set [find name="ml-captive"] code=114 value="'$url'" }
+:foreach hs in=[/ip hotspot find] do={
+  :local ifc [/ip hotspot get \$hs interface]
+  :foreach a in=[/ip address find where interface=\$ifc] do={
+    :local adr [:tostr [/ip address get \$a address]]
+    :local net ([:tostr [/ip address get \$a network]] . "/" . [:pick \$adr ([:find \$adr "/"] + 1) [:len \$adr]])
+    :foreach n in=[/ip dhcp-server network find where address=\$net] do={
+      :local o [/ip dhcp-server network get \$n dhcp-option]
+      :if ([:typeof [:find \$o "ml-captive"]] = "nil") do={
+        :local s ""
+        :foreach x in=\$o do={ :set s (\$s . \$x . ",") }
+        :do { /ip dhcp-server network set \$n dhcp-option=(\$s . "ml-captive") } on-error={ :log warning "ml-sync: captive portal option not set on \$net" }
+      }
+    }
+  }
+}
+# before login the phone may ask this server (the API, and the https page that leads to the login page)
+/ip hotspot walled-garden ip
+remove [find comment="mlcaptive"]
+add action=accept dst-address=$sip protocol=tcp dst-port=${WEB_PORT:-8443} comment="mlcaptive"
+RSC
+    else
+        [ "$on" = 0 ] || echo "# (needs a public certificate first: radius-admin cert letsencrypt — phones only use an https address they trust)"
+        cat <<'RSC'
+:foreach n in=[/ip dhcp-server network find] do={
+  :local o [/ip dhcp-server network get $n dhcp-option]
+  :if ([:typeof [:find $o "ml-captive"]] != "nil") do={
+    :local s ""
+    :foreach x in=$o do={ :if ($x != "ml-captive") do={ :set s ($s . $x . ",") } }
+    :do { /ip dhcp-server network set $n dhcp-option=[:pick $s 0 ([:len $s] - 1)] } on-error={}
+  }
+}
+:do { /ip dhcp-server option remove [find name="ml-captive"] } on-error={}
+:do { /ip hotspot walled-garden ip remove [find comment="mlcaptive"] } on-error={}
+RSC
+    fi
+}
+
+cmd_captive() {
+    case ${1:-status} in
+    status)
+        echo "Captive portal API : $([ "$(setting_get captive_api)" = 0 ] && echo off || echo on)   (radius-admin captive on|off)"
+        if [ "$(setting_get cert_mode)" = public ]; then echo "Address            : https://$(setting_get public_domain):${WEB_PORT:-8443}/api/public/captive (DHCP option 114 on the hotspot networks)"
+        else echo "Waiting for        : a public certificate (radius-admin cert letsencrypt) — phones only follow an https address they trust"; fi ;;
+    on|off) setting_set captive_api "$([ "$1" = on ] && echo 1 || echo 0)"; cmd_policy build >/dev/null 2>&1 || warn "router rules not rebuilt (radius-admin policy build)"
+        ok "captive portal API $1 — the routers take it at the next auto-sync (15 min); phones use it at their next DHCP renewal" ;;
+    *) die "usage: radius-admin captive status|on|off" ;;
+    esac
+}
+
 public_name_rsc() { # router part of sync.rsc: the public name (radius-admin cert letsencrypt) points to this server on the LAN
     local dom sip; dom=$(setting_get public_domain 2>/dev/null || true); sip=$(setting_get server_ip 2>/dev/null || true)
     echo "/ip dns static"
@@ -2825,6 +2883,8 @@ RSC
             snmp_routers_rsc
             echo
             public_name_rsc
+            echo
+            captive_rsc
         } > "$lists/sync.rsc"
         install -m 644 "$lists/webfilter-policies.rsc" "$lists/vpn-servers.rsc" "$ROUTER_DIR/"
         # sync.rsc can carry the routers' API password (ips api auto): root and the dashboard only
@@ -4144,6 +4204,7 @@ MAC authentication (devices without username/password: printers, CCTV, TVs, POS)
   remember on|off|status · remember days N · remember max N · remember list [USER] · remember forget MAC|USER
   cert status · cert letsencrypt NAME --email E --http|--cloudflare · cert import FULLCHAIN KEY · cert renew · cert own
                                         public certificate for phones + dashboard (no CA install on Android); routers unchanged
+  captive on|off|status                 phones find the hotspot login by themselves (RFC 8908 API, DHCP option 114; needs cert letsencrypt)
   wifipolicy on|off|status · wifipolicy list   Wi-Fi (WPA-Enterprise) users + MAC devices: policy by MAC, no VLAN (router: DHCP, else ARP)
                                         a phone that logged in with a password logs in by its MAC next time (random MACs)
 
@@ -4210,6 +4271,7 @@ case ${1:-help} in
     remember) shift; cmd_remember "$@" ;;
     wifipolicy) shift; cmd_wifipolicy "$@" ;;
     cert) shift; cmd_cert "$@" ;;
+    captive) shift; cmd_captive "$@" ;;
     doctor|health) shift; python3 -I /usr/local/lib/mikrotiklover/health.py --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@" ;;
     backups) cmd_backups ;;
     restore) shift; cmd_restore "$@" ;;

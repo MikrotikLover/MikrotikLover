@@ -406,7 +406,7 @@ EOF
             echo "    deny all;"
         fi
         echo "    # public: the users' connect guide (names, CA certificate) — no login, any network"
-        echo "    location ~ ^/(connect|api/public/|static/) {"
+        echo "    location ~ ^/(connect|portal\$|api/public/|static/) {"
         echo "        allow all;"
         echo "        proxy_pass http://127.0.0.1:8099;"
         echo '        proxy_set_header Host $host;'

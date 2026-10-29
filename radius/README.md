@@ -210,6 +210,18 @@ sudo radius-admin cert own             # wapas apna CA
   - khareeda certificate import, ghalat key mana;
   - wapas own, API.
 
+### Captive portal API — phone khud login page khole (RFC 8908 / 8910)
+
+Naye iPhone (iOS 14+) aur Android (11+) DHCP se ek address lete hain (option 114) aur wahan poochte hain "kya mujhe login karna hai?". Is se login page foran aur sahi khulta hai, aur login ke baad phone baqi waqt / data bhi jaanta hai.
+
+- **Shart:** public certificate (upar 4b). Phone sirf aise https address ki baat maante hain jis par woh bharosa karein. Is ke baghair auto-sync option 114 nahi lagata.
+- **Kuch nahi karna:** default on. Auto-sync hotspot wale networks ki DHCP par option 114 lagata hai — pehle se lage options rehte hain — aur login se pehle server tak rasta (walled garden) khol deta hai.
+- **Server kya jawab deta hai:**
+  - `https://NAAM:8443/api/public/captive` — login nahi: `captive: true` aur login page; login hai: `captive: false`, `seconds-remaining`, `bytes-remaining` (plan ke hisaab se).
+  - `/portal` phone ko hotspot ke login page par bhej deta hai.
+- **Kahan:** Settings → Certificate for phones → "Hotspot: phones open the login page by themselves", ya `radius-admin captive status|on|off`.
+- **Test:** `tests/test-captive.sh` — own cert par option nahi; public cert par option 114, walled garden, purane options qaim; lint + RouterOS 6; login se pehle / baad / data khatam; off; API.
+
 ## 5. Devices kaise connect hon
 
 | Device | Setting |
