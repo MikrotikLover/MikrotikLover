@@ -13,8 +13,8 @@ eap {
 
 	tls-config tls-common {
 		private_key_password = ""
-		private_key_file = ${certdir}/mikrotiklover/server.key
-		certificate_file = ${certdir}/mikrotiklover/server.pem
+		private_key_file = ${certdir}/mikrotiklover/eap.key      # own (server.key) or public (radius-admin cert)
+		certificate_file = ${certdir}/mikrotiklover/eap.pem     # own (server.pem) or public fullchain
 		ca_file = ${certdir}/mikrotiklover/ca.pem
 
 		cipher_list = "DEFAULT"

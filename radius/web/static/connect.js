@@ -38,16 +38,16 @@ const GUIDES = {
         phone("phone", title("Wi-Fi"), wifiRow("Home-WiFi"), wifiRow(S.ssid, true), wifiRow("Neighbour"))),
       step(2, ["EAP method ", h("code", {}, "PEAP"), ", Phase 2 ", h("code", {}, "MSCHAPV2"), " chunein."],
         "Kuch phones mein \"Advanced options\" kholna parta hai.",
-        phone("phone", title(S.ssid), row("EAP method", "PEAP", true), row("Phase 2 auth", "MSCHAPV2", true), row("CA certificate", "Trust on first use"), row("Domain", S.radius_domain || "—"))),
-      step(3, ["CA certificate: ", h("b", {}, "Trust on first use"), " (Android 13+). Domain: ", h("code", {}, S.radius_domain || "—")],
-        "Android 11–12: neeche diya certificate pehle install karein aur phir usay yahan chunein.",
-        phone("phone", title(S.ssid), row("CA certificate", "Trust on first use", true), row("Domain", S.radius_domain || "—", true), row("Identity", you), row("Password", pass))),
+        phone("phone", title(S.ssid), row("EAP method", "PEAP", true), row("Phase 2 auth", "MSCHAPV2", true), row("CA certificate", caChoice()), row("Domain", S.radius_domain || "—"))),
+      step(3, ["CA certificate: ", h("b", {}, caChoice()), S.cert_public ? "" : " (Android 13+)", ". Domain: ", h("code", {}, S.radius_domain || "—")],
+        S.cert_public ? "Koi certificate install nahi karna — phone apni list se khud check karta hai." : "Android 11–12: neeche diya certificate pehle install karein aur phir usay yahan chunein.",
+        phone("phone", title(S.ssid), row("CA certificate", caChoice(), true), row("Domain", S.radius_domain || "—", true), row("Identity", you), row("Password", pass))),
       step(4, ["Identity mein apna ", h("b", {}, "username"), " aur Password likhein, phir Connect."], "Anonymous identity khaali chhor dein.",
         phone("phone", title(S.ssid), row("Identity", you, true), row("Anonymous identity", ""), row("Password", pass, true), buttons(["Cancel"], ["Connect", true, true]))),
       step(5, "\"Trust this network?\" aaye to Trust / Connect dabayein. Bas, connected!", null,
         phone("phone", h("div", { class: "dialog" }, h("b", {}, "Trust this network?"), `Server: ${S.radius_domain || S.ssid}`), buttons(["Cancel"], ["Trust", true, true]))),
     ],
-    extra: () => certBox(true),
+    extra: () => (S.cert_public ? null : certBox(true)),
   },
   iphone: {
     label: "iPhone / iPad",
@@ -113,6 +113,9 @@ const GUIDES = {
     ],
   },
 };
+
+// public certificate (Let's Encrypt): the phone checks it with its own list — nothing to install
+const caChoice = () => (S.cert_public ? "Use system certificates" : "Trust on first use");
 
 function certBox(android) {
   return h("div", { class: "intro" },

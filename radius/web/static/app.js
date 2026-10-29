@@ -855,6 +855,7 @@ ROUTES.settings = async () => {
         { label: "", render: (b) => h("a", { class: "btn small", href: `/api/backups/${encodeURIComponent(b.name)}` }, "⬇ Download") }], bk.backups, "No backup yet."),
       h("div", { class: "toolbar" }, h("button", { class: "primary", onclick: async (e) => { e.target.disabled = true; await act(api("POST", "/api/backups")); route(); } }, "Backup now"))));
     wide.push(offsiteCard(bk.offsite || { type: "off" }));
+    wide.push(await certCard());
     wide.push(await alertsCard());
     wide.push(await noticeCard());
     wide.push(card("Automatic updates", "every week (Tuesday night) + hourly lists",
@@ -2226,6 +2227,54 @@ async function blockingOverview() {
         h("li", {}, h("b", {}, "Give it"), " to a user or a group. The user gets it at the next login."),
         h("li", {}, h("b", {}, "Router auto-sync"), " — the router gets every change by itself."),
         h("li", {}, h("b", {}, "Users see a block page"), " with a code and can ask to open the site (Requests).")))));
+}
+
+// Certificate for phones and the dashboard: own CA (Android 11-12 install it) or public (Let's Encrypt / bought)
+async function certCard() {
+  let c = {};
+  try { c = await api("GET", "/api/cert"); } catch { return card("Certificate for phones", null, h("div", { class: "muted" }, "Not available.")); }
+  const pub = c.mode === "public";
+  const days = c.end ? Math.round((new Date(c.end) - Date.now()) / 86400000) : null;
+  const doIt = async (action, data, msg) => { if (await act(api("POST", `/api/cert/${action}`, data || {}), msg)) route(); };
+  const le = () => {
+    const dom = h("input", { name: "domain", placeholder: "wifi.company.com", required: true, pattern: "([a-z0-9-]+\\.)+[a-z]{2,}", value: c.domain || "" });
+    const em = h("input", { name: "email", type: "email", placeholder: "it@company.com", required: true, value: c.email || "" });
+    const meth = h("select", { name: "method" }, h("option", { value: "http" }, "HTTP — port 80 of this server open from the internet"),
+      h("option", { value: "cloudflare" }, "Cloudflare DNS — no port to open (API token)"));
+    const tok = h("input", { name: "token", type: "password", placeholder: "Cloudflare API token (Zone → DNS → Edit)", autocomplete: "off" });
+    const tokRow = h("label", { class: "field", hidden: true }, "Cloudflare token", tok);
+    meth.onchange = () => { tokRow.hidden = meth.value !== "cloudflare"; tok.required = meth.value === "cloudflare"; };
+    const form = h("form", { class: "form" }, h("label", { class: "field" }, "Name (your domain, pointing to this server)", dom),
+      h("label", { class: "field" }, "Email (Let's Encrypt sends expiry notes)", em), h("label", { class: "field" }, "How Let's Encrypt checks the name", meth), tokRow,
+      h("div", { class: "muted small" }, "Routers keep their own name and certificate — nothing changes for auto-sync. Takes up to a minute."));
+    dialog("Let's Encrypt certificate", form, [{ label: "Cancel" }, { label: "Get the certificate", class: "primary", action: async () => {
+      if (!form.reportValidity()) return false;
+      return !!(await act(api("POST", "/api/cert/letsencrypt", { domain: dom.value.trim(), email: em.value.trim(), method: meth.value, token: tok.value.trim() }), "Certificate in use")) && (route(), true);
+    } }]);
+  };
+  const imp = () => {
+    const crt = h("textarea", { rows: 6, placeholder: "-----BEGIN CERTIFICATE-----  (the certificate, then its chain)", required: true });
+    const key = h("textarea", { rows: 4, placeholder: "-----BEGIN PRIVATE KEY-----", required: true });
+    const form = h("form", { class: "form" }, h("label", { class: "field" }, "Certificate + chain (PEM)", crt), h("label", { class: "field" }, "Private key (PEM)", key));
+    dialog("Use a bought certificate", form, [{ label: "Cancel" }, { label: "Use it", class: "primary", action: async () => {
+      if (!form.reportValidity()) return false;
+      return !!(await act(api("POST", "/api/cert/import", { fullchain: crt.value, key: key.value }), "Certificate in use")) && (route(), true);
+    } }]);
+  };
+  return card("Certificate for phones", pub ? "public — nothing to install" : "own CA — Android 11–12 install it",
+    h("div", { class: "stack" },
+      h("div", { class: "stack" },
+        h("div", {}, h("span", { class: "muted" }, "In use: "), pub ? h("b", {}, c.domain) : h("span", {}, c.own_domain, h("span", { class: "muted small" }, " (own CA)"))),
+        h("div", {}, h("span", { class: "muted" }, "Issued by: "), (c.issuer || "").replace(/^.*CN ?= ?/, "")),
+        days !== null ? h("div", {}, h("span", { class: "muted" }, "Valid: "), badge(`${days} more days`, days < 14 ? "bad" : days < 30 ? "warn" : "ok"),
+          pub && (c.method === "http" || c.method === "cloudflare") ? h("span", { class: "muted small" }, " — renewed by itself") : null) : null),
+      pub ? h("div", { class: "muted small" }, "Android: CA certificate ", h("b", {}, "Use system certificates"), ", Domain ", h("code", {}, c.domain), ". The connect guide says so by itself.")
+        : h("div", { class: "muted small" }, "With your own domain and a free Let's Encrypt certificate no phone needs a certificate installed, and the browser trusts the dashboard."),
+      isAdmin() ? h("div", { class: "toolbar" },
+        h("button", { class: pub ? "small" : "primary", onclick: le }, pub ? "Change" : "Get a Let's Encrypt certificate"),
+        h("button", { class: "small", onclick: imp }, "Use a bought certificate"),
+        pub && (c.method === "http" || c.method === "cloudflare") ? h("button", { class: "small", onclick: () => doIt("renew", { force: true }, "Renewed") }, "Renew now") : null,
+        pub ? h("button", { class: "small danger", onclick: async () => { if (await confirmDlg("Own certificate", "Go back to the own CA? Android 11–12 phones then need ca.der installed again.", "Go back")) doIt("own"); } }, "Back to own CA") : null) : null));
 }
 
 // Wi-Fi (WPA-Enterprise) users and MAC devices: policy by MAC, the router finds the IP (DHCP, else ARP) — no VLAN

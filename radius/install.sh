@@ -40,6 +40,7 @@ apt-get install -y -qq freeradius freeradius-mysql freeradius-utils mariadb-serv
 # eapol_test lets "radius-admin test --peap" simulate a real Wi-Fi client (optional package)
 apt-get install -y -qq eapoltest >/dev/null 2>&1 || warn "eapoltest not available; PEAP self-test disabled"
 apt-get install -y -qq snmp >/dev/null 2>&1 || warn "net-snmp tools not available: SNMP v3 devices cannot be read (v1 / v2c work)"
+apt-get install -y -qq lego >/dev/null 2>&1 || warn "lego not available: Let's Encrypt certificate cannot be fetched here (radius-admin cert import still works)"
 [ -d "$RADDB" ] || die "$RADDB not found — unexpected FreeRADIUS layout"
 
 # ---------------------------------------------------------------- settings
@@ -145,9 +146,11 @@ if [ ! -f "$CERT_DIR/ca.pem" ] || [ "${RENEW_CA:-0}" = 1 ]; then
 elif [ ! -f "$CERT_DIR/server.pem" ] || [ "${RENEW_CERT:-0}" = 1 ]; then
     make_server_cert
 fi
-chown root:freerad "$CERT_DIR"/*
-chmod 640 "$CERT_DIR"/*
+find "$CERT_DIR" -maxdepth 1 -type f -exec chown root:freerad {} + -exec chmod 640 {} +
 chmod 600 "$CERT_DIR/ca.key"
+# the certificate Wi-Fi clients get (EAP): own by default; 'radius-admin cert letsencrypt|import' points it at the public one
+[ -e "$CERT_DIR/eap.pem" ] || ln -sfn server.pem "$CERT_DIR/eap.pem"
+[ -e "$CERT_DIR/eap.key" ] || ln -sfn server.key "$CERT_DIR/eap.key"
 chmod 644 "$CERT_DIR/ca.pem" "$CERT_DIR/ca.der"
 
 # ---------------------------------------------------------------- FreeRADIUS config
@@ -224,6 +227,8 @@ cat > /etc/cron.d/mikrotiklover <<'EOF'
 * * * * * root /usr/local/sbin/radius-admin snmp poll --quiet >/dev/null 2>&1
 # nightly complete backup (newest 14 kept in /var/backups/mikrotiklover)
 43 2 * * * root /usr/local/sbin/radius-admin backup --auto --quiet >/dev/null 2>&1
+# public certificate (Let's Encrypt): renewed 30 days before the end (does nothing with the own certificate)
+29 3 * * * root /usr/local/sbin/radius-admin cert renew --quiet >/dev/null 2>&1
 EOF
 chmod 644 /etc/cron.d/mikrotiklover
 command -v cron >/dev/null || apt-get install -y -qq cron >/dev/null 2>&1 || warn "cron missing: run 'radius-admin enforce' every 5 minutes yourself"
@@ -386,16 +391,13 @@ EOF
     install -m 440 /etc/sudoers.d/.mikrotiklover-web.tmp /etc/sudoers.d/mikrotiklover-web
     rm -f /etc/sudoers.d/.mikrotiklover-web.tmp
 
-    # nginx: TLS with this server's certificate, only allowed networks, proxy to the app
+    # nginx: TLS with this server's certificate, only allowed networks, proxy to the app.
+    # The dashboard part is a snippet: the public name (radius-admin cert letsencrypt) uses it with its own certificate.
+    install -d /etc/nginx/snippets
     {
-        echo "# Managed by MikrotikLover install.sh"
-        echo "server {"
-        echo "    listen $WEB_PORT ssl;"
-        [ -e /proc/net/if_inet6 ] && echo "    listen [::]:$WEB_PORT ssl;"
-        echo "    server_name _;"
-        echo "    ssl_certificate $CERT_DIR/server.pem;"
-        echo "    ssl_certificate_key $CERT_DIR/server.key;"
+        echo "# Managed by MikrotikLover install.sh — the dashboard (included by the port $WEB_PORT server blocks)"
         echo "    ssl_protocols TLSv1.2 TLSv1.3;"
+
         echo "    server_tokens off;"
         echo "    client_max_body_size 64k;"
         echo '    add_header Strict-Transport-Security "max-age=31536000" always;'
@@ -420,6 +422,16 @@ EOF
         echo '        proxy_set_header X-Forwarded-Port $server_port;'
         echo "        proxy_read_timeout 900s;    # backups, Run all updates now and threat-list downloads can take minutes"
         echo "    }"
+    } > /etc/nginx/snippets/mikrotiklover-web.conf
+    {
+        echo "# Managed by MikrotikLover install.sh"
+        echo "server {"
+        echo "    listen $WEB_PORT ssl default_server;"
+        [ -e /proc/net/if_inet6 ] && echo "    listen [::]:$WEB_PORT ssl default_server;"
+        echo "    server_name _;           # own name + own CA: the routers (auto-sync) and anyone using the IP"
+        echo "    ssl_certificate $CERT_DIR/server.pem;"
+        echo "    ssl_certificate_key $CERT_DIR/server.key;"
+        echo "    include /etc/nginx/snippets/mikrotiklover-web.conf;"
         echo "}"
         echo
         echo "# Quarantine warning page (plain HTTP, any network): the routers send every http:// request of an"
@@ -503,6 +515,8 @@ EOF
         sed -i -E 's/^([[:space:]]*)listen \[::\]/\1# listen [::]/' /etc/nginx/sites-available/default
     fi
     nginx -t >/dev/null 2>&1 || { nginx -t; die "nginx configuration failed"; }
+    # a public certificate set up before (radius-admin cert letsencrypt / import) keeps its server block
+    /usr/local/sbin/radius-admin cert nginx >/dev/null 2>&1 || warn "public certificate: nginx part not restored (radius-admin cert nginx)"
 
     if [ -d /run/systemd/system ]; then
         cat > /etc/systemd/system/mikrotiklover-web.service <<EOF

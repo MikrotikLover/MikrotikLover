@@ -178,6 +178,38 @@ Wi-Fi aur hotspot dono ek router par hain to ek hi entry kafi hai: `/radius add 
 
 **VLAN per group**: bridge par `vlan-filtering=yes` aur VLANs configured honi chahiye. Legacy wireless par `vlan-mode=use-tag` bhi lagayein.
 
+## 4b. Asli certificate (Let's Encrypt) — kisi phone par certificate install nahi
+
+Apna domain ho (maslan `wifi.company.com`) to free Let's Encrypt certificate lein. Phir:
+- **Android:** CA certificate **"Use system certificates"**, Domain `wifi.company.com` — Android 11–12 par bhi kuch install nahi.
+- **Dashboard:** browser "Not secure" nahi kehta.
+- **Routers:** kuch nahi badalta — woh apne purane naam aur apne CA par hi chalte hain (nginx naam dekh kar sahi certificate deta hai), is liye auto-sync nahi tootta. Router par public naam khud server ke IP par point ho jata hai (auto-sync, LAN DNS).
+
+Dashboard → **Settings → Certificate for phones → Get a Let's Encrypt certificate**, ya:
+
+```bash
+sudo radius-admin cert letsencrypt wifi.company.com --email it@company.com --http          # port 80 internet se is server tak khula ho
+echo "CLOUDFLARE_TOKEN" | sudo radius-admin cert letsencrypt wifi.company.com --email it@company.com --cloudflare   # DNS Cloudflare par: koi port nahi kholna
+sudo radius-admin cert status          # kaunsa certificate, kitne din
+sudo radius-admin cert renew --force   # abhi renew (khud roz check hota hai, khatam hone se 30 din pehle)
+sudo radius-admin cert import fullchain.pem privkey.pem    # khareeda hua certificate (GoDaddy, Sectigo ...)
+sudo radius-admin cert own             # wapas apna CA
+```
+
+- **Do tareeqe:** HTTP — domain ka A record is server ke public IP par, aur router par port 80 → server. Cloudflare DNS — koi port nahi; Cloudflare API token (Zone → DNS → Edit).
+- `lego` (Ubuntu ka package) certificate leta hai; installer khud lagata hai.
+- **Connect guide** khud "Use system certificates" aur naya Domain batata hai.
+- **iPhone:** pehli dafa "Trust" ab bhi aata hai (iOS ka tareeqa).
+- **Health check:** Wi-Fi / dashboard certificate aur routers ka apna certificate — dono ke din.
+- **Test:** `tests/test-letsencrypt.sh` — Let's Encrypt ke apne test server (Pebble) se asli ACME order:
+  - nginx port 80 par HTTP-01;
+  - public naam par naya certificate, routers ka naam purane CA par;
+  - FreeRADIUS PEAP login "system certificates" ki tarah check;
+  - connect guide aur router DNS;
+  - renew, ACME account na mile to naya;
+  - khareeda certificate import, ghalat key mana;
+  - wapas own, API.
+
 ## 5. Devices kaise connect hon
 
 | Device | Setting |

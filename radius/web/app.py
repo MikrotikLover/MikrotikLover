@@ -1242,7 +1242,13 @@ def settings_write():
 def public_connect():
     """Data for the public connect guide (no login). Only names users need anyway."""
     st = settings_get()
-    return jsonify({k: st[k] for k in ("brand", "ssid", "hotspot_ssid", "hotspot_url", "radius_domain", "contact")})
+    out = {k: st[k] for k in ("brand", "ssid", "hotspot_ssid", "hotspot_url", "radius_domain", "contact")}
+    # public certificate (Let's Encrypt / bought): phones check it with their own CA list, Domain = the public name
+    pub = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k IN ('cert_mode','public_domain')")}
+    out["cert_public"] = pub.get("cert_mode") == "public" and bool(pub.get("public_domain"))
+    if out["cert_public"]:
+        out["radius_domain"] = pub["public_domain"]
+    return jsonify(out)
 
 
 # ------------------------------------------------------------------ social WiFi: dashboard
@@ -2278,6 +2284,54 @@ def router_macip():
     text = "".join(f"{m}|{ip}\n" for m, ip in found.items())
     ok, out = radius_admin(["wifipolicy", "report", client_ip()], stdin=text, log=False, timeout=60)
     return app.response_class("ok" if ok else "failed", mimetype="text/plain", status=200 if ok else 500)
+
+
+# ------------------------------------------------------------------ public certificate (Let's Encrypt / bought)
+@app.get("/api/cert")
+@login_required("admin")
+def cert_get():
+    ok, out = radius_admin(["cert", "json"], log=False, timeout=30)
+    try:
+        return jsonify(json.loads(out.splitlines()[-1]) if ok else {"mode": "own"})
+    except (ValueError, IndexError):
+        return jsonify(mode="own")
+
+
+@app.post("/api/cert/<action>")
+@login_required("admin")
+def cert_action(action):
+    data = body()
+    if action == "letsencrypt":
+        dom = field(data, "domain", re.compile(r"^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$"), required=True)
+        em = field(data, "email", re.compile(r"^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,}$"), required=True)
+        method = field(data, "method", re.compile(r"^(http|cloudflare)$"), required=True)
+        token = ""
+        if method == "cloudflare":
+            token = field(data, "token", re.compile(r"^[A-Za-z0-9_-]{20,200}$"), required=True)
+        return result(*radius_admin(["cert", "letsencrypt", dom, "--email", em, f"--{method}"], stdin=token + "\n",
+                                    action=f"Let's Encrypt certificate for {dom}", timeout=600))
+    if action == "import":
+        crt, key = str(data.get("fullchain", "")), str(data.get("key", ""))
+        if "BEGIN CERTIFICATE" not in crt or "PRIVATE KEY" not in key or len(crt) > 32768 or len(key) > 16384:
+            abort(400, "paste the certificate with its chain (PEM) and its private key (PEM)")
+        import tempfile
+        d = tempfile.mkdtemp(prefix="mlcert-")
+        try:
+            for n, v in (("fullchain.pem", crt), ("privkey.pem", key)):
+                with open(os.open(os.path.join(d, n), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
+                    f.write(v)
+            return result(*radius_admin(["cert", "import", os.path.join(d, "fullchain.pem"), os.path.join(d, "privkey.pem")],
+                                        action="certificate imported", timeout=120))
+        finally:
+            for n in ("fullchain.pem", "privkey.pem"):
+                try:
+                    os.unlink(os.path.join(d, n))
+                except OSError:
+                    pass
+            os.rmdir(d)
+    if action in ("renew", "own"):
+        return result(*radius_admin(["cert", action] + (["--force"] if action == "renew" and data.get("force") else []), timeout=600))
+    abort(404)
 
 
 @app.get("/api/wifipolicy")

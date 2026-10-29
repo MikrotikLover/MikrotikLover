@@ -192,18 +192,27 @@ class Checks:
         cpus = os.cpu_count() or 1
         self.add("load", g, "CPU load", "warn" if load > cpus * 2 else "ok", f"{load:.2f} ({cpus} CPU)",
                  "the server is overloaded: see 'top'; a DDoS? check Security")
-        try:
-            pem = open(CERT).read()
-            der = ssl.PEM_cert_to_DER_cert(pem)
-            rc, out = sh(["openssl", "x509", "-noout", "-enddate", "-in", CERT], 5)
-            end = datetime.strptime(out.split("=", 1)[1].strip(), "%b %d %H:%M:%S %Y %Z") if rc == 0 else None
-            days = (end - datetime.now(timezone.utc).replace(tzinfo=None)).days if end else None
-            self.add("cert", g, "Certificate (WPA-Enterprise, dashboard)",
-                     "fail" if days is not None and days < 7 else ("warn" if days is not None and days < 30 else "ok"),
-                     f"valid {days} more days" if days is not None else f"{len(der)} bytes",
-                     "renew: sudo RENEW_CERT=1 bash install.sh  (then Wi-Fi clients trust the same CA, nothing to change)")
-        except (OSError, ValueError, IndexError):
-            self.add("cert", g, "Certificate (WPA-Enterprise, dashboard)", "fail", "not found", "re-run the installer")
+        # the certificate phones get at the Wi-Fi login (eap.pem: own or public) and, if different, the routers' own one
+        eap = CERT.replace("server.pem", "eap.pem")
+        certs = [(eap if os.path.exists(eap) else CERT, "cert", "Certificate (Wi-Fi login, dashboard)")]
+        if os.path.exists(eap) and os.path.realpath(eap) != os.path.realpath(CERT):
+            certs.append((CERT, "cert-own", "Certificate (routers' auto-sync, own CA)"))
+        for path, key, title in certs:
+            public = os.path.realpath(path) != os.path.realpath(CERT)
+            how = ("Let's Encrypt renews by itself 30 days before the end; if it did not: sudo radius-admin cert renew --force"
+                   if public else "renew: sudo RENEW_CERT=1 bash install.sh  (then Wi-Fi clients trust the same CA, nothing to change)")
+            try:
+                pem = open(path).read()
+                end_tag = "-----END CERTIFICATE-----"
+                der = ssl.PEM_cert_to_DER_cert(pem.split(end_tag)[0] + end_tag)      # a full chain: the first one
+                rc, out = sh(["openssl", "x509", "-noout", "-enddate", "-in", path], 5)
+                end = datetime.strptime(out.split("=", 1)[1].strip(), "%b %d %H:%M:%S %Y %Z") if rc == 0 else None
+                days = (end - datetime.now(timezone.utc).replace(tzinfo=None)).days if end else None
+                lim = (14, 25) if public else (7, 30)
+                self.add(key, g, title, "fail" if days is not None and days < lim[0] else ("warn" if days is not None and days < lim[1] else "ok"),
+                         (f"valid {days} more days" if days is not None else f"{len(der)} bytes") + (" (public)" if public else ""), how)
+            except (OSError, ValueError, IndexError):
+                self.add(key, g, title, "fail", "not found", "re-run the installer")
         rc, out = sh(["timedatectl", "show", "-p", "NTPSynchronized", "--value"], 5)
         if rc == 0:
             self.add("time", g, "Clock in sync", "ok" if out.strip() == "yes" else "warn", "yes" if out.strip() == "yes" else "not synchronized",

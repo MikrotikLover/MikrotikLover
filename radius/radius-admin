@@ -1201,6 +1201,16 @@ ips_api_rsc() { # router part of sync.rsc: the API user for IPS instant blocks o
     fi
 }
 
+public_name_rsc() { # router part of sync.rsc: the public name (radius-admin cert letsencrypt) points to this server on the LAN
+    local dom sip; dom=$(setting_get public_domain 2>/dev/null || true); sip=$(setting_get server_ip 2>/dev/null || true)
+    echo "/ip dns static"
+    echo 'remove [find comment="mlsync: public name"]'
+    if [ "$(setting_get cert_mode 2>/dev/null || true)" = public ] && [[ $dom =~ ^[a-z0-9.-]+$ ]] && [[ $sip =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
+        echo "# phones and browsers reach the dashboard / connect guide / Wi-Fi login name here, with the public certificate"
+        echo ":do { add name=$dom address=$sip comment=\"mlsync: public name\" } on-error={}"
+    fi
+}
+
 hotspot_mac_rsc() { # router part of sync.rsc: hotspot tries the MAC first while "remember devices" is on (nothing to do on the router)
     # Only profiles that use RADIUS. What auto-sync added is noted in the script ml-hotspot-mac, so "off" takes back only that
     # (a MAC login the admin set by hand stays).
@@ -1260,6 +1270,166 @@ snmp_routers_rsc() { # router part of sync.rsc: SNMP for the Devices page / netw
 }
 } on-error={ :log warning "ml-sync: SNMP not set" }
 RSC
+}
+
+# ======================================================================= public certificate (Let's Encrypt / bought)
+# Phones and browsers use a public name (wifi.company.com) with a certificate every device already trusts: no CA to
+# install on Android 11-12, no "Not secure" in the browser, captive portal API possible. The routers keep their own
+# name + own CA on the same port (nginx picks the certificate by name), so nothing changes for auto-sync.
+CERT_DIR=/etc/freeradius/3.0/certs/mikrotiklover
+PUB_DIR=$CERT_DIR/public
+ACME_DIR=$CONF_DIR/acme
+ACME_WEBROOT=/var/lib/mikrotiklover/acme
+NGX_PUB=/etc/nginx/sites-available/mikrotiklover-public
+
+cert_eap_link() { # which certificate FreeRADIUS gives Wi-Fi clients (EAP): own | public
+    if [ "$1" = public ]; then ln -sfn public/fullchain.pem "$CERT_DIR/eap.pem"; ln -sfn public/privkey.pem "$CERT_DIR/eap.key"
+    else ln -sfn server.pem "$CERT_DIR/eap.pem"; ln -sfn server.key "$CERT_DIR/eap.key"; fi
+}
+
+cert_nginx() { # nginx: the public name with the public certificate (+ port 80 for the HTTP-01 check); routers keep the default
+    local dom; dom=$(setting_get public_domain 2>/dev/null || true)
+    if [ "$(setting_get cert_mode 2>/dev/null || true)" != public ] || [ -z "$dom" ] || [ ! -s "$PUB_DIR/fullchain.pem" ]; then
+        rm -f "$NGX_PUB" /etc/nginx/sites-enabled/mikrotiklover-public
+    else
+        [ -f /etc/nginx/snippets/mikrotiklover-web.conf ] || die "nginx snippet missing — run install.sh again (update)"
+        {
+            echo "# Managed by radius-admin cert — the public name with the public certificate"
+            echo "server {"
+            echo "    listen ${WEB_PORT:-8443} ssl;"
+            [ -e /proc/net/if_inet6 ] && echo "    listen [::]:${WEB_PORT:-8443} ssl;"
+            echo "    server_name $dom;"
+            echo "    ssl_certificate $PUB_DIR/fullchain.pem;"
+            echo "    ssl_certificate_key $PUB_DIR/privkey.pem;"
+            echo "    include /etc/nginx/snippets/mikrotiklover-web.conf;"
+            echo "}"
+        } > "$NGX_PUB.tmp"; mv "$NGX_PUB.tmp" "$NGX_PUB"
+        ln -sfn ../sites-available/mikrotiklover-public /etc/nginx/sites-enabled/mikrotiklover-public
+    fi
+    cert_acme_http "$( [ "$(setting_get acme_method 2>/dev/null || true)" = http ] && echo "$dom")"
+    if nginx -t >/dev/null 2>&1; then svc reload nginx >/dev/null 2>&1 || nginx -s reload >/dev/null 2>&1 || true
+    else nginx -t; die "nginx configuration failed"; fi
+}
+
+cert_acme_http() { # port 80: only the Let's Encrypt check for the public name, everything else to https
+    local f=/etc/nginx/sites-available/mikrotiklover-acme
+    if [ -z "${1:-}" ]; then rm -f "$f" /etc/nginx/sites-enabled/mikrotiklover-acme; return 0; fi
+    install -d -m 755 "$ACME_WEBROOT"
+    {
+        echo "# Managed by radius-admin cert — Let's Encrypt HTTP-01 check for $1"
+        echo "server {"
+        echo "    listen 80;"
+        echo "    server_name $1;"
+        echo "    server_tokens off;"
+        echo "    location /.well-known/acme-challenge/ { root $ACME_WEBROOT; default_type text/plain; }"
+        echo "    location / { return 301 https://\$host:${WEB_PORT:-8443}\$request_uri; }"
+        echo "}"
+    } > "$f.tmp"; mv "$f.tmp" "$f"
+    ln -sfn ../sites-available/mikrotiklover-acme /etc/nginx/sites-enabled/mikrotiklover-acme
+}
+
+cert_deploy() { # $1 fullchain $2 key -> checked, put in place, used by nginx (public name) and FreeRADIUS (Wi-Fi)
+    local crt=$1 key=$2 a b
+    openssl x509 -in "$crt" -noout 2>/dev/null || die "not a PEM certificate: $crt"
+    a=$(openssl x509 -in "$crt" -noout -pubkey 2>/dev/null | sha256sum); b=$(openssl pkey -in "$key" -pubout 2>/dev/null | sha256sum)
+    [ -n "$b" ] && [ "$a" = "$b" ] || die "the key does not belong to the certificate"
+    openssl x509 -in "$crt" -noout -checkend 86400 >/dev/null || die "the certificate is expired (or ends within a day)"
+    install -d -m 750 -o root -g freerad "$PUB_DIR"
+    install -m 640 -o root -g freerad "$crt" "$PUB_DIR/fullchain.pem.new"; install -m 640 -o root -g freerad "$key" "$PUB_DIR/privkey.pem.new"
+    mv "$PUB_DIR/fullchain.pem.new" "$PUB_DIR/fullchain.pem"; mv "$PUB_DIR/privkey.pem.new" "$PUB_DIR/privkey.pem"
+    setting_set cert_mode public
+    cert_eap_link public
+    cert_nginx
+    restart_radius
+}
+
+cert_names() { openssl x509 -in "$1" -noout -ext subjectAltName 2>/dev/null | grep -o 'DNS:[^,]*' | sed 's/DNS://' | tr '\n' ' '; }
+
+cert_lego() { # lego with this server's ACME settings; $@ = run | renew ...
+    local dom em method srv args=()
+    dom=$(setting_get public_domain); em=$(setting_get acme_email); method=$(setting_get acme_method); srv=$(setting_get acme_server)
+    command -v lego >/dev/null || die "lego is not installed (apt install lego)"
+    args=(--accept-tos --email "$em" --domains "$dom" --path "$ACME_DIR")
+    [ -z "$srv" ] || args+=(--server "$srv")
+    case $method in
+        http) # lego would make the challenge folder 700: nginx must read it
+              install -d -m 755 "$ACME_WEBROOT" "$ACME_WEBROOT/.well-known" "$ACME_WEBROOT/.well-known/acme-challenge"
+              chmod 755 "$ACME_WEBROOT/.well-known" "$ACME_WEBROOT/.well-known/acme-challenge"
+              args+=(--http --http.webroot "$ACME_WEBROOT") ;;
+        cloudflare) [ -s "$ACME_DIR/cloudflare.token" ] || die "Cloudflare token missing (radius-admin cert letsencrypt ... --cloudflare)"
+                    export CLOUDFLARE_DNS_API_TOKEN; CLOUDFLARE_DNS_API_TOKEN=$(cat "$ACME_DIR/cloudflare.token")
+                    args+=(--dns cloudflare) ;;
+        *) die "no Let's Encrypt set up (radius-admin cert letsencrypt DOMAIN --email ...)" ;;
+    esac
+    # the account key and certificates stay in $ACME_DIR (700); the HTTP-01 file must be readable by nginx
+    install -d -m 700 "$ACME_DIR"
+    lego "${args[@]}" "$@"
+}
+
+cmd_cert() {
+    local sub=${1:-status}; shift || true
+    case $sub in
+    status)
+        local mode dom f days
+        mode=$(setting_get cert_mode | grep . || echo own); dom=$(setting_get public_domain)
+        if [ "$mode" = public ] && [ -s "$PUB_DIR/fullchain.pem" ]; then f=$PUB_DIR/fullchain.pem; else f=$CERT_DIR/server.pem; fi
+        days=$(( ( $(date -d "$(openssl x509 -in "$f" -noout -enddate | cut -d= -f2)" +%s) - $(date +%s) ) / 86400 ))
+        echo "Certificate for phones : $([ "$mode" = public ] && echo "public — $dom" || echo "own CA — $RADIUS_DOMAIN (Android 11-12 install ca.der)")"
+        echo "Issued by              : $(openssl x509 -in "$f" -noout -issuer | sed 's/^issuer=//')"
+        echo "Names                  : $(cert_names "$f")"
+        echo "Valid for              : $days more day(s)"
+        [ "$mode" != public ] || echo "Renewal                : $(case $(setting_get acme_method) in http) echo "Let's Encrypt, HTTP check on port 80 — every day, 30 days before the end";; cloudflare) echo "Let's Encrypt, Cloudflare DNS — every day, 30 days before the end";; *) echo "by you (imported): radius-admin cert import";; esac)"
+        echo "Routers (auto-sync)    : own name + own CA, unchanged ($RADIUS_DOMAIN)" ;;
+    letsencrypt|le)
+        local dom=${1:-} em="" method="" srv="" tok=""; shift || true
+        [[ $dom =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]] || die "usage: radius-admin cert letsencrypt NAME.company.com --email you@company.com --http|--cloudflare [--server ACME-URL]"
+        while [ $# -gt 0 ]; do case $1 in
+            --email) em=${2:-}; shift ;; --http) method=http ;; --cloudflare) method=cloudflare ;;
+            --server) srv=${2:-}; shift ;; --staging) srv=https://acme-staging-v02.api.letsencrypt.org/directory ;;
+            *) die "unknown option $1" ;; esac; shift; done
+        [[ $em =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || die "--email: an address for Let's Encrypt's expiry notes"
+        [ -n "$method" ] || die "choose how Let's Encrypt checks the name: --http (port 80 of this server reachable from the internet) or --cloudflare (DNS at Cloudflare, token on stdin)"
+        [ -z "$srv" ] || [[ $srv =~ ^https://[A-Za-z0-9.:/_-]+$ ]] || die "--server: an https ACME directory URL"
+        install -d -m 700 "$ACME_DIR"
+        if [ "$method" = cloudflare ]; then
+            if [ -t 0 ]; then read -r -s -p "Cloudflare API token (Zone.DNS edit): " tok; echo >&2; else read -r tok || true; fi
+            [[ $tok =~ ^[A-Za-z0-9_-]{20,200}$ ]] || die "Cloudflare token: the API token (Zone → DNS → Edit) for this zone"
+            (umask 077; printf '%s' "$tok" > "$ACME_DIR/cloudflare.token")
+        fi
+        setting_set public_domain "$dom"; setting_set acme_email "$em"; setting_set acme_method "$method"; setting_set acme_server "$srv"
+        [ "$method" != http ] || { cert_acme_http "$dom"; nginx -t >/dev/null 2>&1 && { svc reload nginx >/dev/null 2>&1 || nginx -s reload >/dev/null 2>&1 || true; }; }
+        local out; out=$(cert_lego run 2>&1) || {
+            # the ACME server does not know the saved account (another server, staging -> live): a new account, once
+            if grep -q accountDoesNotExist <<<"$out"; then rm -rf "$ACME_DIR/accounts"; out=$(cert_lego run 2>&1); else false; fi; } || { echo "$out" | tail -8 >&2; die "Let's Encrypt did not give the certificate (see above). HTTP: the name must point to this server and port 80 be open from the internet. Cloudflare: token and zone."; }
+        cert_deploy "$ACME_DIR/certificates/$dom.crt" "$ACME_DIR/certificates/$dom.key"
+        ok "certificate for $dom from Let's Encrypt is in use (dashboard, Wi-Fi login). Android: 'Use system certificates', Domain $dom — no install. Renewed by itself." ;;
+    import)
+        [ -f "${1:-}" ] && [ -f "${2:-}" ] || die "usage: radius-admin cert import FULLCHAIN.pem KEY.pem   (a certificate from a public CA, with its chain)"
+        local names; names=$(cert_names "$1"); [ -n "$names" ] || die "the certificate has no DNS name"
+        setting_set public_domain "${names%% *}"; setting_set acme_method import
+        cert_deploy "$1" "$2"
+        ok "certificate for ${names% } in use (dashboard, Wi-Fi login). Renew it yourself before it ends: radius-admin cert import again" ;;
+    renew)
+        [ "$(setting_get cert_mode)" = public ] || { [ "${1:-}" = --quiet ] || echo "own certificate: nothing to renew here"; return 0; }
+        case $(setting_get acme_method) in http|cloudflare) ;; *) [ "${1:-}" = --quiet ] || echo "imported certificate: renew it yourself (radius-admin cert import)"; return 0 ;; esac
+        local dom before; dom=$(setting_get public_domain); before=$(sha256sum "$ACME_DIR/certificates/$dom.crt" 2>/dev/null)
+        local days=30; [ "${1:-}" = --force ] && days=100000     # --force: renew whatever the end date
+        cert_lego renew --days "$days" >/dev/null 2>&1 || die "Let's Encrypt renewal failed (radius-admin cert renew --force shows more)"
+        if [ "$before" != "$(sha256sum "$ACME_DIR/certificates/$dom.crt" 2>/dev/null)" ]; then
+            cert_deploy "$ACME_DIR/certificates/$dom.crt" "$ACME_DIR/certificates/$dom.key"; ok "renewed: $dom"
+        else [ "${1:-}" = --quiet ] || echo "not due yet (renewed 30 days before the end)"; fi ;;
+    own)
+        setting_set cert_mode own; cert_eap_link own; cert_nginx; restart_radius
+        ok "back to the own certificate ($RADIUS_DOMAIN): Android 11-12 need ca.der again. The public certificate is kept (radius-admin cert letsencrypt / import to use it again)" ;;
+    nginx) cert_eap_link "$( [ "$(setting_get cert_mode)" = public ] && [ -s "$PUB_DIR/fullchain.pem" ] && echo public || echo own)"; cert_nginx ;;
+    json)
+        local mode f; mode=$(setting_get cert_mode | grep . || echo own)
+        if [ "$mode" = public ] && [ -s "$PUB_DIR/fullchain.pem" ]; then f=$PUB_DIR/fullchain.pem; else f=$CERT_DIR/server.pem; fi
+        python3 -c 'import json,sys; print(json.dumps(dict(zip(["mode","domain","method","email","issuer","names","end","own_domain"], sys.argv[1:]))))' \
+            "$mode" "$(setting_get public_domain)" "$(setting_get acme_method)" "$(setting_get acme_email)" \
+            "$(openssl x509 -in "$f" -noout -issuer | sed 's/^issuer=//')" "$(cert_names "$f")" "$(openssl x509 -in "$f" -noout -enddate | cut -d= -f2)" "$RADIUS_DOMAIN" ;;
+    *) die "usage: radius-admin cert status | letsencrypt NAME --email E --http|--cloudflare | import FULLCHAIN KEY | renew [--force] | own" ;;
+    esac
 }
 
 MACPOLPY=/usr/local/lib/mikrotiklover/macpolicy.py
@@ -2653,6 +2823,8 @@ RSC
             hotspot_mac_rsc
             echo
             snmp_routers_rsc
+            echo
+            public_name_rsc
         } > "$lists/sync.rsc"
         install -m 644 "$lists/webfilter-policies.rsc" "$lists/vpn-servers.rsc" "$ROUTER_DIR/"
         # sync.rsc can carry the routers' API password (ips api auto): root and the dashboard only
@@ -3686,7 +3858,10 @@ cmd_test() {
     if [ -z "$p" ]; then read -r -s -p "Password for $u: " p; echo >&2; fi
     if [ "$peap" = 1 ]; then
         command -v eapol_test >/dev/null || die "eapol_test not installed (apt install eapoltest)"
-        local cfg log; cfg=$(mktemp); log=$(mktemp); trap 'rm -f "$cfg" "$log"' RETURN
+        local cfg log cacert=/etc/freeradius/3.0/certs/mikrotiklover/ca.pem dom=$RADIUS_DOMAIN
+        # public certificate: check it like a phone with "Use system certificates" does
+        if [ "$(setting_get cert_mode 2>/dev/null)" = public ]; then cacert=/etc/ssl/certs/ca-certificates.crt; dom=$(setting_get public_domain); fi
+        cfg=$(mktemp); log=$(mktemp); trap 'rm -f "$cfg" "$log"' RETURN
         cat > "$cfg" <<EOF
 network={
     key_mgmt=WPA-EAP
@@ -3695,8 +3870,8 @@ network={
     anonymous_identity="anonymous"
     password="$p"
     phase2="auth=MSCHAPV2"
-    ca_cert="/etc/freeradius/3.0/certs/mikrotiklover/ca.pem"
-    domain_match="$RADIUS_DOMAIN"
+    ca_cert="$cacert"
+    domain_match="$dom"
 }
 EOF
         if eapol_test -c "$cfg" -a 127.0.0.1 -s "$LOCAL_SECRET" -t 10 >"$log" 2>&1; then
@@ -3967,6 +4142,8 @@ MAC authentication (devices without username/password: printers, CCTV, TVs, POS)
   mac add MAC [-g GROUP] [-d "Reception printer"] [--policy NAME]   any format: aa:bb:.., AABB.CCDD.EEFF
   mac del|disable|enable MAC | mac group MAC GROUP|- | mac policy MAC POLICY|- | mac list
   remember on|off|status · remember days N · remember max N · remember list [USER] · remember forget MAC|USER
+  cert status · cert letsencrypt NAME --email E --http|--cloudflare · cert import FULLCHAIN KEY · cert renew · cert own
+                                        public certificate for phones + dashboard (no CA install on Android); routers unchanged
   wifipolicy on|off|status · wifipolicy list   Wi-Fi (WPA-Enterprise) users + MAC devices: policy by MAC, no VLAN (router: DHCP, else ARP)
                                         a phone that logged in with a password logs in by its MAC next time (random MACs)
 
@@ -4032,6 +4209,7 @@ case ${1:-help} in
     snmp|devices) shift; cmd_snmp "$@" ;;
     remember) shift; cmd_remember "$@" ;;
     wifipolicy) shift; cmd_wifipolicy "$@" ;;
+    cert) shift; cmd_cert "$@" ;;
     doctor|health) shift; python3 -I /usr/local/lib/mikrotiklover/health.py --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@" ;;
     backups) cmd_backups ;;
     restore) shift; cmd_restore "$@" ;;
