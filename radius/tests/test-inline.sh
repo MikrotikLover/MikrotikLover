@@ -84,8 +84,8 @@ t "  ... and stops attacks again" "$(conn 1000) $(conn 80)" "closed open"
 
 # Suricata stuck (running, passing nothing): seen from the cards' counters, bypass, fresh start
 sp=$(cat /run/mikrotiklover-suricata.pid); kill -STOP "$sp"
-ip netns exec mlt-wan ping -i 0.05 -c 120 -W 1 192.168.77.10 >/dev/null 2>&1 &
-waitfor "guard reason" "Suricata stuck (packets in, none out)" 10
+ip netns exec mlt-wan ping -i 0.05 -c 400 -W 1 192.168.77.10 >/dev/null 2>&1 &   # 20 s of traffic: a busy server sees the stall later
+waitfor "guard reason" "Suricata stuck (packets in, none out)" 25
 t "Suricata stuck: bypass on by itself" "$(guard bypass) $(guard reason)" "True Suricata stuck (packets in, none out)"
 t "  ... internet keeps working" "$(conn 80)" "open"
 kill -CONT "$sp" 2>/dev/null
