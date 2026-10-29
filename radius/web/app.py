@@ -2214,7 +2214,27 @@ def router_sync():
     except OSError:
         v = ""
     note_fetch("sync", ("v6:" if six else "") + v)
-    return app.response_class(body, mimetype="text/plain")
+    return app.response_class(body + ha_router_part(), mimetype="text/plain")
+
+
+def ha_router_part():
+    """the asking router's backup RADIUS entry (its own secret from the nas table) when two servers are paired"""
+    servers = [x for x in ((q1("SELECT v FROM ml_setting WHERE k='ha_servers'") or {}).get("v") or "").split(",") if x]
+    if len(servers) < 2 or not all(re.match(r"^\d{1,3}(\.\d{1,3}){3}$", x) for x in servers):
+        return ""
+    row = q1("SELECT secret FROM nas WHERE nasname=%s", (client_ip(),))
+    if not row or not re.match(r"^[A-Za-z0-9._@#+-]{6,128}$", row["secret"] or ""):
+        return "\n# backup RADIUS server: this router is not on the Routers page by the address it fetched from — add it there\n"
+    keep = ";".join(f'"{x}"' for x in servers)
+    lines = ["", "# backup RADIUS server (radius-admin ha): the other server of the pair, with this router's secret", "/radius",
+             ':local svc "hotspot,ppp,wireless"',
+             ':do { :local m [find comment="MikrotikLover RADIUS"]; :if ([:len $m] > 0) do={ :set svc [get [:pick $m 0] service] } } on-error={}',
+             f":local keep {{{keep}}}",
+             ':foreach r in=[find comment="MikrotikLover RADIUS backup"] do={ :if ([:typeof [:find $keep [:tostr [get $r address]]]] = "nil") do={ remove $r } }',
+             ":foreach a in=$keep do={",
+             '  :if ([:len [find address=$a]] = 0) do={ add address=$a secret="' + row["secret"] + '" service=$svc timeout=3s comment="MikrotikLover RADIUS backup" }',
+             "}", ""]
+    return "\n".join(lines)
 
 
 # ------------------------------------------------------------------ departments (shared speed) + traffic graphs
@@ -4665,6 +4685,25 @@ def admin_delete(name):
 @login_required("admin")
 def audit_log():
     return jsonify(audit=jsonable(q("SELECT at, admin, ip, action, result FROM web_audit ORDER BY id DESC LIMIT 300")))
+
+
+# ------------------------------------------------------------------ second RADIUS server (backup)
+@app.get("/api/ha")
+@login_required("admin")
+def ha_get():
+    ok, out = radius_admin(["ha", "json"], log=False, timeout=30)
+    try:
+        return jsonify(json.loads(out.splitlines()[-1]) if ok else {"servers": []})
+    except (ValueError, IndexError):
+        return jsonify(servers=[])
+
+
+@app.post("/api/ha/start")
+@login_required("admin")
+def ha_start():
+    peer = field(body(), "peer", re.compile(r"^\d{1,3}(\.\d{1,3}){3}$"), required=True)
+    ok, out = radius_admin(["ha", "start", peer], action=f"backup RADIUS server {peer}: join file made", timeout=900)
+    return result(ok, out.splitlines()[0] if ok else out, steps=out if ok else "")
 
 
 # ------------------------------------------------------------------ "Network se poochho" (AI assistant, read-only tools)

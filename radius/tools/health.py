@@ -507,8 +507,33 @@ class Checks:
             self.add("snmp-trapd", g, "Trap receiver (UDP 162)", "ok" if ok else "fail", "running" if ok else "stopped",
                      "sudo radius-admin snmp trapd on   (port 162 in use by snmptrapd? then: sudo systemctl disable --now snmptrapd)")
 
+    def pair(self):
+        """second RADIUS server: is the database copied from the other server?"""
+        try:
+            servers = self.sql("SELECT v FROM ml_setting WHERE k='ha_servers'")
+        except RuntimeError:
+            return
+        servers = [x for x in (servers[0][0] if servers else "").split(",") if x]
+        if len(servers) < 2:
+            return
+        g = "Backup RADIUS server"
+        rc, out = sh(["python3", "-I", "/usr/local/lib/mikrotiklover/ha.py", "status", "--json"], 30)
+        try:
+            st = json.loads(out) if rc == 0 and out.strip() else {}
+        except ValueError:
+            st = {}
+        if not st:
+            self.add("ha-copy", g, "Copy from the other server", "fail", "not copying (the pair is not finished on this server)",
+                     "the first server: echo PASSWORD | sudo radius-admin ha link BACKUP-IP  (the line the join printed)")
+            return
+        good = st.get("io") == "Yes" and st.get("sql") == "Yes"
+        behind = int(st["behind"]) if str(st.get("behind", "")).isdigit() else None
+        self.add("ha-copy", g, f"Copy from {st.get('peer')}", "fail" if not good else ("warn" if behind is not None and behind > 60 else "ok"),
+                 (f"up to date ({behind} s behind)" if behind is not None else "running") if good else f"stopped: {st.get('error') or 'not connected'}",
+                 "is the other server on? Port 3306 between the two servers must be open (sudo ufw allow from OTHER-IP to any port 3306)")
+
     def run(self):
-        for f in (self.services, self.jobs, self.system, self.routers, self.blocking, self.firewall, self.ips, self.mail, self.devices):
+        for f in (self.services, self.jobs, self.system, self.routers, self.blocking, self.firewall, self.ips, self.mail, self.devices, self.pair):
             try:
                 f()
             except Exception as e:  # noqa: BLE001 — one broken check must not hide the others

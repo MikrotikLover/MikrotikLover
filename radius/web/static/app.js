@@ -858,6 +858,7 @@ ROUTES.settings = async () => {
     wide.push(offsiteCard(bk.offsite || { type: "off" }));
     wide.push(await certCard());
     wide.push(await pushCard());
+    wide.push(await haCard());
     wide.push(await alertsCard());
     wide.push(await noticeCard());
     wide.push(card("Automatic updates", "every week (Tuesday night) + hourly lists",
@@ -2288,6 +2289,33 @@ ROUTES.ask = async () => {
         h("div", { class: "toolbar" }, h("span", { class: "muted small grow" }, "Jawab server ke data se banta hai; ahem faisle se pehle dashboard par dekh lein."),
           aiChat.length ? h("button", { class: "small", onclick: () => { aiChat = []; aiSave(); draw(); } }, "Clear") : null)))));
 };
+
+// Second RADIUS server (backup): database copied both ways, routers get it as a backup entry
+async function haCard() {
+  let d = { servers: [] };
+  try { d = await api("GET", "/api/ha"); } catch { /* shown as not set up */ }
+  const c = d.copy || null;
+  const good = c && c.io === "Yes" && c.sql === "Yes";
+  const start = () => {
+    const ip = h("input", { placeholder: "192.168.88.11", required: true, pattern: "\\d{1,3}(\\.\\d{1,3}){3}" });
+    const form = h("form", { class: "form" }, h("label", { class: "field" }, "Backup server's IP (MikrotikLover installed there, same version)", ip),
+      h("div", { class: "muted small" }, "This server's database restarts once with the pair settings (a few seconds)."));
+    dialog("Backup RADIUS server", form, [{ label: "Cancel" }, { label: "Make the join file", class: "primary", action: async () => {
+      if (!form.reportValidity()) return false;
+      const r = await act(api("POST", "/api/ha/start", { peer: ip.value.trim() }));
+      if (!r) return false;
+      dialog("Next steps", h("pre", { class: "code-box" }, r.steps), [{ label: "Done", class: "primary", action: () => { route(); } }]);
+    } }]);
+  };
+  return card("Backup RADIUS server", d.servers.length > 1 ? d.servers.join(" + ") : "not set up",
+    h("div", { class: "stack" },
+      d.servers.length > 1
+        ? h("div", {}, good ? badge("copying", "ok") : badge(c ? "stopped" : "not linked yet", "bad"), " ",
+            c ? h("span", { class: "small" }, good ? `from ${c.peer}, ${c.behind || 0} s behind` : (c.error || "not connected")) : h("span", { class: "muted small" }, "run the last line the join printed on the first server"))
+        : h("div", { class: "muted small" }, "A second server takes over the logins when this one is off: the database is copied both ways all the time, routers get it as a backup RADIUS entry by auto-sync, phones see the same certificate."),
+      isAdmin() && d.servers.length < 2 ? h("div", { class: "toolbar" }, h("button", { onclick: start }, "Set up a backup server")) : null,
+      h("div", { class: "muted small" }, "Command line: radius-admin ha status | start | join | link | stop")));
+}
 
 // Dashboard app (PWA): install on the phone, notifications (Web Push) for the alerts
 let installEvt = null;

@@ -1540,6 +1540,107 @@ cmd_ai() { # "Network se poochho": questions in plain words, answered by Claude 
     esac
 }
 
+# ======================================================================= second RADIUS server (backup)
+HA_PY=/usr/local/lib/mikrotiklover/ha.py
+HA_CNF=/etc/mysql/mariadb.conf.d/60-mikrotiklover-ha.cnf
+HA_SSL=/etc/mysql/ml-ssl
+ha_py() { python3 -I "$HA_PY" "$@"; }
+ha_mariadb() { # this server's MariaDB settings for the pair (1 = first, 2 = backup), then restart it
+    install -d -m 750 -o mysql -g mysql "$HA_SSL"
+    install -m 640 -o mysql -g mysql "$CERT_DIR/ca.pem" "$CERT_DIR/server.pem" "$HA_SSL/"
+    install -m 600 -o mysql -g mysql "$CERT_DIR/server.key" "$HA_SSL/"
+    ha_py mycnf "$1" "$HA_SSL" > "$HA_CNF.tmp" && mv "$HA_CNF.tmp" "$HA_CNF"; chmod 644 "$HA_CNF"
+    svc restart mariadb >/dev/null 2>&1 || die "MariaDB did not restart with the pair settings ($HA_CNF)"
+    local i; for i in $(seq 1 30); do mysql -e "SELECT 1" >/dev/null 2>&1 && return 0; sleep 1; done
+    die "MariaDB is not answering after the restart"
+}
+ha_ip() { [[ ${1:-} =~ ^[0-9]+(\.[0-9]+){3}$ ]] || die "${2:-address}: an IPv4 address like 192.168.88.11"; }
+
+cmd_ha() {
+    local sub=${1:-status}; shift || true
+    case $sub in
+    status)
+        local servers; servers=$(setting_get ha_servers)
+        if [ -z "$servers" ]; then echo "Backup RADIUS server: not set up (radius-admin ha start BACKUP-IP on this server)"; return 0; fi
+        echo "Servers   : $servers   (this one: server $(setting_get "ha_role_$(hostname)" | grep . || echo '?'))"
+        echo "Copying   : $(ha_py status)"
+        echo "Routers   : auto-sync gives every router the other server as a backup RADIUS entry" ;;
+    json)
+        python3 -c 'import json,sys; st=json.loads(sys.argv[3] or "{}"); print(json.dumps({"servers": [x for x in sys.argv[1].split(",") if x], "role": sys.argv[2], **({"copy": st} if st else {})}))' \
+            "$(setting_get ha_servers)" "$(setting_get "ha_role_$(hostname)")" "$(ha_py status --json 2>/dev/null)" ;;
+    start) # on the first server: make the join file for the backup server
+        local peer=${1:-} me; ha_ip "$peer" "backup server"; me=$(setting_get server_ip)
+        ha_ip "$me" "this server's IP (radius-admin security quarantine-server IP)"
+        [ "$peer" != "$me" ] || die "the backup server must be another machine"
+        ha_mariadb 1
+        local rp bp work out; rp=$(gen_pass 32); bp=$(gen_pass 24); work=$(mktemp -d); trap 'rm -rf "$work"' RETURN
+        printf '%s\n' "$rp" | ha_py repl-user "$peer" || die "replication login not made"
+        setting_set ha_servers "$me,$peer"; setting_set "ha_role_$(hostname)" 1
+        local pos; pos=$(ha_py dump "$work/dump.sql") || die "database copy failed"
+        mkdir -p "$work/certs" "$work/conf"
+        cp -a "$CERT_DIR"/. "$work/certs/"
+        grep -E '^LOCAL_SECRET=' "$CONF_DIR/radius.conf" > "$work/conf/secret"
+        for f in "$ROUTER_DIR/key" "$CONF_DIR/vapid.pem" "$CONF_DIR/anthropic.key"; do [ -f "$f" ] && cp -p "$f" "$work/conf/"; done
+        printf '{"primary": "%s", "backup": "%s", "repl_pass": "%s", "pos": "%s"}\n' "$me" "$peer" "$rp" "$pos" > "$work/info.json"
+        out=/var/backups/mikrotiklover/ha-join-$(date +%Y%m%d-%H%M).enc; install -d -m 700 /var/backups/mikrotiklover
+        tar -C "$work" -czf - . | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass "pass:$bp" -out "$out" || die "join file not made"
+        chmod 600 "$out"
+        ok "join file for the backup server ($peer): $out"
+        echo "   1. install MikrotikLover on $peer (same version), copy the file there"
+        echo "   2. there:  echo '$bp' | sudo radius-admin ha join FILE"
+        echo "   3. then it prints one line to run here (copying back the other way)"
+        echo "   The file holds the database, the certificates and the RADIUS secrets — delete it after the join." ;;
+    join) # on the backup server: everything from the join file, copy from the first server, then the line for it
+        local file=${1:-} bp work; [ -f "$file" ] || die "usage: echo JOIN-PASSWORD | radius-admin ha join FILE"
+        read -r bp || true; [ -n "$bp" ] || die "the join password on stdin"
+        work=$(mktemp -d); trap 'rm -rf "$work"' RETURN
+        openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass "pass:$bp" -in "$file" | tar -C "$work" -xzf - 2>/dev/null || die "wrong password or not a join file"
+        local primary me rp pos; primary=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["primary"])' "$work/info.json")
+        me=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["backup"])' "$work/info.json")
+        rp=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["repl_pass"])' "$work/info.json")
+        pos=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pos"])' "$work/info.json")
+        ha_ip "$primary" "first server"; ha_ip "$me" "this server"
+        svc stop freeradius >/dev/null 2>&1 || true
+        # the same certificates (phones see the same server) and the same secrets as the first server
+        cp -a "$work/certs"/. "$CERT_DIR/"; chown -R root:freerad "$CERT_DIR"
+        sed -i "s|^LOCAL_SECRET=.*|$(cat "$work/conf/secret")|" "$CONF_DIR/radius.conf"
+        [ -f "$work/conf/key" ] && install -d -m 755 "$ROUTER_DIR" && install -m 640 "$work/conf/key" "$ROUTER_DIR/key" && router_key_perms
+        [ -f "$work/conf/vapid.pem" ] && install -m 600 "$work/conf/vapid.pem" "$CONF_DIR/vapid.pem"
+        [ -f "$work/conf/anthropic.key" ] && install -m 600 "$work/conf/anthropic.key" "$CONF_DIR/anthropic.key"
+        ha_mariadb 2
+        mysql "$DB_NAME" < "$work/dump.sql" || die "database copy not loaded"
+        printf '%s\n' "$rp" | ha_py link "$primary" 3306 "$HA_SSL/ca.pem" "$pos" || die "copying from $primary did not start"
+        local rp2; rp2=$(gen_pass 32)
+        printf '%s\n' "$rp2" | ha_py repl-user "$primary" || die "replication login for $primary not made"
+        setting_set "ha_role_$(hostname)" 2
+        restart_radius; cmd_policy build >/dev/null 2>&1 || true
+        ok "this is now the backup RADIUS server; copying from $primary started"
+        echo "   last step, on $primary:  echo '$rp2' | sudo radius-admin ha link $me $(ha_py binlog-pos)" ;;
+    link) # on the first server: copy back from the backup server
+        local peer=${1:-} pos=${2:-} rp; ha_ip "$peer" "backup server"; read -r rp || true
+        [ -n "$rp" ] || die "usage: echo PASSWORD | radius-admin ha link BACKUP-IP [GTID-POS]"
+        printf '%s\n' "$rp" | ha_py link "$peer" "${HA_PORT:-3306}" "$HA_SSL/ca.pem" ${pos:+"$pos"} || die "copying from $peer did not start"
+        cmd_policy build >/dev/null 2>&1 || true
+        ok "both servers copy each other now; routers get the backup RADIUS entry at the next auto-sync (15 min)" ;;
+    stop)
+        ha_py unlink || true; setting_set ha_servers ""; rm -f "$HA_CNF"
+        svc restart mariadb >/dev/null 2>&1 || true; cmd_policy build >/dev/null 2>&1 || true
+        ok "pair ended on this server (run it on the other one too); routers take the backup entry away at the next auto-sync" ;;
+    nas-check) # every 5 minutes: a router added on the other server -> FreeRADIUS reloads its clients here
+        [ -n "$(setting_get ha_servers)" ] || return 0
+        local sum f=/var/lib/mikrotiklover/nas.sum; sum=$(echo "SELECT nasname, secret FROM nas ORDER BY id" | db | sha256sum | cut -c1-16)
+        if [ -f "$f" ] && [ "$(cat "$f")" != "$sum" ]; then restart_radius; fi
+        echo "$sum" > "$f" ;;
+    *) die "usage: radius-admin ha status | start BACKUP-IP | join FILE (password on stdin) | link BACKUP-IP [POS] | stop" ;;
+    esac
+}
+
+ha_rsc() { # router part of sync.rsc: which servers are in the pair (each router's backup entry comes with its own secret)
+    local s; s=$(setting_get ha_servers 2>/dev/null || true)
+    echo "# RADIUS servers in the pair (radius-admin ha): ${s:-none} — the backup entry is added per router by the server"
+    [ -n "$s" ] || echo ':do { /radius remove [find comment="MikrotikLover RADIUS backup"] } on-error={}'
+}
+
 MACPOLPY=/usr/local/lib/mikrotiklover/macpolicy.py
 cmd_wifipolicy() { # policy by MAC for Wi-Fi (WPA-Enterprise) users and MAC devices: router finds the IP (DHCP, else ARP)
     local sub=${1:-status}; shift || true
@@ -1915,6 +2016,7 @@ cmd_subscription() { # user plan|renew|expiry|quota|status NAME ...
 cmd_enforce() {
     quarantine_auto || true
     ransomware_auto || true
+    cmd_ha nas-check >/dev/null 2>&1 || true        # pair: a router added on the other server -> reload clients here
     local verbose=${1:-} rows u uid c rate n_cut=0 n_fup=0
     rows=$(echo "SELECT DISTINCT r.username, r.acctuniqueid, ml_check(r.username)
                  FROM radacct r JOIN ml_account a ON a.username=r.username
@@ -2935,6 +3037,8 @@ RSC
             public_name_rsc
             echo
             captive_rsc
+            echo
+            ha_rsc
         } > "$lists/sync.rsc"
         install -m 644 "$lists/webfilter-policies.rsc" "$lists/vpn-servers.rsc" "$ROUTER_DIR/"
         # sync.rsc can carry the routers' API password (ips api auto): root and the dashboard only
@@ -4254,6 +4358,7 @@ MAC authentication (devices without username/password: printers, CCTV, TVs, POS)
   remember on|off|status · remember days N · remember max N · remember list [USER] · remember forget MAC|USER
   cert status · cert letsencrypt NAME --email E --http|--cloudflare · cert import FULLCHAIN KEY · cert renew · cert own
                                         public certificate for phones + dashboard (no CA install on Android); routers unchanged
+  ha status | ha start BACKUP-IP | ha join FILE | ha link IP | ha stop   second RADIUS server (database copied both ways)
   ai status|on|off · ai key (stdin) · ai ask (JSON stdin)   'Network se poochho': questions answered by Claude, read-only tools
   push list|test|del ID                  dashboard app notifications on the admins' phones (turned on in the app)
   captive on|off|status                 phones find the hotspot login by themselves (RFC 8908 API, DHCP option 114; needs cert letsencrypt)
@@ -4326,6 +4431,7 @@ case ${1:-help} in
     captive) shift; cmd_captive "$@" ;;
     push) shift; cmd_push "$@" ;;
     ai) shift; cmd_ai "$@" ;;
+    ha) shift; cmd_ha "$@" ;;
     doctor|health) shift; python3 -I /usr/local/lib/mikrotiklover/health.py --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@" ;;
     backups) cmd_backups ;;
     restore) shift; cmd_restore "$@" ;;

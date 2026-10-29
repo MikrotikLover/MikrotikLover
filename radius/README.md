@@ -265,6 +265,36 @@ Dashboard → **Ask (AI)**. Sawal apni zubaan mein: *"kal sab se zyada YouTube k
 
   Asli Claude API se is sandbox mein nahi chalaya (key nahi).
 
+## 4e. Doosra RADIUS server (backup)
+
+Ek server band ho (bijli, kharabi, update) to doosra login sambhalta hai. Users ko pata bhi nahi chalta.
+
+- **Database dono taraf copy hota hai**, har waqt. Is mein users, plans, vouchers, accounting / quota, policies aur settings sab aate hain.
+  - MariaDB primary ⇄ primary, GTID, TLS.
+  - Har server ka apna GTID domain aur apne id slots hote hain (pehla odd, backup even), is liye takraav nahi hota.
+- **Routers:** auto-sync har router ko doosre server ki backup `/radius` entry deta hai, us router ke **apne secret** ke saath. Server woh secret `nas` table se us router ke liye alag jodta hai. Pehla server jawab na de to router backup se poochta hai.
+- **Phones:** dono servers par wohi certificate hota hai (own CA ya Let's Encrypt), is liye phone ko farq mehsoos nahi hota.
+- **Naya router ek server par add kiya:** doosra server 5 minute mein apni RADIUS client list khud taaza kar leta hai.
+
+**Lagana (4 qadam):**
+1. **Backup server par:** MikrotikLover install karein (same version).
+2. **Pehle server par:** `sudo radius-admin ha start BACKUP-IP` (ya Settings → Backup RADIUS server). Is se ek encrypted **join file** aur password milte hain. Pehle server ka MariaDB ek dafa restart hota hai.
+3. **Backup par:** file copy karein, phir `echo PASSWORD | sudo radius-admin ha join FILE`. Database, certificates aur secrets aa jate hain, aur copy shuru ho jati hai. Aakhir mein ek line print hoti hai.
+4. **Pehle server par:** woh line chalayein (`echo … | sudo radius-admin ha link BACKUP-IP POS`). Ab dono taraf copy chal rahi hai.
+
+**Zaroori:**
+- **Firewall:** dono servers ke beech port **3306** khula hona chahiye: `sudo ufw allow from OTHER-IP to any port 3306`.
+- **Join file:** is mein database aur secrets hain — join ke baad mita dein.
+- **Health check:** "Backup RADIUS server → Copy from …" (chal raha hai, kitne second peeche).
+- **Commands:** `radius-admin ha status | stop`.
+
+**Test:** `tests/test-ha.sh` — isi machine par doosra MariaDB (3307) aur doosra FreeRADIUS (1912/1913) backup ki tarah. Is mein yeh check hota hai:
+- asli join file khulti hai, ghalat password mana hota hai;
+- copy dono taraf TLS par chalti hai, ids odd / even rehti hain;
+- backup server par login aur accounting hoti hai, aur woh pehle server par dikhti hai;
+- router ki backup entry apne secret ke saath banti hai (lint + RouterOS 6);
+- health check aur `ha stop` sahi chalte hain.
+
 ## 5. Devices kaise connect hon
 
 | Device | Setting |
