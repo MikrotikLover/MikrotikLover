@@ -747,3 +747,18 @@ CREATE TABLE IF NOT EXISTS ml_mac_ip (
   KEY (ip),
   KEY (router)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- dashboard app (PWA): the admins' devices that turned notifications on (tools/webpush.py)
+CREATE TABLE IF NOT EXISTS ml_push_sub (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  ep_hash CHAR(64) NOT NULL,
+  admin VARCHAR(64) NOT NULL DEFAULT '',
+  endpoint VARCHAR(1024) NOT NULL,
+  p256dh VARCHAR(128) NOT NULL,
+  auth VARCHAR(64) NOT NULL,
+  ua VARCHAR(160) NOT NULL DEFAULT '',
+  created DATETIME NOT NULL,
+  last_ok DATETIME NULL,
+  last_error VARCHAR(200) NOT NULL DEFAULT '',
+  UNIQUE KEY (ep_hash)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

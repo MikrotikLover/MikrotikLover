@@ -222,6 +222,49 @@ Naye iPhone (iOS 14+) aur Android (11+) DHCP se ek address lete hain (option 114
 - **Kahan:** Settings → Certificate for phones → "Hotspot: phones open the login page by themselves", ya `radius-admin captive status|on|off`.
 - **Test:** `tests/test-captive.sh` — own cert par option nahi; public cert par option 114, walled garden, purane options qaim; lint + RouterOS 6; login se pehle / baad / data khatam; off; API.
 
+## 4c. Phone app (PWA) + notifications
+
+Dashboard ab phone par **app ki tarah** install hota hai (apna icon, poori screen), aur alerts **phone par notification** ki tarah aate hain — Telegram / WhatsApp / email ke saath ek aur raasta, bina kisi app store ya bahar ke account ke.
+
+- **Install:** Android / laptop: browser menu → **Install app**. iPhone: Safari → Share → **Add to Home Screen** (iOS 16.4+), phir home screen se kholein.
+- **Notifications:** Settings → **Phone app & notifications** → "Turn on notifications on this device" → Allow. Sab alerts (security, router down, disk, …) us device par aate hain; notification dabane se dashboard ka sahi page khulta hai. **Send a test** se check karein.
+- **Shart:** trusted certificate (4b Let's Encrypt, ya CA installed) — browser untrusted certificate par notifications nahi dete.
+- **Kaise:** standard Web Push. Har message device ke liye encrypt (RFC 8291) aur server ki apni VAPID key se sign (RFC 8292). Server sirf browsers ki push services (Google, Mozilla, Apple, Microsoft) ko bhejta hai — koi aur address mana. Private key sirf root ke paas (`/etc/mikrotiklover-radius/vapid.pem`). Jo device notifications band kar de woh list se khud hat jata hai.
+- **CLI:** `radius-admin push list|test|del ID`; alerts mein channel **push** (`radius-admin alerts test push`).
+- **Test:**
+  - `tests/test-webpush.py` — RFC 8291 ka asli test vector, VAPID signature, address ki pabandi.
+  - `tests/test-push.sh` — manifest, service worker, icons; device on; nakli push service jo VAPID check aur decrypt karti hai; alerts; 410 par device hatna; ghalat address mana.
+
+## 4d. Network se poochho (AI assistant)
+
+Dashboard → **Ask (AI)**. Sawal apni zubaan mein: *"kal sab se zyada YouTube kis ne chalaya?"*, *"Ali ka internet kyun band hai?"*, *"is hafte koi virus aaya?"* — jawab Roman Urdu mein, server ke data se.
+
+- **Kaun jawab deta hai:** Claude (Anthropic API, model `claude-opus-5-5`, official Python SDK). Pehli dafa API key daalein (console.anthropic.com → API keys); har sawal ki choti qeemat aap ke Anthropic account par.
+- **Sirf parh sakta hai — 9 tools:**
+  - app / site ke top users;
+  - user ki poori report (plan, expiry, data / waqt baqi, RADIUS kyun mana kar raha hai, online, quarantine, aakhri blocks);
+  - kyun band hai (why);
+  - block attempts;
+  - security;
+  - health check;
+  - online;
+  - top sites;
+  - user dhoondna.
+
+  Koi tool kuch badal nahi sakta (database session bhi read-only). Badalna ho to woh page / command bata deta hai.
+- **Kya bahar jata hai:** sawal, aur us ke liye zaroori data (naam, sites, MB) Anthropic ko jata hai.
+- **Kahan rehti hai key:** API key sirf root ki file mein (`/etc/mikrotiklover-radius/anthropic.key`).
+- **CLI:** `radius-admin ai status|on|off|model|effort`, `echo KEY | radius-admin ai key`, `echo '{"question":"aaj kaun online hai?"}' | radius-admin ai ask`
+- **Test:** `tests/test-ai.sh` — nakli Claude API ke saath:
+  - request (model, refusal fallback, effort, Roman Urdu system prompt + cache, 9 tools);
+  - tool loop asli data se;
+  - ghalat tool input mana;
+  - read-only DB;
+  - API key ki ghalti saaf alfaaz mein;
+  - dashboard API.
+
+  Asli Claude API se is sandbox mein nahi chalaya (key nahi).
+
 ## 5. Devices kaise connect hon
 
 | Device | Setting |

@@ -530,3 +530,15 @@ details.card > summary { font-weight: 700; }
 .tp-muted { border-style: dashed; }
 .tp-group > summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 4px 0; }
 a.nm-node { color: inherit; text-decoration: none; }
+
+/* Ask (AI) */
+.ai-chat { display: flex; flex-direction: column; gap: 14px; max-height: 62vh; overflow-y: auto; }
+.ai-turn { display: flex; flex-direction: column; gap: 6px; }
+.ai-q { align-self: flex-end; background: var(--accent-soft); color: var(--text); padding: 8px 12px; border-radius: 12px 12px 2px 12px; max-width: 85%; white-space: pre-wrap; }
+.ai-a { align-self: flex-start; background: var(--surface-2, var(--bg)); border: 1px solid var(--border); padding: 10px 12px; border-radius: 12px 12px 12px 2px; max-width: 95%; }
+.ai-a.ai-err { border-color: var(--bad, #dc2626); }
+.ai-text > div { min-height: 1em; overflow-wrap: anywhere; }
+.ai-tools { margin-top: 6px; }
+.ai-ask { display: flex; gap: 8px; align-items: flex-end; }
+.ai-ask textarea { flex: 1; resize: vertical; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }

@@ -273,6 +273,9 @@ try {
   await wp.waitFor({ timeout: 15000 });
   await wp.locator("label.chip input[type=checkbox]").waitFor({ timeout: 15000 });
   ok("blocking overview: Wi-Fi users policy by MAC (switch + list)");
+  await go(page, "#/ask", "Ask (AI)");
+  await page.locator(".card", { hasText: "Network se poochho" }).first().waitFor({ timeout: 15000 });
+  ok("Ask (AI): page opens (key form or chat)");
   await go(page, "#/blocking/policies", "Blocking");
   await page.getByRole("button", { name: "+ New policy" }).click();
   const ed = page.locator("dialog[open]");

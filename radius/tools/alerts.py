@@ -49,6 +49,7 @@ KEYS = {
     "SMS_BODY": r"^[^\n]{1,1000}$",
     "SMS_OK": r"^[^\n]{1,100}$",
     "BRAND": r"^[^\n]{0,64}$",
+    "PUSH": r"^[01]$",                    # dashboard app (PWA) on the admins' phones: radius-admin push
 }
 SECRETS = ("TELEGRAM_TOKEN", "WHATSAPP_APIKEY", "SMTP_PASS", "SMS_URL", "SMS_BODY")
 SERVICES = [("FreeRADIUS", r"^(/usr/sbin/)?freeradius"), ("MariaDB", r"mariadbd|mysqld"),
@@ -128,6 +129,8 @@ def channels(c):
         ch.append("whatsapp")
     if c.get("EMAIL_TO") and c.get("SMTP_HOST"):
         ch.append("email")
+    if c.get("PUSH") == "1":
+        ch.append("push")
     return ch
 
 
@@ -223,6 +226,15 @@ def send_email(c, subject, text, attach=None):
         raise RuntimeError(f"Email: {e}") from None
 
 
+def send_push(title, text):
+    """to every phone / laptop that turned on notifications in the dashboard app (tools/webpush.py)"""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import webpush
+    r = webpush.send_all(webpush._db(), title, text, "/#/health")
+    if not r["sent"] and (r["failed"] or not r["removed"]):
+        raise RuntimeError(f"no device reached ({r['failed']} failed)" if r["failed"] else "no device has notifications on")
+
+
 def send_sms(c, phone, text):
     """Users' SMS / WhatsApp gateway (any provider with an HTTP API). In SMS_URL / SMS_BODY:
     {phone} {phone0} (03001234567 style) {text}. SMS_BODY starting with "{" is sent as JSON."""
@@ -270,6 +282,8 @@ def deliver_file(c, title, text, path):
                 send_telegram_file(c, path, f"{title}\n\n{text}")
             elif ch == "whatsapp":
                 send_whatsapp(c, f"{title}\n\n{text}\n\n(PDF: dashboard → Security → Monthly reports)")
+            elif ch == "push":
+                send_push(title, "PDF: dashboard → Security → Monthly reports")
             else:
                 send_email(c, f"[{brand}] {title}", f"{title}\n\n{text}\n\nThe full report is attached (PDF).", attach=path)
             res[ch] = "ok"
@@ -315,6 +329,8 @@ def deliver(c, title, text, only=None):
                 send_telegram(c, full)
             elif ch == "whatsapp":
                 send_whatsapp(c, full)
+            elif ch == "push":
+                send_push(title, text)
             else:
                 send_email(c, f"[{brand}] {title}", full)
             res[ch] = "ok"
@@ -635,6 +651,7 @@ def main():
             print("Telegram : " + (f"chat {m['TELEGRAM_CHAT']} (bot {m['TELEGRAM_TOKEN']})" if "telegram" in info["channels"] else "off"))
             print("WhatsApp : " + (m["WHATSAPP_PHONE"] if "whatsapp" in info["channels"] else "off"))
             print("Email    : " + (f"{m['EMAIL_TO']} via {m['SMTP_HOST']}:{m.get('SMTP_PORT', '587')} ({m.get('SMTP_TLS', 'starttls')})" if "email" in info["channels"] else "off"))
+            print("Push     : " + ("on (dashboard app on the admins' devices)" if "push" in info["channels"] else "off (Settings -> Phone app & notifications)"))
             print("Events   : " + " ".join(info["events"]) + f"   (daily summary at {info['summary_hour']}:00)")
             print("Checked  : " + (info["last_check"] or "never (cron runs it every 5 minutes)"))
             print("User SMS : " + (f"{c.get('SMS_METHOD', 'GET')} gateway set" if c.get("SMS_URL") else "off (radius-admin notice sms ...)"))
@@ -646,8 +663,8 @@ def main():
         print(f"Alerts saved — channels: {', '.join(channels(load_conf(conf))) or 'none yet'}")
     elif cmd in ("test", "send"):
         only = pos[1] if cmd == "test" and len(pos) > 1 else None
-        if only and only not in ("telegram", "whatsapp", "email"):
-            sys.exit("ERROR: channel must be telegram, whatsapp or email")
+        if only and only not in ("telegram", "whatsapp", "email", "push"):
+            sys.exit("ERROR: channel must be telegram, whatsapp, email or push")
         if not channels(c) or (only and only not in channels(c)):
             sys.exit(f"ERROR: {only or 'no channel'} is not set up (radius-admin alerts telegram|whatsapp|email ...)")
         if cmd == "test":

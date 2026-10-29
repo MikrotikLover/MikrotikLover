@@ -40,6 +40,10 @@ apt-get install -y -qq freeradius freeradius-mysql freeradius-utils mariadb-serv
 # eapol_test lets "radius-admin test --peap" simulate a real Wi-Fi client (optional package)
 apt-get install -y -qq eapoltest >/dev/null 2>&1 || warn "eapoltest not available; PEAP self-test disabled"
 apt-get install -y -qq snmp >/dev/null 2>&1 || warn "net-snmp tools not available: SNMP v3 devices cannot be read (v1 / v2c work)"
+# "Network se poochho" (AI assistant): the official Claude Python SDK in its own venv (sees the system pymysql)
+if apt-get install -y -qq python3-venv >/dev/null 2>&1 && { [ -x /opt/mikrotiklover/venv/bin/python ] || python3 -m venv --system-site-packages /opt/mikrotiklover/venv; } \
+   && /opt/mikrotiklover/venv/bin/pip install -q --upgrade 'anthropic>=2,<3' >/dev/null 2>&1; then :
+else warn "Claude Python SDK not installed (no internet to pypi?): the AI assistant stays off — run install.sh again later"; fi
 apt-get install -y -qq lego >/dev/null 2>&1 || warn "lego not available: Let's Encrypt certificate cannot be fetched here (radius-admin cert import still works)"
 [ -d "$RADDB" ] || die "$RADDB not found — unexpected FreeRADIUS layout"
 
@@ -236,7 +240,7 @@ install -d -m 755 /usr/local/lib/mikrotiklover
 install -m 644 "$SCRIPT_DIR/tools/mlreport.py" /usr/local/lib/mikrotiklover/mlreport.py
 install -m 644 "$SCRIPT_DIR/tools/flowcollector.py" /usr/local/lib/mikrotiklover/flowcollector.py
 install -m 644 "$SCRIPT_DIR/tests/lint-rsc.py" /usr/local/lib/mikrotiklover/rsclint.py   # health check: router files import cleanly
-install -m 644 "$SCRIPT_DIR/tools/cdnmap.py" "$SCRIPT_DIR/tools/cdnlearn.py" "$SCRIPT_DIR/tools/cdn-apps.json" "$SCRIPT_DIR/tools/ports.py" "$SCRIPT_DIR/tools/appinv.py" "$SCRIPT_DIR/tools/vpn.py" "$SCRIPT_DIR/tools/sentinel.py" "$SCRIPT_DIR/tools/alerts.py" "$SCRIPT_DIR/tools/health.py" "$SCRIPT_DIR/tools/insights.py" "$SCRIPT_DIR/tools/minipdf.py" "$SCRIPT_DIR/tools/secreport.py" "$SCRIPT_DIR/tools/routerstat.py" "$SCRIPT_DIR/tools/hotspotgen.py" "$SCRIPT_DIR/tools/routersetup.py" "$SCRIPT_DIR/tools/whyblocked.py" "$SCRIPT_DIR/tools/applearn.py" "$SCRIPT_DIR/tools/webscan.py" "$SCRIPT_DIR/tools/firewall.py" "$SCRIPT_DIR/tools/ips.py" "$SCRIPT_DIR/tools/tzsp2tap.py" "$SCRIPT_DIR/tools/mailsec.py" "$SCRIPT_DIR/tools/rosapi.py" "$SCRIPT_DIR/tools/ipsguard.py" "$SCRIPT_DIR/tools/snmp.py" "$SCRIPT_DIR/tools/topology.py" "$SCRIPT_DIR/tools/rosv6.py" "$SCRIPT_DIR/tools/macpolicy.py" /usr/local/lib/mikrotiklover/
+install -m 644 "$SCRIPT_DIR/tools/cdnmap.py" "$SCRIPT_DIR/tools/cdnlearn.py" "$SCRIPT_DIR/tools/cdn-apps.json" "$SCRIPT_DIR/tools/ports.py" "$SCRIPT_DIR/tools/appinv.py" "$SCRIPT_DIR/tools/vpn.py" "$SCRIPT_DIR/tools/sentinel.py" "$SCRIPT_DIR/tools/alerts.py" "$SCRIPT_DIR/tools/health.py" "$SCRIPT_DIR/tools/insights.py" "$SCRIPT_DIR/tools/minipdf.py" "$SCRIPT_DIR/tools/secreport.py" "$SCRIPT_DIR/tools/routerstat.py" "$SCRIPT_DIR/tools/hotspotgen.py" "$SCRIPT_DIR/tools/routersetup.py" "$SCRIPT_DIR/tools/whyblocked.py" "$SCRIPT_DIR/tools/applearn.py" "$SCRIPT_DIR/tools/webscan.py" "$SCRIPT_DIR/tools/firewall.py" "$SCRIPT_DIR/tools/ips.py" "$SCRIPT_DIR/tools/tzsp2tap.py" "$SCRIPT_DIR/tools/mailsec.py" "$SCRIPT_DIR/tools/rosapi.py" "$SCRIPT_DIR/tools/ipsguard.py" "$SCRIPT_DIR/tools/snmp.py" "$SCRIPT_DIR/tools/topology.py" "$SCRIPT_DIR/tools/rosv6.py" "$SCRIPT_DIR/tools/macpolicy.py" "$SCRIPT_DIR/tools/webpush.py" "$SCRIPT_DIR/tools/assistant.py" /usr/local/lib/mikrotiklover/
 [ -d /run/systemd/system ] && systemctl try-restart mikrotiklover-snmptrap >/dev/null 2>&1 || true   # new code for the trap receiver
 install -d -m 755 /usr/local/lib/mikrotiklover/hotspot-login
 install -m 644 "$SCRIPT_DIR"/mikrotik/hotspot-login/*.html /usr/local/lib/mikrotiklover/hotspot-login/
@@ -325,6 +329,7 @@ if [ "$WEB" = 1 ]; then
     [[ $WEB_ALLOW =~ ^[0-9a-fA-F.:/\ ]+$ || $WEB_ALLOW == any ]] || die "WEB_ALLOW: IPs/networks separated by spaces, or 'any'"
     log "Installing the web dashboard (port $WEB_PORT)"
     apt-get install -y -qq python3-flask python3-waitress python3-werkzeug nginx sudo >/dev/null
+    apt-get install -y -qq python3-cryptography >/dev/null 2>&1 || warn "python3-cryptography missing: dashboard app notifications (Web Push) off"
     id mlweb >/dev/null 2>&1 || useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin mlweb
     usermod -a -G adm mlweb                          # read /var/log/mikrotik (reports)
     chgrp adm /var/log/mikrotik/*.log 2>/dev/null || true
@@ -381,7 +386,9 @@ EOF
     install -d -m 755 /usr/local/lib/mikrotiklover/web/static
     install -m 644 "$SCRIPT_DIR/web/app.py" /usr/local/lib/mikrotiklover/web/app.py
     install -m 644 "$SCRIPT_DIR/mikrotik/autosync.rsc" /usr/local/lib/mikrotiklover/web/autosync.rsc   # router auto-sync template
-    install -m 644 "$SCRIPT_DIR"/web/static/* /usr/local/lib/mikrotiklover/web/static/
+    find "$SCRIPT_DIR/web/static" -maxdepth 1 -type f -exec install -m 644 {} /usr/local/lib/mikrotiklover/web/static/ \;
+    install -d -m 755 /usr/local/lib/mikrotiklover/web/static/icons          # dashboard app (PWA) icons
+    install -m 644 "$SCRIPT_DIR"/web/static/icons/* /usr/local/lib/mikrotiklover/web/static/icons/
     install -m 644 "$CERT_DIR/ca.der" /usr/local/lib/mikrotiklover/web/static/ca.der    # public CA for the connect guide
     install -m 644 "$CERT_DIR/ca.pem" /usr/local/lib/mikrotiklover/web/static/ca.pem
 

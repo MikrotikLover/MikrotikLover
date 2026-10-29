@@ -339,6 +339,8 @@ Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein
 | RouterOS 6 aur 7 dono (router khud version batata hai) | kuch nahi — auto-sync aur Router setup line khud sahi file lete hain | `radius-admin policy build` (sync.rsc + sync6.rsc) · `python3 /usr/local/lib/mikrotiklover/rosv6.py check FILE.rsc` |
 | Asli certificate (Let's Encrypt) — Android par certificate install nahi, dashboard "Not secure" nahi | Settings → Certificate for phones | `radius-admin cert letsencrypt wifi.company.com --email E --http\|--cloudflare` · `cert status` · `cert import FULLCHAIN KEY` · `cert own` |
 | Hotspot login page phone khud khole (captive portal API, DHCP option 114) — public certificate ke baad | Settings → Certificate for phones → switch (default on) | `radius-admin captive status\|on\|off` |
+| Dashboard phone par app + alerts notification ki tarah (PWA, Web Push) | Settings → Phone app & notifications | `radius-admin push list\|test\|del ID` |
+| Network se poochho (AI, Roman Urdu, sirf parhta hai) | Ask (AI) → API key | `radius-admin ai status` · `echo KEY \| radius-admin ai key` |
 | WPA-Enterprise users ki policy bina VLAN (MAC → IP: DHCP, phir ARP) | Blocking → Overview → "Wi-Fi users: policy by MAC" (default on) | `radius-admin wifipolicy status|on|off|list` |
 | Inline IPS (pehla packet ruke) + khud bypass agar Suricata band / atke | Security → Intrusion prevention → Mode → Inline | `radius-admin ips inline on eth1 eth2` · `ips inline drop` · `ips bypass on|off` · `ips inline off` |
 | Mail server (MDaemon) ki hifazat: safe ports, password guessing band, spam bots, DNS / blacklist / certificate checks | Mail server | `radius-admin mail set ip 192.168.88.30 domain example.com` · `mail doors` · `mail status` |

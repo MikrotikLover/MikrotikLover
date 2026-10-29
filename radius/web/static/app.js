@@ -53,6 +53,7 @@ const ICONS = {
   block: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M5.6 5.6l12.8 12.8",
   flag: "M5 21V4m0 0h11l-2 4 2 4H5",
   map: "M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2zM9 4v14M15 6v14",
+  ask: "M4 5h16v11H9l-5 4zM8 9h8M8 12h5",
   printer: "M7 8V3h10v5M5 8h14a2 2 0 0 1 2 2v6h-4v4H7v-4H3v-6a2 2 0 0 1 2-2zM7 14h10",
   camera: "M3 7h4l2-2h6l2 2h4v12H3zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8",
   device: "M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01M12 7h4M12 17h4",
@@ -226,7 +227,7 @@ const legend = () => h("div", { class: "legend" }, h("span", {}, h("i", { class:
 
 // ------------------------------------------------------------------ shell + router
 const NAV = [
-  ["dashboard", "Dashboard", "home"], ["golive", "Setup steps", "flag"], ["users", "Users", "users"], ["groups", "Groups & policies", "groups"], ["departments", "Departments", "team"], ["netmap", "Network map", "map"],
+  ["dashboard", "Dashboard", "home"], ["ask", "Ask (AI)", "ask"], ["golive", "Setup steps", "flag"], ["users", "Users", "users"], ["groups", "Groups & policies", "groups"], ["departments", "Departments", "team"], ["netmap", "Network map", "map"],
   ["macs", "MAC devices", "mac"], ["ipbind", "IP binding", "pin"], ["routers", "Routers", "router"], ["devices", "Devices (SNMP)", "device"], ["setup", "Router setup", "term"], "-",
   ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], ["speed", "Speed schedule", "clock"], ["hotspot", "Hotspot page", "brush"], ["social", "Social WiFi", "phone"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["insights", "Insights (samajh)", "bulb"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
@@ -856,6 +857,7 @@ ROUTES.settings = async () => {
       h("div", { class: "toolbar" }, h("button", { class: "primary", onclick: async (e) => { e.target.disabled = true; await act(api("POST", "/api/backups")); route(); } }, "Backup now"))));
     wide.push(offsiteCard(bk.offsite || { type: "off" }));
     wide.push(await certCard());
+    wide.push(await pushCard());
     wide.push(await alertsCard());
     wide.push(await noticeCard());
     wide.push(card("Automatic updates", "every week (Tuesday night) + hourly lists",
@@ -2227,6 +2229,100 @@ async function blockingOverview() {
         h("li", {}, h("b", {}, "Give it"), " to a user or a group. The user gets it at the next login."),
         h("li", {}, h("b", {}, "Router auto-sync"), " — the router gets every change by itself."),
         h("li", {}, h("b", {}, "Users see a block page"), " with a code and can ask to open the site (Requests).")))));
+}
+
+// "Network se poochho": a question in plain words -> Claude answers with read-only lookups (tools/assistant.py)
+const AI_EXAMPLES = ["Kal sab se zyada YouTube kis ne chalaya?", "Ali ka internet kyun band hai?", "Aaj kaun kaun online hai?",
+  "Is hafte koi virus ya hamla hua?", "Server mein koi masla hai?", "Sara ne aaj kaun si sites kholin?"];
+const aiLoad = () => { try { return JSON.parse(sessionStorage.getItem("mlAiChat") || "[]"); } catch { return []; } };
+let aiChat = [];
+const aiSave = () => { try { sessionStorage.setItem("mlAiChat", JSON.stringify(aiChat.slice(-20))); } catch { /* private window */ } };
+// the answer as text: line breaks kept, **bold** shown bold (no HTML from the answer is ever inserted)
+const aiText = (t) => h("div", { class: "ai-text" }, ...t.split("\n").map((line) => h("div", {}, ...line.split(/(\*\*[^*]+\*\*)/).map((p) => p.startsWith("**") && p.endsWith("**") ? h("b", {}, p.slice(2, -2)) : p))));
+
+ROUTES.ask = async () => {
+  aiChat = aiLoad();                       // this tab's conversation so far
+  const st = await api("GET", "/api/ai");
+  if (!st.on) {
+    const key = h("input", { type: "password", placeholder: "sk-ant-…", autocomplete: "off", required: true, pattern: "sk-ant-[A-Za-z0-9_-]{10,200}" });
+    const form = h("form", { class: "form", onsubmit: async (e) => { e.preventDefault(); if (form.reportValidity() && await act(api("POST", "/api/ai/key", { key: key.value.trim() }), "AI assistant on")) route(); } },
+      h("label", { class: "field" }, "Anthropic API key (console.anthropic.com → API keys)", key), h("button", { class: "primary" }, "Turn on"));
+    return shell("Ask (AI)", h("div", { class: "stack" }, card("Network se poochho", "an AI assistant for your network",
+      h("div", { class: "stack" },
+        h("div", {}, "Sawal apni zubaan mein likhein — jaise ", h("i", {}, "\"kal sab se zyada YouTube kis ne chalaya?\""), " — jawab Roman Urdu mein, server ke data se."),
+        h("div", { class: "muted small" }, "Claude (Anthropic) jawab deta hai. Woh sirf parh sakta hai: usage, users, blocks, security, health. Kuch badal nahi sakta. Har sawal ki choti si qeemat API account par lagti hai; sawal aur us ke jawab ke liye zaroori data Anthropic ko jata hai."),
+        st.sdk ? (isAdmin() ? form : null) : h("div", { class: "muted" }, "The Claude Python SDK is missing on the server — run install.sh again.")))));
+  }
+  const list = h("div", { class: "ai-chat" });
+  const q = h("textarea", { rows: 2, placeholder: "Sawal likhein… (Enter = bhejein)", maxlength: 2000 });
+  const btn = h("button", { class: "primary" }, "Poochho");
+  const draw = () => {
+    list.replaceChildren(...(aiChat.length ? aiChat.map((m) => h("div", { class: "ai-turn" },
+      h("div", { class: "ai-q" }, m.q),
+      m.a !== undefined ? h("div", { class: "ai-a" + (m.error ? " ai-err" : "") }, aiText(m.a),
+        m.tools && m.tools.length ? h("div", { class: "muted small ai-tools" }, "dekha: " + [...new Set(m.tools.map((t) => t.tool.replace(/_/g, " ")))].join(", ")) : null)
+        : h("div", { class: "ai-a muted" }, "soch raha hoon… (server ka data dekh raha hai)")))
+      : [h("div", { class: "muted" }, "Koi sawal poochein — misaal ke liye neeche se chunein.")]));
+    list.scrollTop = list.scrollHeight;
+  };
+  const send = async (text) => {
+    const question = (text || q.value).trim();
+    if (question.length < 2 || btn.disabled) return;
+    q.value = ""; btn.disabled = true;
+    const history = aiChat.filter((m) => m.a && !m.error).slice(-6).map((m) => ({ q: m.q, a: m.a }));
+    const turn = { q: question }; aiChat.push(turn); draw();
+    try {
+      const r = await api("POST", "/api/ai/ask", { question, history });
+      if (r.ok) Object.assign(turn, { a: r.answer, tools: r.tools }); else Object.assign(turn, { a: r.error, error: true });
+    } catch (e) { Object.assign(turn, { a: String(e.message || e), error: true }); }
+    btn.disabled = false; aiSave(); draw(); q.focus();
+  };
+  btn.onclick = () => send();
+  q.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
+  draw();
+  shell("Ask (AI)", h("div", { class: "stack" },
+    card("Network se poochho", "Claude, read-only",
+      h("div", { class: "stack" }, list,
+        h("div", { class: "ai-ask" }, q, btn),
+        h("div", { class: "chips" }, ...AI_EXAMPLES.map((x) => h("button", { class: "chip small", onclick: () => send(x) }, x))),
+        h("div", { class: "toolbar" }, h("span", { class: "muted small grow" }, "Jawab server ke data se banta hai; ahem faisle se pehle dashboard par dekh lein."),
+          aiChat.length ? h("button", { class: "small", onclick: () => { aiChat = []; aiSave(); draw(); } }, "Clear") : null)))));
+};
+
+// Dashboard app (PWA): install on the phone, notifications (Web Push) for the alerts
+let installEvt = null;
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installEvt = e; });
+// the service worker is registered only when notifications are turned on (an untrusted certificate would make the browser log an error)
+const b64uToBytes = (s) => { const b = atob((s + "=".repeat((4 - (s.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from(b, (c) => c.charCodeAt(0)); };
+
+async function pushCard() {
+  let d = { key: "", devices: [] };
+  try { d = await api("GET", "/api/push"); } catch { /* shown below */ }
+  const can = "serviceWorker" in navigator && "PushManager" in window && window.isSecureContext;
+  const ios = /iPhone|iPad/.test(navigator.userAgent), standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  const turnOn = async () => {
+    try {
+      const reg = await navigator.serviceWorker.register("/sw.js");
+      if ((await Notification.requestPermission()) !== "granted") { toast("Notifications were not allowed on this device", true); return; }
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(d.key) });
+      if (await act(api("POST", "/api/push/subscribe", { subscription: sub.toJSON() }), "Notifications on for this device")) route();
+    } catch (e) { toast(`Could not turn on: ${e.message || e}`, true); }
+  };
+  const install = async () => { if (!installEvt) return; installEvt.prompt(); await installEvt.userChoice; installEvt = null; route(); };
+  return card("Phone app & notifications", `${d.devices.length} device(s) get alerts`,
+    h("div", { class: "stack" },
+      h("div", { class: "muted small" }, standalone ? "Opened as an app on this device." : ios
+        ? ["iPhone: Safari → ", h("b", {}, "Share → Add to Home Screen"), ", then open it from the home screen to turn notifications on (iOS 16.4+)."]
+        : ["Android / laptop: the browser menu → ", h("b", {}, "Install app"), " — the dashboard opens like an app, with its own icon."]),
+      isAdmin() ? h("div", { class: "toolbar" },
+        installEvt ? h("button", { onclick: install }, "Install app") : null,
+        can && d.key ? h("button", { class: "primary", onclick: turnOn }, "Turn on notifications on this device") : null,
+        d.devices.length ? h("button", { class: "small", onclick: async () => { if (await act(api("POST", "/api/push/test", {}))) route(); } }, "Send a test") : null) : null,
+      can ? null : h("div", { class: "muted small" }, "This browser cannot get notifications here: it needs a trusted certificate (Settings → Certificate for phones → Let's Encrypt, or the CA installed), and on iPhone the app added to the home screen."),
+      table([{ label: "Device", render: (r) => h("span", {}, r.ua || "—", h("div", { class: "muted small" }, `${r.admin} · ${r.service}`)), wrap: true },
+        { label: "Last sent", render: (r) => r.last_error ? h("span", {}, badge("failed", "bad"), " ", h("span", { class: "small" }, r.last_error)) : (r.last_ok || "").slice(5, 16) || "—" },
+        { label: "", render: (r) => isAdmin() ? h("button", { class: "small danger", onclick: async () => { if (await act(api("POST", "/api/push/del", { id: r.id }))) route(); } }, "Remove") : null }],
+        d.devices, "No device yet. Open the dashboard on your phone and turn notifications on — alerts (security, routers down, disk …) then come there too.")));
 }
 
 // Certificate for phones and the dashboard: own CA (Android 11-12 install it) or public (Let's Encrypt / bought)

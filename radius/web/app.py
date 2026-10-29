@@ -4667,6 +4667,94 @@ def audit_log():
     return jsonify(audit=jsonable(q("SELECT at, admin, ip, action, result FROM web_audit ORDER BY id DESC LIMIT 300")))
 
 
+# ------------------------------------------------------------------ "Network se poochho" (AI assistant, read-only tools)
+@app.get("/api/ai")
+@login_required("admin")
+def ai_get():
+    st = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k IN ('ai_on','ai_model','ai_effort')")}
+    ok, out = radius_admin(["ai", "status"], log=False, timeout=30)
+    return jsonify(on=st.get("ai_on") == "1" and "API key      : set" in out, has_key="API key      : set" in out,
+                   sdk="Python SDK   : missing" not in out, model=st.get("ai_model") or "claude-opus-5-5", effort=st.get("ai_effort") or "medium")
+
+
+@app.post("/api/ai/<action>")
+@login_required("admin")
+def ai_action(action):
+    data = body()
+    if action == "ask":
+        question = str(data.get("question", "")).strip()
+        if not 2 <= len(question) <= 2000:
+            abort(400, "write a question (2-2000 characters)")
+        hist = [{"q": str(h.get("q", ""))[:2000], "a": str(h.get("a", ""))[:4000]} for h in (data.get("history") or [])[-6:] if isinstance(h, dict)]
+        ok, out = radius_admin(["ai", "ask"], stdin=json.dumps({"question": question, "history": hist}), log=False, timeout=260)
+        audit(f"AI question: {question[:120]}", "ok" if ok else "failed")
+        try:
+            d = json.loads(out.splitlines()[-1])
+        except (ValueError, IndexError):
+            d = {"error": out[-300:] or "no answer"}
+        if d.get("error"):
+            return jsonify(ok=False, error=d["error"]), 200
+        return jsonify(ok=True, answer=d.get("answer", ""), tools=d.get("tools", []), usage=d.get("usage", {}))
+    if action == "key":
+        key = field(data, "key", re.compile(r"^sk-ant-[A-Za-z0-9_-]{10,200}$"), required=True)
+        return result(*radius_admin(["ai", "key"], stdin=key + "\n", action="AI assistant API key saved"))
+    if action in ("on", "off"):
+        return result(*radius_admin(["ai", action]))
+    if action == "effort":
+        return result(*radius_admin(["ai", "effort", field(data, "effort", re.compile(r"^(low|medium|high)$"), required=True)]))
+    abort(404)
+
+
+# ------------------------------------------------------------------ dashboard app (PWA) + notifications (Web Push)
+@app.get("/manifest.webmanifest")
+def pwa_manifest():
+    resp = send_from_directory(app.static_folder, "manifest.webmanifest", mimetype="application/manifest+json")
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.get("/sw.js")
+def pwa_sw():
+    """the service worker lives at the root so it covers the whole dashboard"""
+    resp = send_from_directory(app.static_folder, "sw.js", mimetype="text/javascript")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["Service-Worker-Allowed"] = "/"
+    return resp
+
+
+@app.get("/api/push")
+@login_required("admin")
+def push_get():
+    key = (q1("SELECT v FROM ml_setting WHERE k='push_vapid_pub'") or {}).get("v") or ""
+    if not key:
+        ok, out = radius_admin(["push", "key"], log=False, timeout=30)
+        key = out.strip().splitlines()[-1] if ok and out.strip() else ""
+    ok, out = radius_admin(["push", "list", "--json"], log=False, timeout=30)
+    try:
+        devices = json.loads(out.splitlines()[-1]) if ok and out.strip() else []
+    except (ValueError, IndexError):
+        devices = []
+    return jsonify(key=key, devices=devices)
+
+
+@app.post("/api/push/<action>")
+@login_required("admin")
+def push_action(action):
+    data = body()
+    if action == "subscribe":
+        sub = data.get("subscription")
+        if not isinstance(sub, dict):
+            abort(400, "subscription expected")
+        ua = re.sub(r"[^A-Za-z0-9 ./;()_-]", "", str(request.headers.get("User-Agent", "")))[:120]
+        return result(*radius_admin(["push", "add", session.get("user", "admin"), ua], stdin=json.dumps(sub)[:8000],
+                                    action="notifications turned on for a device"))
+    if action == "test":
+        return result(*radius_admin(["push", "test"], timeout=60))
+    if action == "del":
+        return result(*radius_admin(["push", "del", str(int(data.get("id", 0)))]))
+    abort(404)
+
+
 # ------------------------------------------------------------------ SPA
 @app.get("/")
 def index():

@@ -1490,6 +1490,56 @@ cmd_cert() {
     esac
 }
 
+WEBPUSH_PY=/usr/local/lib/mikrotiklover/webpush.py
+cmd_push() { # dashboard app (PWA) notifications on the admins' phones / laptops (Web Push, own VAPID key)
+    local W=(python3 -I "$WEBPUSH_PY")
+    case ${1:-list} in
+    key) # the public key the browsers need (made once)
+        local k; k=$("${W[@]}" keys) || die "VAPID key not made (python3-cryptography missing?)"
+        [ "$(setting_get push_vapid_pub)" = "$k" ] || setting_set push_vapid_pub "$k"; echo "$k" ;;
+    add) # dashboard: one device's subscription (JSON) on stdin
+        [[ ${2:-} =~ ^[A-Za-z0-9._@+-]{1,64}$ ]] || die "usage: radius-admin push add ADMIN [UA] < subscription.json"
+        "${W[@]}" add "$2" "${3:-}" >/dev/null || die "not saved (only the browsers' own push services are accepted)"
+        printf 'PUSH=1\n' | alerts_py set >/dev/null
+        ok "notifications on for this device — alerts come here too (Telegram / WhatsApp / email stay as they are)" ;;
+    del) [[ ${2:-} =~ ^[0-9]+$ ]] || die "usage: radius-admin push del ID"; "${W[@]}" del "$2"
+         [ "$(echo "SELECT COUNT(*) FROM ml_push_sub" | db)" != 0 ] || printf 'PUSH=0\n' | alerts_py set >/dev/null
+         ok "device removed" ;;
+    list) "${W[@]}" list "${@:2}" ;;
+    test) local r; r=$("${W[@]}" send "✅ Test" "Notifications from your RADIUS server work." --url "/#/settings") || die "not sent"
+          echo "$r" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("sent to %d device(s), %d failed, %d removed (they turned notifications off)" % (d["sent"], d["failed"], d["removed"])); sys.exit(0 if d["sent"] else 1)' ;;
+    *) die "usage: radius-admin push key | list | test | del ID" ;;
+    esac
+}
+
+AI_PY=/usr/local/lib/mikrotiklover/assistant.py
+AI_VENV=/opt/mikrotiklover/venv
+cmd_ai() { # "Network se poochho": questions in plain words, answered by Claude with read-only tools (tools/assistant.py)
+    case ${1:-status} in
+    status)
+        echo "AI assistant : $([ -s "$CONF_DIR/anthropic.key" ] && [ "$(setting_get ai_on)" != 0 ] && echo on || echo off)   (radius-admin ai key | on | off)"
+        echo "API key      : $([ -s "$CONF_DIR/anthropic.key" ] && echo "set ($(head -c 10 "$CONF_DIR/anthropic.key")…)" || echo "not set — console.anthropic.com → API keys")"
+        echo "Model        : $(setting_get ai_model | grep . || echo claude-opus-5-5)   effort $(setting_get ai_effort | grep . || echo medium)"
+        echo "Python SDK   : $([ -x "$AI_VENV/bin/python" ] && "$AI_VENV/bin/python" -c 'import anthropic; print(anthropic.__version__)' 2>/dev/null || echo "missing — run install.sh again")"
+        echo "Tools        : read-only (usage, user report, why blocked, blocked tries, security, health, online, sites, find user)" ;;
+    key) # the Anthropic API key on stdin (never on the command line)
+        local k; read -r k || true
+        [[ $k =~ ^sk-ant-[A-Za-z0-9_-]{10,200}$ ]] || die "an Anthropic API key (sk-ant-…) on stdin: echo KEY | radius-admin ai key"
+        (umask 077; printf '%s' "$k" > "$CONF_DIR/anthropic.key"); setting_set ai_on 1
+        ok "API key saved (root only). Ask on the dashboard: Ask (AI), or: echo '{\"question\":\"aaj kaun online hai?\"}' | radius-admin ai ask" ;;
+    on|off) setting_set ai_on "$([ "$1" = on ] && echo 1 || echo 0)"; ok "AI assistant $1" ;;
+    model) [[ ${2:-} =~ ^claude-[a-z0-9-]{3,40}$ ]] || die "usage: radius-admin ai model claude-opus-5-5"; setting_set ai_model "$2"; ok "model: $2" ;;
+    effort) [[ ${2:-} =~ ^(low|medium|high)$ ]] || die "usage: radius-admin ai effort low|medium|high"; setting_set ai_effort "$2"; ok "effort: $2" ;;
+    ask) # {"question": "...", "history": [...]} on stdin -> {"answer": ...}
+        [ "$(setting_get ai_on)" != 0 ] && [ -s "$CONF_DIR/anthropic.key" ] || { echo '{"error": "the AI assistant is off or has no API key (Settings → AI assistant)"}'; return 1; }
+        [ -x "$AI_VENV/bin/python" ] || { echo '{"error": "the Claude Python SDK is missing — run install.sh again"}'; return 1; }
+        python3 -c 'import json,sys; d=json.load(sys.stdin); d["model"]=sys.argv[1]; d["effort"]=sys.argv[2]; print(json.dumps(d))' \
+            "$(setting_get ai_model | grep . || echo claude-opus-5-5)" "$(setting_get ai_effort | grep . || echo medium)" \
+          | ML_RADIUS_ADMIN="$0" timeout 240 "$AI_VENV/bin/python" -I "$AI_PY" ask ;;
+    *) die "usage: radius-admin ai status | key (stdin) | on | off | model NAME | effort low|medium|high | ask (JSON on stdin)" ;;
+    esac
+}
+
 MACPOLPY=/usr/local/lib/mikrotiklover/macpolicy.py
 cmd_wifipolicy() { # policy by MAC for Wi-Fi (WPA-Enterprise) users and MAC devices: router finds the IP (DHCP, else ARP)
     local sub=${1:-status}; shift || true
@@ -4204,6 +4254,8 @@ MAC authentication (devices without username/password: printers, CCTV, TVs, POS)
   remember on|off|status · remember days N · remember max N · remember list [USER] · remember forget MAC|USER
   cert status · cert letsencrypt NAME --email E --http|--cloudflare · cert import FULLCHAIN KEY · cert renew · cert own
                                         public certificate for phones + dashboard (no CA install on Android); routers unchanged
+  ai status|on|off · ai key (stdin) · ai ask (JSON stdin)   'Network se poochho': questions answered by Claude, read-only tools
+  push list|test|del ID                  dashboard app notifications on the admins' phones (turned on in the app)
   captive on|off|status                 phones find the hotspot login by themselves (RFC 8908 API, DHCP option 114; needs cert letsencrypt)
   wifipolicy on|off|status · wifipolicy list   Wi-Fi (WPA-Enterprise) users + MAC devices: policy by MAC, no VLAN (router: DHCP, else ARP)
                                         a phone that logged in with a password logs in by its MAC next time (random MACs)
@@ -4272,6 +4324,8 @@ case ${1:-help} in
     wifipolicy) shift; cmd_wifipolicy "$@" ;;
     cert) shift; cmd_cert "$@" ;;
     captive) shift; cmd_captive "$@" ;;
+    push) shift; cmd_push "$@" ;;
+    ai) shift; cmd_ai "$@" ;;
     doctor|health) shift; python3 -I /usr/local/lib/mikrotiklover/health.py --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@" ;;
     backups) cmd_backups ;;
     restore) shift; cmd_restore "$@" ;;
