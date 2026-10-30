@@ -11,7 +11,7 @@ echo "== first boot $(date -Is)"
 say() { local t; for t in /dev/tty1 /dev/ttyS0; do [ -w "$t" ] && printf '%s\n' "$@" > "$t" 2>/dev/null; done; printf '%s\n' "$@"; }
 
 install -d -m 755 /etc/issue.d
-printf '\n  MikrotikLover RADIUS: setting up this server for the first time (a few minutes)...\n  Log: %s\n\n' "$LOG" > "$ISSUE"
+printf '\n  MikrotikLover RADIUS: first-time setup, a few minutes...\n  Log: %s\n\n' "$LOG" > "$ISSUE"
 agetty --reload 2>/dev/null || true           # the login prompts show the new banner
 say "MikrotikLover: first boot setup started (own passwords and certificates for this VM)"
 
@@ -29,9 +29,9 @@ if (cd /opt/mikrotiklover/radius && ML_FIRST_PASS_FILE=$PASSF ./install.sh); the
   -----------------------------------------------------------------------
   Dashboard   : https://\4:8443/
   First login : sudo cat /root/mikrotiklover-first-login.txt
-  Console     : user mladmin, password mikrotiklover (a new one is asked at once)
+  Console     : mladmin / mikrotiklover (asks for a new password)
   Fixed IP    : sudo radius-admin netip static 192.168.88.10/24 192.168.88.1
-  Routers     : RADIUS address = this server's IP; secret: sudo radius-admin nas add ROUTER-IP
+  Routers     : sudo radius-admin nas add ROUTER-IP  (RADIUS = this IP)
 
 ISS
     agetty --reload 2>/dev/null || true
