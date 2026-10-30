@@ -1885,6 +1885,112 @@ cmd_wifipolicy() { # policy by MAC for Wi-Fi (WPA-Enterprise) users and MAC devi
     esac
 }
 
+# ---------------------------------------------------------------- new device approval
+NEWDEVPY=/usr/local/lib/mikrotiklover/newdev.py
+newdev_rsc() { # sync.rsc part: router scripts + firewall (on), or taking them out (off)
+    if [ "$(setting_get newdev_on 2>/dev/null)" != 1 ]; then python3 -I "$NEWDEVPY" router-part off; return; fi
+    [ -s "$ROUTER_DIR/key" ] || return 0
+    local base sip; base=$(setting_get radius_domain); base="https://${base:-${RADIUS_DOMAIN:-radius.local}}:${WEB_PORT:-8443}/api/public/router"
+    sip=$(setting_get server_ip 2>/dev/null || true); [[ $sip =~ ^[0-9]+(\.[0-9]+){3}$ ]] || sip=""
+    python3 -I "$NEWDEVPY" router-part on --base "$base" --key "$(cat "$ROUTER_DIR/key")" --server "$sip" \
+        $([ "$(setting_get newdev_strict 2>/dev/null)" = 1 ] && echo --strict)
+}
+newdev_mac() { # any format -> AA-BB-CC-DD-EE-FF
+    local m; m=$(python3 -I -c 'import sys; sys.path.insert(0, "/usr/local/lib/mikrotiklover"); import newdev; print(newdev.norm_mac(sys.argv[1]) or "")' "${1:-}")
+    [ -n "$m" ] || die "Invalid MAC address '${1:-}'"
+    printf '%s' "$m"
+}
+
+cmd_newdev() { # every new device on the LAN needs the admin's approval before it gets internet
+    local sub=${1:-status}; shift || true
+    local who=${SUDO_USER:-admin}
+    case $sub in
+    status)
+        local lu; lu=$(setting_get newdev_learn_until 2>/dev/null || true)
+        echo "New device approval : $([ "$(setting_get newdev_on)" = 1 ] && echo on || echo off)   (radius-admin newdev on|off)"
+        echo "Learning            : $(echo "SELECT IF($(q "${lu:-2000-01-01}") > NOW(), CONCAT('until ', $(q "${lu:-}"), ' — devices seen now are approved by themselves'), 'off')" | db)"
+        echo "Server down         : $([ "$(setting_get newdev_strict)" = 1 ] && echo "strict — a new device waits (radius-admin newdev strict off)" || echo "new devices still get internet (radius-admin newdev strict on)")"
+        echo "Devices             : $(echo "SELECT CONCAT(SUM(status='pending'), ' waiting, ', SUM(status='approved'), ' approved, ', SUM(status='denied'), ' denied') FROM ml_newdev" | db | sed 's/NULL/0/g')"
+        echo "Routers             : need auto-sync; the rules come with the next sync (15 min), approvals within a minute"
+        echo "Waiting page        : $( [[ $(setting_get server_ip) =~ ^[0-9]+(\.[0-9]+){3}$ ]] && echo "http://$(setting_get server_ip):8081 (every http:// address of a waiting device)" || echo "none — set the server IP: radius-admin security quarantine-server IP")" ;;
+    on)
+        local learn=24
+        while [ $# -gt 0 ]; do case $1 in
+            --learn) [[ ${2:-} =~ ^([0-9]{1,3})h?$ ]] || die "--learn HOURS (0 = approve nothing by itself)"; learn=${BASH_REMATCH[1]}; shift ;;
+            *) die "usage: radius-admin newdev on [--learn 24h]" ;; esac; shift; done
+        (( learn <= 720 )) || die "--learn: 720 hours at most"
+        setting_set newdev_on 1
+        setting_set newdev_learn_until "$(echo "SELECT NOW() + INTERVAL $learn HOUR" | db)"
+        cmd_policy build >/dev/null || die "router rules not rebuilt (radius-admin policy build)"
+        if [ "$learn" -gt 0 ]; then ok "New devices need approval. For $learn hour(s) every device the routers see is approved by itself (your current devices); after that each new one waits"
+        else ok "New devices need approval from now on — every device the routers report is 'waiting' until you approve it"; fi
+        echo "Routers take it at the next auto-sync (15 min). Waiting devices: radius-admin newdev list" ;;
+    off)
+        setting_set newdev_on 0
+        cmd_policy build >/dev/null || die "router rules not rebuilt (radius-admin policy build)"
+        ok "New device approval off: the routers take the rules out at the next auto-sync (the device list is kept)" ;;
+    learn)
+        [[ ${1:-} =~ ^([0-9]{1,3})h?$ ]] || die "usage: radius-admin newdev learn HOURS   (0 = stop learning)"
+        setting_set newdev_learn_until "$(echo "SELECT NOW() + INTERVAL ${BASH_REMATCH[1]} HOUR" | db)"
+        ok "learning for ${BASH_REMATCH[1]} hour(s)" ;;
+    strict)
+        case ${1:-} in on|off) ;; *) die "usage: radius-admin newdev strict on|off" ;; esac
+        setting_set newdev_strict "$([ "$1" = on ] && echo 1 || echo 0)"
+        cmd_policy build >/dev/null || die "router rules not rebuilt (radius-admin policy build)"
+        ok "server not reachable: $([ "$1" = on ] && echo "a new device waits (1 hour, or until the server answers)" || echo "new devices get internet") — routers at the next auto-sync" ;;
+    list)
+        local st=${1:-all} where=""
+        [ "${1:-}" = --json ] && st=all
+        case $st in pending|waiting) where="WHERE status='pending'" ;; approved|denied) where="WHERE status='$st'" ;; all|--json) ;;
+            *) die "usage: radius-admin newdev list [pending|approved|denied|all] [--json]" ;; esac
+        if [ "${1:-}" = --json ] || [ "${2:-}" = --json ]; then
+            echo "SELECT JSON_ARRAYAGG(JSON_OBJECT('mac', mac, 'status', status, 'name', name, 'username', username, 'host', host, 'ip', ip,
+                  'router', router, 'how', how, 'first_seen', first_seen, 'last_seen', last_seen, 'decided_by', decided_by, 'decided_at', decided_at))
+                  FROM (SELECT * FROM ml_newdev $where ORDER BY FIELD(status,'pending','denied','approved'), last_seen DESC LIMIT 2000) x" | db | sed 's/^NULL$/[]/'
+        else
+            echo "SELECT mac, status, IF(name<>'', name, host) AS name, username AS user, ip, router, last_seen FROM ml_newdev $where
+                  ORDER BY FIELD(status,'pending','denied','approved'), last_seen DESC" | dbt
+        fi ;;
+    approve|deny)
+        local m="" name="" user="" set
+        while [ $# -gt 0 ]; do case $1 in -n|--name) name=${2:-}; shift ;; -u|--user) user=${2:-}; shift ;; *) m=$1 ;; esac; shift; done
+        m=$(newdev_mac "$m")
+        [ -z "$name" ] || [[ $name =~ ^[A-Za-z0-9\ ._()+\'-]{1,64}$ ]] || die "name: letters, digits, space . _ ( ) + ' - (64 at most)"
+        [ -z "$user" ] || user_exists "$user" || die "No such user '$user'"
+        [ -n "$(echo "SELECT 1 FROM ml_newdev WHERE mac=$(q "$m")" | db)" ] || die "No device $m seen yet (to allow it before it comes: radius-admin newdev add $m)"
+        set="status=$(q "$([ "$sub" = approve ] && echo approved || echo denied)"), decided_by=$(q "$who"), decided_at=NOW(), how=''"
+        [ -z "$name" ] || set="$set, name=$(q "$name")"
+        [ -z "$user" ] || set="$set, username=$(q "$user")"
+        echo "UPDATE ml_newdev SET $set WHERE mac=$(q "$m")" | db
+        ok "$m $([ "$sub" = approve ] && echo "approved — internet within a minute" || echo "denied — stays without internet")" ;;
+    approve-all)
+        local n; n=$(echo "SELECT COUNT(*) FROM ml_newdev WHERE status='pending'" | db)
+        echo "UPDATE ml_newdev SET status='approved', decided_by=$(q "$who"), decided_at=NOW() WHERE status='pending'" | db
+        ok "$n waiting device(s) approved" ;;
+    add) # allow a device before it comes on the network
+        local m="" name="" user=""
+        while [ $# -gt 0 ]; do case $1 in -n|--name) name=${2:-}; shift ;; -u|--user) user=${2:-}; shift ;; *) m=$1 ;; esac; shift; done
+        m=$(newdev_mac "$m")
+        [ -z "$name" ] || [[ $name =~ ^[A-Za-z0-9\ ._()+\'-]{1,64}$ ]] || die "name: letters, digits, space . _ ( ) + ' - (64 at most)"
+        [ -z "$user" ] || user_exists "$user" || die "No such user '$user'"
+        echo "INSERT INTO ml_newdev (mac, status, name, username, how, decided_by, decided_at) VALUES ($(q "$m"), 'approved', $(q "$name"), $(q "$user"), 'added', $(q "$who"), NOW())
+              ON DUPLICATE KEY UPDATE status='approved', name=IF(VALUES(name)<>'', VALUES(name), name), username=IF(VALUES(username)<>'', VALUES(username), username),
+              decided_by=VALUES(decided_by), decided_at=NOW()" | db
+        ok "$m approved (it gets internet as soon as it comes)" ;;
+    forget)
+        local m; m=$(newdev_mac "${1:-}")
+        [ -n "$(echo "SELECT 1 FROM ml_newdev WHERE mac=$(q "$m")" | db)" ] || die "No device $m"
+        echo "DELETE FROM ml_newdev WHERE mac=$(q "$m")" | db
+        ok "$m forgotten — if it comes again it is a new device (waits for approval)" ;;
+    json)
+        echo "SELECT JSON_OBJECT('on', IFNULL((SELECT v FROM ml_setting WHERE k='newdev_on'),'0')='1',
+              'strict', IFNULL((SELECT v FROM ml_setting WHERE k='newdev_strict'),'0')='1',
+              'learn_until', (SELECT IF(v > NOW(), v, NULL) FROM ml_setting WHERE k='newdev_learn_until'),
+              'server_ip', IFNULL((SELECT v FROM ml_setting WHERE k='server_ip'),''))" | db ;;
+    *) die "usage: radius-admin newdev status | on [--learn 24h] | off | learn HOURS | strict on|off | list [pending|approved|denied] | approve MAC [-n NAME] [-u USER] | deny MAC | approve-all | add MAC [-n NAME] | forget MAC" ;;
+    esac
+}
+
 cmd_remember() { # "remember this device": after one password login a phone logs in by its MAC as that user (random MACs)
     local sub=${1:-status}; shift || true
     case $sub in
@@ -3261,6 +3367,8 @@ RSC
             captive_rsc
             echo
             ha_rsc
+            echo
+            newdev_rsc
         } > "$lists/sync.rsc"
         install -m 644 "$lists/webfilter-policies.rsc" "$lists/vpn-servers.rsc" "$ROUTER_DIR/"
         # sync.rsc can carry the routers' API password (ips api auto): root and the dashboard only
@@ -3500,6 +3608,7 @@ GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_status TO 'radius_web'@'l
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_stat TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_setup TO 'radius_web'@'localhost';
 GRANT UPDATE ON \`$DB_NAME\`.ml_passpoint_link TO 'radius_web'@'localhost';
+GRANT INSERT, UPDATE ON \`$DB_NAME\`.ml_newdev TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_fetch TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE ON \`$DB_NAME\`.ml_traffic TO 'radius_web'@'localhost';
 GRANT INSERT, DELETE ON \`$DB_NAME\`.ml_block_event TO 'radius_web'@'localhost';
@@ -4592,6 +4701,8 @@ MAC authentication (devices without username/password: printers, CCTV, TVs, POS)
   passpoint links · passpoint unlink USER   Passpoint (Hotspot 2.0): phones with the profile join every office Wi-Fi by themselves
   wifipolicy on|off|status · wifipolicy list   Wi-Fi (WPA-Enterprise) users + MAC devices: policy by MAC, no VLAN (router: DHCP, else ARP)
                                         a phone that logged in with a password logs in by its MAC next time (random MACs)
+  newdev on [--learn 24h] | off | status | list [pending] | approve MAC [-n NAME] [-u USER] | deny MAC | approve-all
+  newdev add MAC [-n NAME] | forget MAC | strict on|off | learn HOURS   every new device on the LAN waits for your approval
 
 Routers (MikroTik = NAS)
   nas add IP[/PREFIX] [SECRET] [NAME]   (no SECRET: random one is generated)
@@ -4655,6 +4766,7 @@ case ${1:-help} in
     snmp|devices) shift; cmd_snmp "$@" ;;
     remember) shift; cmd_remember "$@" ;;
     wifipolicy) shift; cmd_wifipolicy "$@" ;;
+    newdev|newdevice) shift; cmd_newdev "$@" ;;
     cert) shift; cmd_cert "$@" ;;
     captive) shift; cmd_captive "$@" ;;
     passpoint|hs20) shift; cmd_passpoint "$@" ;;

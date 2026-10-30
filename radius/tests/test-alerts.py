@@ -120,7 +120,7 @@ for bad in ("TELEGRAM_TOKEN=nope", "WHATSAPP_PHONE=12", "EVENTS=security,foo", "
     except ValueError:
         check(f"settings: {bad} refused", True)
 check("settings: empty value removes it", "WHATSAPP_PHONE" not in alerts.set_values(dict(c), ["WHATSAPP_PHONE="]))
-check("settings: default events", alerts.events({}) == ["security", "quarantine", "router", "service", "jobs", "disk", "anomaly", "requests", "newapp", "health", "devices", "summary", "weekly", "monthly"])
+check("settings: default events", alerts.events({}) == ["security", "quarantine", "router", "service", "jobs", "disk", "anomaly", "requests", "newapp", "health", "devices", "newdev", "summary", "weekly", "monthly"])
 check("a list saved by an older version: the newer 'devices' event is on; a list saved now keeps it off when left out",
       "devices" in alerts.events({"EVENTS": "security,router"}) and "devices" not in alerts.events(alerts.set_values({}, ["EVENTS=security,router"])))
 m = alerts.mask(c)
@@ -360,5 +360,6 @@ check("summary: not before the hour", not alerts.summary_due({}, {}, noon))
 check("summary: due at 21:00, once a day", alerts.summary_due({}, {}, night) and not alerts.summary_due({}, {"summary_day": "2026-10-17"}, night))
 check("summary: off when the event is off", not alerts.summary_due({"EVENTS": "security"}, {}, night))
 
+check("events: a list saved before 'newdev' existed gets it on", "newdev" in alerts.events({"EVENTS": "security,router", "EVENTS_KNOWN": "security,quarantine,router,service,jobs,disk,expiring,anomaly,requests,newapp,health,devices,summary,weekly,monthly"}))
 print(f"{'all alerts tests passed' if not fails else f'{fails} FAILED'}")
 sys.exit(1 if fails else 0)

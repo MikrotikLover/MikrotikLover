@@ -775,3 +775,24 @@ CREATE TABLE IF NOT EXISTS ml_push_sub (
   last_error VARCHAR(200) NOT NULL DEFAULT '',
   UNIQUE KEY (ep_hash)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- New device approval (radius-admin newdev): every MAC a router reports; pending / denied ones get no internet
+CREATE TABLE IF NOT EXISTS ml_newdev (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  mac CHAR(17) NOT NULL,
+  status VARCHAR(10) NOT NULL DEFAULT 'pending',      -- pending | approved | denied
+  name VARCHAR(64) NOT NULL DEFAULT '',               -- given by the admin ("Ali's laptop")
+  username VARCHAR(64) NOT NULL DEFAULT '',           -- whose device (optional)
+  host VARCHAR(64) NOT NULL DEFAULT '',               -- DHCP host name the device sent
+  ip VARCHAR(45) NOT NULL DEFAULT '',
+  router VARCHAR(45) NOT NULL DEFAULT '',             -- the router that reported it last
+  how VARCHAR(10) NOT NULL DEFAULT '',                -- '' | learned (approved while learning) | added (before it came)
+  first_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  decided_by VARCHAR(64) NOT NULL DEFAULT '',
+  decided_at DATETIME NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY (mac),
+  KEY (status),
+  KEY (router, ip)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

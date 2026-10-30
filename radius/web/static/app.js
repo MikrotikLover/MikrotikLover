@@ -228,7 +228,7 @@ const legend = () => h("div", { class: "legend" }, h("span", {}, h("i", { class:
 // ------------------------------------------------------------------ shell + router
 const NAV = [
   ["dashboard", "Dashboard", "home"], ["ask", "Ask (AI)", "ask"], ["golive", "Setup steps", "flag"], ["users", "Users", "users"], ["groups", "Groups & policies", "groups"], ["departments", "Departments", "team"], ["netmap", "Network map", "map"],
-  ["macs", "MAC devices", "mac"], ["ipbind", "IP binding", "pin"], ["routers", "Routers", "router"], ["devices", "Devices (SNMP)", "device"], ["setup", "Router setup", "term"], "-",
+  ["macs", "MAC devices", "mac"], ["newdev", "New devices", "shield"], ["ipbind", "IP binding", "pin"], ["routers", "Routers", "router"], ["devices", "Devices (SNMP)", "device"], ["setup", "Router setup", "term"], "-",
   ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], ["speed", "Speed schedule", "clock"], ["hotspot", "Hotspot page", "brush"], ["social", "Social WiFi", "phone"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["insights", "Insights (samajh)", "bulb"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
   ["traffic", "Traffic graphs", "graph"], ["data", "Data usage", "data"], ["apps", "Apps on network", "apps"], ["ports", "Ports & protocols", "ports"], "-",
@@ -549,6 +549,72 @@ ROUTES.macs = async () => {
             if (await confirmDlg("Remove device", `Remove ${m.mac}?`, "Remove"))
               if (await act(api("DELETE", `/api/macs/${m.mac}`))) route();
           } }, "Remove")) : null }], macs, "No MAC devices yet.")));
+};
+
+// ------------------------------------------------------------------ new device approval
+ROUTES.newdev = async (tab = "pending") => {
+  const d = await api("GET", "/api/newdev");
+  const st = d.settings || {};
+  const by = (s) => d.devices.filter((x) => x.status === s);
+  const counts = { pending: by("pending").length, denied: by("denied").length, approved: by("approved").length };
+  const approveDlg = (x) => {
+    const f = h("form", { class: "form", onsubmit: (e) => e.preventDefault() },
+      h("label", { class: "field" }, "Name", h("span", { class: "help" }, "so you know it later"), h("input", { name: "name", maxlength: 64, value: x?.name || x?.host || "", placeholder: "Ali's laptop" })),
+      h("label", { class: "field" }, "Whose device (optional)", h("input", { name: "user", maxlength: 64, value: x?.username || "", placeholder: "username" })),
+      x ? null : h("label", { class: "field" }, "MAC address", h("input", { name: "mac", required: true, placeholder: "aa:bb:cc:dd:ee:ff" })));
+    dialog(x ? `Approve ${x.mac}` : "Allow a device before it comes", f, [{ label: "Cancel" }, { label: x ? "Approve" : "Allow", class: "primary", action: async () => {
+      if (!f.reportValidity()) return false;
+      const v = formValues(f);
+      if (!(await act(api("POST", `/api/newdev/${x ? "approve" : "add"}`, { mac: x ? x.mac : v.mac, name: v.name, user: v.user })))) return false;
+      route();
+    } }]);
+  };
+  const actBtn = (x, action, label, cls = "small") => h("button", { class: cls, onclick: async () => {
+    if (action === "forget" && !(await confirmDlg("Forget device", `Forget ${x.mac}? If it comes again it waits for approval again.`, "Forget"))) return;
+    if (await act(api("POST", `/api/newdev/${action}`, { mac: x.mac }))) route();
+  } }, label);
+  const rows = by(tab === "all" ? null : tab);
+  const list = tab === "all" ? d.devices : rows;
+  const toggle = h("label", { class: "chip" }, h("input", { type: "checkbox", checked: !!st.on, disabled: !isAdmin(), onchange: async (e) => {
+    if (e.target.checked) {
+      e.target.checked = false;
+      const f = h("form", { class: "form", onsubmit: (ev) => ev.preventDefault() },
+        h("p", {}, "From now on a device the routers have not seen gets no internet until you approve it (only DNS and a 'waiting for approval' page)."),
+        h("label", { class: "field" }, "Approve today's devices by themselves for (hours)", h("span", { class: "help" }, "so phones and PCs already in use keep working; 0 = every device waits"),
+          h("input", { name: "learn", type: "number", min: 0, max: 720, value: 24 })));
+      dialog("Turn on new device approval", f, [{ label: "Cancel" }, { label: "Turn on", class: "primary", action: async () => {
+        if (!(await act(api("POST", "/api/newdev/on", formValues(f))))) return false; route(); } }]);
+    } else if (await confirmDlg("Turn off", "Every device gets internet again (the routers take the rules out at their next sync).", "Turn off")) {
+      if (await act(api("POST", "/api/newdev/off", {}))) route(); else e.target.checked = true;
+    } else e.target.checked = true;
+  } }), st.on ? "On — new devices need approval" : "Off — every device gets internet");
+  const strict = h("label", { class: "chip" }, h("input", { type: "checkbox", checked: !!st.strict, disabled: !isAdmin() || !st.on, onchange: async (e) => {
+    if (!(await act(api("POST", "/api/newdev/strict", { on: e.target.checked })))) e.target.checked = !e.target.checked; } }),
+    "Strict: a new device waits even when this server is down");
+  const tabs = h("div", { class: "tabs" }, [["pending", `Waiting (${counts.pending})`], ["denied", `Denied (${counts.denied})`], ["approved", `Approved (${counts.approved})`], ["all", "All"]]
+    .map(([k, l]) => h("a", { href: `#/newdev/${k}`, class: tab === k ? "active" : "" }, l)));
+  shell("New devices", h("div", { class: "stack" },
+    card("New device approval", "every new device on the LAN (DHCP) waits for your OK — hotspot networks are left out (they have their own login)",
+      h("div", { class: "toolbar" }, toggle, strict, h("span", { class: "grow" }),
+        isAdmin() && counts.pending ? h("button", { onclick: async () => {
+          if (await confirmDlg("Approve all", `Approve all ${counts.pending} waiting device(s)?`, "Approve all", false))
+            if (await act(api("POST", "/api/newdev/approve-all", {}))) route(); } }, "Approve all waiting") : null,
+        isAdmin() ? h("button", { class: "primary", onclick: () => approveDlg(null) }, icon("plus"), "Allow a device") : null),
+      st.learn_until ? h("div", { class: "note" }, `Learning until ${String(st.learn_until).slice(0, 16)}: devices the routers see now are approved by themselves.`) : null,
+      st.on && !st.server_ip ? h("div", { class: "note warn-note" }, "No server IP set: waiting devices get no explanation page. Security → Protection & lists → server IP.") : null,
+      h("div", { class: "muted small" }, "Routers need auto-sync. Approve / deny reaches the router within a minute; turning on / off at its next sync (15 min).")),
+    card(null, null, tabs, ((el) => { el.querySelectorAll?.("table").forEach((x) => x.classList.add("rw-table")); return el; })(table([
+      { label: "Device", render: (x) => h("div", {}, h("b", {}, x.name || x.host || "—"), x.name && x.host ? h("div", { class: "muted small" }, x.host) : null) },
+      { label: "MAC", render: (x) => h("span", {}, h("code", {}, x.mac), x.mac[1] && "26AE".includes(x.mac[1]) ? h("span", { class: "muted small" }, " random") : null) },
+      { label: "IP / router", render: (x) => x.ip ? h("span", {}, x.ip, h("div", { class: "muted small" }, x.router)) : "—" },
+      { label: "Status", render: (x) => x.status === "pending" ? badge("waiting", "warn") : x.status === "denied" ? badge("denied", "bad") : h("span", {}, badge("approved", "ok"), x.how === "learned" ? h("span", { class: "muted small" }, " learned") : null) },
+      { label: "User", render: (x) => x.username ? h("a", { href: `#/users/${encodeURIComponent(x.username)}` }, x.username) : "—" },
+      { label: "Seen", render: (x) => h("span", {}, ago(x.last_seen), h("div", { class: "muted small" }, `first ${ago(x.first_seen)}`)) },
+      { label: "", render: (x) => isAdmin() ? h("div", { class: "row-actions" },
+          x.status !== "approved" ? h("button", { class: "small primary", onclick: () => approveDlg(x) }, "Approve") : h("button", { class: "small", onclick: () => approveDlg(x) }, "Edit"),
+          x.status !== "denied" ? actBtn(x, "deny", "Deny", "small danger") : null,
+          actBtn(x, "forget", "Forget")) : null }], list,
+      tab === "pending" ? (st.on ? "No device is waiting." : "Approval is off — turn it on above.") : "Nothing here.")))));
 };
 
 // ------------------------------------------------------------------ routers
@@ -984,7 +1050,7 @@ const ALERT_EVENTS = [
   ["security", "Virus, hacker attack, DDoS", "only HIGH danger"], ["quarantine", "Device quarantined", "automatic or by an admin"],
   ["router", "Router down / back", "router stops answering (2 checks)"], ["service", "Server service stopped", "FreeRADIUS, database, DNS logger, traffic"],
   ["jobs", "Backup / update failed", "nightly backup, off-site copy, updates"], ["disk", "Disk almost full", "under 10% free"],
-  ["expiring", "Users expiring", "subscription ends within 24 hours"], ["anomaly", "Unusual data use", "a user uses 10x a normal day"], ["requests", "Unblock requests", "a user asks to open a blocked site (block page)"], ["newapp", "New apps", "an app never seen before is used (with Android / iPhone devices)"], ["health", "Health check", "the hourly self-check finds a problem, and when it is fine again"], ["devices", "Devices (SNMP)", "UPS on battery, a device stops answering, printer jam / toner, watched port down"],
+  ["expiring", "Users expiring", "subscription ends within 24 hours"], ["anomaly", "Unusual data use", "a user uses 10x a normal day"], ["requests", "Unblock requests", "a user asks to open a blocked site (block page)"], ["newapp", "New apps", "an app never seen before is used (with Android / iPhone devices)"], ["health", "Health check", "the hourly self-check finds a problem, and when it is fine again"], ["devices", "Devices (SNMP)", "UPS on battery, a device stops answering, printer jam / toner, watched port down"], ["newdev", "New devices", "a new device on the LAN waits for approval"],
   ["summary", "Daily summary", "users, data, sales, security"], ["weekly", "Weekly report", "Monday: top users & apps, this week vs last"],
   ["monthly", "Monthly security report", "1st of the month: PDF by email / Telegram"]];
 const alertsCard = async () => {

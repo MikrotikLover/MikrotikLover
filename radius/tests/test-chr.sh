@@ -173,6 +173,9 @@ if ros '/system package print' | grep -q wireless; then
         tr ';' '\n' <<<"$p" | grep -qxF "$want" && ok "wireless interworking-profile: $want" || bad "wireless interworking-profile: $want (got: ${p:0:300})"
     done
 fi
+# new device approval: after on / answers / off the router holds nothing of it
+n=$(ros ':put ("script=" . [:len [/system script find name=ml-newdev]] . " sched=" . [:len [/system scheduler find name=ml-newdev]] . " fw=" . [:len [/ip firewall filter find comment~"^mlnewdev"]] . " nat=" . [:len [/ip firewall nat find comment~"^mlnewdev"]] . " list=" . [:len [/ip firewall address-list find list=ml-newdev]] . " ls=" . [:len [/ip dhcp-server find where lease-script~"mlNdOne"]])' | tail -1)
+[ "$n" = "script=0 sched=0 fw=0 nat=0 list=0 ls=0" ] && ok "new device approval: on, answers, off — nothing left behind" || bad "new device approval left: $n"
 r=$(ros ':put [:len [/radius find where comment="MikrotikLover RADIUS" and address=10.0.2.2]]')
 [ "${r:-0}" -ge 1 ] && ok "RADIUS client entry present ($r)" || bad "no RADIUS entry"
 e=$(ros '/log print where topics~"error"' | grep -vi 'dhcp\|ntp\|fetch\|login failure' | tail -5)

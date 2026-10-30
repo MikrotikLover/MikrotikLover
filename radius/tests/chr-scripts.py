@@ -15,7 +15,7 @@ import argparse, os, re, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
-import passpoint, routersetup, rosv6  # noqa: E402
+import newdev, passpoint, routersetup, rosv6  # noqa: E402
 
 SERVER, SECRET, COMMUNITY = "10.0.2.2", "ChrTest#Secret1", "chrtestcommunity42"
 # by-hand files: import order (a base before what builds on it); not listed = after these, by name
@@ -74,6 +74,15 @@ def main():
             continue                           # RouterOS 6: setup-wifi already becomes the legacy version
         text = routersetup.build(o, mk, "", ros=a.ros)
         jobs.append((name, text, True, ""))
+    # new device approval (sync.rsc part): on (twice: an update), strict, then off — the server is not reachable
+    # from here, so the router's first check fails and is logged (strict: nothing is waiting yet either)
+    nd_base = "https://radius.chrtest.example:8443/api/public/router"
+    for name, text in (("newdev-on", newdev.router_part(True, nd_base, "K" * 32, SERVER)),
+                       ("newdev-strict", newdev.router_part(True, nd_base, "K" * 32, SERVER, strict=True)),
+                       ("newdev-answer", newdev.reconcile(["192.168.88.50", "192.168.88.51"])),
+                       ("newdev-answer-empty", newdev.reconcile(["192.168.88.51"])),
+                       ("newdev-off", newdev.router_part(False))):
+        jobs.append((name, rosv6.convert(text) if a.ros == "6" else text, name != "newdev-answer", ""))
     if a.sync:
         jobs.append(("server-sync", open(a.sync, encoding="utf-8").read(), False, "sync.rsc from the server"))
     with open(os.path.join(a.out, "list.txt"), "w") as lst:

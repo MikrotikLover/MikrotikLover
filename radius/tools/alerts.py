@@ -11,7 +11,7 @@
   alerts.py log [N]                      last N alerts sent
 Common options: --cnf FILE --db NAME (database), --conf FILE (settings), --state FILE.
 
-Events (EVENTS=, comma separated): security quarantine router service jobs disk expiring anomaly requests newapp health devices summary weekly
+Events (EVENTS=, comma separated): security quarantine router service jobs disk expiring anomaly requests newapp health devices newdev summary weekly
   alerts.py weekly                       this week's report (sent by check on Monday at SUMMARY_HOUR)
   alerts.py monthly [--month YYYY-MM]    security report PDF (sent by check on the 1st at SUMMARY_HOUR)
 Settings live in /etc/mikrotiklover-radius/alerts.conf (root only, mode 600).
@@ -24,8 +24,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # insights.py (
 CONF = "/etc/mikrotiklover-radius/alerts.conf"
 STATE = "/var/lib/mikrotiklover/alerts-state.json"
 UPDATES = "/var/lib/mikrotiklover/updates.txt"
-EVENTS = ("security", "quarantine", "router", "service", "jobs", "disk", "expiring", "anomaly", "requests", "newapp", "health", "devices", "summary", "weekly", "monthly")
-DEFAULT_EVENTS = "security,quarantine,router,service,jobs,disk,anomaly,requests,newapp,health,devices,summary,weekly,monthly"
+EVENTS = ("security", "quarantine", "router", "service", "jobs", "disk", "expiring", "anomaly", "requests", "newapp", "health", "devices",
+          "newdev", "summary", "weekly", "monthly")
+DEFAULT_EVENTS = "security,quarantine,router,service,jobs,disk,anomaly,requests,newapp,health,devices,newdev,summary,weekly,monthly"
 HEALTH = "/var/lib/mikrotiklover/health.json"
 KEYS = {
     "TELEGRAM_TOKEN": r"^\d{3,15}:[A-Za-z0-9_-]{20,100}$",
@@ -109,7 +110,7 @@ def set_values(c, lines):
     return c
 
 
-LEGACY_EVENTS = [e for e in EVENTS if e != "devices"]     # the events before EVENTS_KNOWN was kept
+LEGACY_EVENTS = [e for e in EVENTS if e not in ("devices", "newdev")]     # the events before EVENTS_KNOWN was kept
 
 
 def events(c):
@@ -465,6 +466,20 @@ def check(c, db, state, now=None, ping_fn=ping, running_fn=running, updates=UPDA
                 found.append(("requests", f"🔓 Request #{rid}: {who} wants {host} (policy {pol or '-'})"
                               + (f" — \"{note}\"" if note and note != "NULL" else "")
                               + f". Dashboard → Blocking → Requests, or: radius-admin unblock approve {rid} 1h"))
+        except Exception:                          # noqa: BLE001 — table missing on an old install
+            pass
+    if "newdev" in ev:
+        # a new device waits for approval (radius-admin newdev): tell the admin, once per device
+        try:
+            last = int(state.get("newdev_id", 0))
+            rows = db.rows(f"SELECT id, mac, host, ip, router FROM ml_newdev WHERE id > {last} AND status='pending' ORDER BY id LIMIT 20")
+            if "newdev_id" not in state:
+                rows = []
+                state["newdev_id"] = int(db.rows("SELECT IFNULL(MAX(id),0) FROM ml_newdev")[0][0])
+            for nid, mac, host, ip, router in rows:
+                state["newdev_id"] = max(int(nid), int(state.get("newdev_id", 0)))
+                found.append(("newdev", f"🆕 New device waiting for approval: {host if host and host != 'NULL' else 'no name'} ({mac}, {ip}, router {router})."
+                                        f" Dashboard → New devices, or: radius-admin newdev approve {mac}"))
         except Exception:                          # noqa: BLE001 — table missing on an old install
             pass
     if "newapp" in ev:

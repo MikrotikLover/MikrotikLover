@@ -1455,6 +1455,9 @@ def quarantine_page():
     from html import escape
     ip = client_ip()
     row = None
+    nd = newdev_waiting(ip)                 # a new device waiting for approval (not an infected one)
+    if nd and not q1("SELECT 1 FROM ml_quarantine WHERE released_at IS NULL AND ip=%s", (ip,)):
+        return newdev_page(nd)
     try:
         row = q1("""SELECT q.username, q.ip, q.reason, q.since FROM ml_quarantine q
                     WHERE q.released_at IS NULL AND (q.ip=%s OR q.username IN
@@ -1493,6 +1496,112 @@ def quarantine_page():
     resp = app.response_class(page, mimetype="text/html")
     resp.headers["Cache-Control"] = "no-store"
     return resp
+
+
+# ------------------------------------------------------------------ new device approval (radius-admin newdev)
+@app.post("/api/public/router/newdev")
+def router_newdev():
+    """A router reports its DHCP devices (MAC|IP|HOST lines: every minute all bound leases, or one new lease at once).
+    New MACs become 'pending' ('approved' while learning). Answer: a RouterOS script that makes the router's address
+    list ml-newdev exactly the pending / denied devices of this router."""
+    if not _router_key_ok():
+        abort(403)
+    if (request.content_length or 0) > 262144:
+        abort(413)
+    import newdev
+    rip = client_ip()
+    st = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k IN ('newdev_on', 'newdev_learn_until')")}
+    if st.get("newdev_on") != "1":
+        return app.response_class(newdev.reconcile([]), mimetype="text/plain", headers={"Cache-Control": "no-store"})
+    learning = bool((q1("SELECT %s > NOW() AS l", (st.get("newdev_learn_until") or "2000-01-01",)) or {}).get("l"))
+    with db().cursor() as c:
+        for mac, ip, host in newdev.parse_report(request.get_data(as_text=True)):
+            # the IP moved to this device: the old holder of it on this router is no longer there
+            c.execute("UPDATE ml_newdev SET ip='' WHERE router=%s AND ip=%s AND mac<>%s", (rip, ip, mac))
+            c.execute("""INSERT INTO ml_newdev (mac, status, host, ip, router, how, decided_by, decided_at)
+                         VALUES (%s, %s, %s, %s, %s, %s, %s, IF(%s, NOW(), NULL))
+                         ON DUPLICATE KEY UPDATE ip=VALUES(ip), router=VALUES(router), last_seen=NOW(),
+                           host=IF(VALUES(host)<>'', VALUES(host), host)""",
+                      (mac, "approved" if learning else "pending", host, ip, rip, "learned" if learning else "",
+                       "learning" if learning else "", learning))
+    ips = [r["ip"] for r in q("""SELECT ip FROM ml_newdev WHERE router=%s AND status IN ('pending','denied') AND ip<>''
+                                 AND last_seen > NOW() - INTERVAL 1 DAY""", (rip,))]
+    return app.response_class(newdev.reconcile(ips), mimetype="text/plain", headers={"Cache-Control": "no-store"})
+
+
+def newdev_waiting(ip):
+    """the device row when this IP is a device waiting for approval (or denied)"""
+    try:
+        return q1("""SELECT mac, status, host, first_seen FROM ml_newdev WHERE ip=%s AND status IN ('pending','denied')
+                     AND last_seen > NOW() - INTERVAL 1 DAY ORDER BY last_seen DESC LIMIT 1""", (ip,))
+    except pymysql.MySQLError:
+        return None
+
+
+def newdev_page(row):
+    from html import escape
+    try:
+        st = settings_get()
+    except pymysql.MySQLError:
+        st = {}
+    brand, contact = st.get("brand") or "Wi-Fi", st.get("contact") or ""
+    denied = row["status"] == "denied"
+    head = "Is device ko network istemal karne ki ijazat nahi" if denied else "Aap ka device manzoori (approval) ka intezar kar raha hai"
+    text = ("Admin ne is device ko mana kar diya hai." if denied else
+            "Is network par har naya device admin ki manzoori ke baad hi internet istemal kar sakta hai. "
+            "Admin ko khabar mil gayi hai — manzoori ke ek minute ke andar internet khud chal parega.")
+    en = ("The admin did not allow this device." if denied else
+          "Every new device on this network needs the admin's approval. The admin has been told; "
+          "about a minute after approval the internet works by itself.")
+    page = f"""<!doctype html><html lang="ur-Latn"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark">
+<title>Manzoori ka intezar — {escape(brand)}</title><link rel="stylesheet" href="/static/quarantine.css"></head>
+<body><main class="wrap">
+<div class="card"><div class="icon" aria-hidden="true">{'!' if denied else '…'}</div>
+<h1>{head}</h1><p>{text}</p><p class="muted">{en}</p>
+<div class="kv"><b>Device</b><span>{escape(row.get("host") or "—")}</span><b>MAC</b><span>{escape(row["mac"])}</span>
+<b>Since</b><span>{escape(str(row["first_seen"])[:16])}</span></div></div>
+<div class="card"><h2>Rabta (contact)</h2><p class="contact">{escape(contact) if contact else "Network admin"}</p>
+<p class="muted">Admin ko upar wala MAC batayein. Phone par "Private / random MAC" on ho to har Wi-Fi par naya MAC hota hai.</p></div>
+</main></body></html>"""
+    resp = app.response_class(page, mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.get("/api/newdev")
+@login_required()
+def newdev_info():
+    ok, out = radius_admin(["newdev", "json"], log=False, timeout=30)
+    try:
+        st = json.loads(out) if ok else {}
+    except ValueError:
+        st = {}
+    rows = jsonable(q("""SELECT mac, status, name, username, host, ip, router, how, first_seen, last_seen, decided_by, decided_at
+                         FROM ml_newdev ORDER BY FIELD(status,'pending','denied','approved'), last_seen DESC LIMIT 2000"""))
+    return jsonify(settings=st, devices=rows)
+
+
+@app.post("/api/newdev/<action>")
+@login_required("admin")
+def newdev_action(action):
+    data = body()
+    if action in ("on", "off", "approve-all"):
+        args = ["newdev", action]
+        if action == "on":
+            args += ["--learn", str(body_int(data, "learn", 24, 0, 720))]
+        return result(*radius_admin(args, timeout=300))
+    if action == "strict":
+        return result(*radius_admin(["newdev", "strict", "on" if data.get("on") else "off"], timeout=300))
+    if action not in ("approve", "deny", "forget", "add"):
+        abort(404)
+    mac = field(data, "mac", MAC_RE, required=True, maxlen=17)
+    args = ["newdev", action, mac]
+    if action in ("approve", "add"):
+        name = field(data, "name", re.compile(r"^[A-Za-z0-9 ._()+'-]{1,64}$"), maxlen=64)
+        user = field(data, "user", NAME_RE)
+        args += (["-n", name] if name else []) + (["-u", user] if user else [])
+    return result(*radius_admin(args))
 
 
 @app.get("/connect")
