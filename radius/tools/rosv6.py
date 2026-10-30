@@ -4,7 +4,8 @@ r"""RouterOS 7 script -> RouterOS 6 script (the same rules, the v6 way). RouterO
 RouterOS 6 stops a whole /import at a line it cannot read (a property or menu it does not know is a syntax error,
 which :do / on-error does not catch), so the server makes a v6 copy of every router file instead of hoping:
 
-  /ip dns static ... match-subdomain=yes type=NXDOMAIN   ->  regexp="(^|\\.)name\$" address=0.0.0.0
+  /ip dns static ... match-subdomain=yes type=NXDOMAIN   ->  regexp="(^|\\.)name\$" type=NXDOMAIN
+                                                              (not address=0.0.0.0: RouterOS 6.49 refuses it - CHR test)
   /ip dns static ... match-subdomain=yes                 ->  regexp="(^|\\.)name\$"   (type=FWD needs 6.47+)
   ... type=FWD forward-to=... address-list=L              ->  the addresses of that name and its sub-names, as the
                                                               server's DNS log and its own lookup saw them, put in
@@ -79,7 +80,6 @@ def _dns_line(line, resolve):
         return out
     new = re.sub(r"\bname=(\"[^\"]+\"|\S+)\s*", "", line)
     new = new.replace("match-subdomain=yes", f'regexp="{rx}"')
-    new = re.sub(r"\btype=NXDOMAIN\b", "address=0.0.0.0", new)
     new = re.sub(r"\s+address-list=\S+|\s+address-list-timeout=\S+", "", new)
     return [new]
 

@@ -121,10 +121,17 @@ printf '%s\n' "$SETUP" > "$WORK/00-base.rsc"; put "$WORK/00-base.rsc"
 GEN=$WORK/gen
 python3 -I "$HERE/chr-scripts.py" "$GEN" --ros "$ROS" ${SYNC:+--sync "$SYNC"} || { bad "making the scripts"; exit 1; }
 put "$GEN"/*.rsc
+logerr() { ros ':put [:len [/log find where topics~"error" and topics~"script"]]' | tail -1; }
 import_one() { # FILE -> 0 when RouterOS ran it to the end
-    local out; out=$(ros "/import file-name=$1 verbose=no")
+    # RouterOS 7 says "executed successfully"; RouterOS 6 says nothing over SSH and puts the error in the log
+    local out before after; before=$(logerr)
+    out=$(ros "/import file-name=$1 verbose=no")
     if grep -q 'executed successfully' <<<"$out"; then return 0; fi
-    printf '%s\n' "$out" | grep -v '^\s*$' | tail -3 | sed 's/^/         /'; return 1
+    after=$(logerr)
+    if [ "$ROS" = 6 ] && [ -z "$(grep -v '^\s*$' <<<"$out")" ] && [ "$after" = "$before" ]; then return 0; fi
+    printf '%s\n' "$out" | grep -v '^\s*$' | tail -3 | sed 's/^/         /'
+    [ "$after" = "$before" ] || ros '/log print where topics~"error" and topics~"script"' | tail -$(( after - before > 3 ? 3 : after - before )) | sed 's/^/         /'
+    return 1
 }
 import_one 00-base.rsc && ok "home-router base set up" || bad "home-router base"
 while read -r f strict; do

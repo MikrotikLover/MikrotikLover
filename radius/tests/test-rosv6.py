@@ -48,7 +48,7 @@ add name=router.lan address=10.0.0.1
 """
 ips = {"whatsapp.net": ["157.240.1.53", "157.240.1.60", "10.0.0.9", "2a03:2880::1", "bad"]}
 v6 = rosv6.convert(v7, lambda n: ips.get(n, []))
-t("blocked name -> regexp + 0.0.0.0", 'add address=0.0.0.0 regexp="(^|\\\\.)youtube\\\\.com\\$" comment="wf"' in v6, v6)
+t("blocked name -> regexp + NXDOMAIN (RouterOS 6.49 refuses address=0.0.0.0)", 'add type=NXDOMAIN regexp="(^|\\\\.)youtube\\\\.com\\$" comment="wf"' in v6 and "0.0.0.0" not in v6, v6)
 t("forwarded name -> regexp, forward kept", 'add regexp="(^|\\\\.)googlevideo\\\\.com\\$" type=FWD forward-to=1.1.1.1 comment="wf"' in v6, v6)
 t("name -> address list: the server puts in the public IPv4 addresses it saw",
   v6.count("address-list add list=mlname-wa address=157.240.1.") == 2 and "10.0.0.9" not in v6 and "2a03" not in v6, v6)
