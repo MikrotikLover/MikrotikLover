@@ -3,7 +3,8 @@
 band hai?") and Claude answers in Roman Urdu, looking things up with READ-ONLY tools of this server. No tool can change
 anything (no block, kick, policy, user or router change) — it can only read the database and the read-only reports.
 
-  assistant.py ask < {"question": "...", "history": [{"q": "...", "a": "..."}]}     -> {"answer", "tools", "usage"}
+  assistant.py ask < {"question": "...", "history": [{"q": "...", "a": "..."}], "provider": "claude|gemini|ollama",
+                      "model": "...", "url": "http://ollama:11434"}                     -> {"answer", "tools", "usage"}
   assistant.py tools                                                                the tool list (JSON)
 
 Runs as root through radius-admin (it needs the API key in /etc/mikrotiklover-radius/anthropic.key and the database).
@@ -236,38 +237,48 @@ def find_user(text: str) -> str:
 TOOLS = [top_users_for, user_report, why_blocked, blocked_attempts, security_events, health_check, online_now, top_sites, find_user]
 
 
-# ------------------------------------------------------------------ Claude
-def ask(question, history=(), model=MODEL, effort="medium"):
-    import anthropic
-    from anthropic import beta_tool
-    used = []
+# ------------------------------------------------------------------ the model: Claude, Gemini or a local one (Ollama)
+GEMINI_KEYF = "/etc/mikrotiklover-radius/gemini.key"
+PROVIDERS = {"claude": "claude-opus-5-5", "gemini": "gemini-2.5-flash", "ollama": "llama3.1:8b"}
 
+
+def _tracked(used):
+    """the tools, each one noting its call (shown on the dashboard) and turning errors into a reason for the model"""
     import functools
 
     def wrap(fn):
-        @functools.wraps(fn)              # same name, docstring, types -> the same tool schema
+        @functools.wraps(fn)              # same name, docstring, types -> the same tool schema for every provider
         def run(**kw):
             used.append({"tool": fn.__name__, "input": kw})
             try:
                 return fn(**kw)
             except Exception as e:  # noqa: BLE001 — the model gets the reason and can try again
                 return f"Error: {e}"
-        return beta_tool(run)
+        return run
+    return [wrap(f) for f in TOOLS]
 
-    key = open(KEYF).read().strip()
-    client = anthropic.Anthropic(api_key=key, timeout=120.0, max_retries=2)
-    msgs = []
-    for h in list(history)[-6:]:                   # the last few questions and answers, as text
+
+def _turns(question, history):
+    """earlier questions and answers (text) + the question with the server's time"""
+    out = []
+    for h in list(history)[-6:]:
         if h.get("q") and h.get("a"):
-            msgs += [{"role": "user", "content": str(h["q"])[:2000]}, {"role": "assistant", "content": str(h["a"])[:4000]}]
+            out += [("user", str(h["q"])[:2000]), ("assistant", str(h["a"])[:4000])]
     now = dt.datetime.now().strftime("%A %Y-%m-%d %H:%M")
-    msgs.append({"role": "user", "content": f"{question}\n\n(server time now: {now})"})
+    return out + [("user", f"{question}\n\n(server time now: {now})")]
+
+
+def ask_claude(question, history, model, effort="medium", **_):
+    import anthropic
+    from anthropic import beta_tool
+    used = []
+    client = anthropic.Anthropic(api_key=open(KEYF).read().strip(), timeout=120.0, max_retries=2)
     runner = client.beta.messages.tool_runner(
         model=model, max_tokens=16000, max_iterations=12,
         system=[{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}],
         output_config={"effort": effort},
         betas=["server-side-fallback-2026-07-01"], fallbacks="default",
-        tools=[wrap(f) for f in TOOLS], messages=msgs)
+        tools=[beta_tool(f) for f in _tracked(used)], messages=[{"role": r, "content": c} for r, c in _turns(question, history)])
     final = runner.until_done()
     if final.stop_reason == "refusal":
         answer = "Maaf kijiye, is sawal ka jawab nahi de sakta. Sawal thora badal kar poochein."
@@ -276,6 +287,83 @@ def ask(question, history=(), model=MODEL, effort="medium"):
     u = final.usage
     return {"answer": answer, "tools": used, "model": final.model,
             "usage": {"input": u.input_tokens, "output": u.output_tokens, "cache_read": getattr(u, "cache_read_input_tokens", 0) or 0}}
+
+
+def ask_gemini(question, history, model, **_):
+    """Google Gemini (official google-genai SDK); it calls the same Python tools itself (automatic function calling)"""
+    import logging
+    import warnings
+    warnings.filterwarnings("ignore")
+    logging.getLogger("google_genai").setLevel(logging.ERROR)     # its notes go to the log, not into the answer
+    from google import genai
+    from google.genai import types
+    used = []
+    base = os.environ.get("ML_GEMINI_BASE_URL")            # tests only
+    client = genai.Client(api_key=open(GEMINI_KEYF).read().strip(),
+                          http_options=types.HttpOptions(timeout=120000, **({"base_url": base} if base else {})))
+    contents = [types.Content(role="user" if r == "user" else "model", parts=[types.Part(text=c)]) for r, c in _turns(question, history)]
+    resp = client.models.generate_content(model=model, contents=contents, config=types.GenerateContentConfig(
+        system_instruction=SYSTEM, tools=_tracked(used), max_output_tokens=8000,
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(maximum_remote_calls=12)))
+    u = resp.usage_metadata
+    return {"answer": (resp.text or "").strip() or "(no answer)", "tools": used, "model": model,
+            "usage": {"input": getattr(u, "prompt_token_count", 0) or 0, "output": getattr(u, "candidates_token_count", 0) or 0, "cache_read": 0}}
+
+
+def tool_schema(fn):
+    """an OpenAI / Ollama style function description from the tool's types and docstring"""
+    import inspect
+    doc = fn.__doc__ or ""
+    about = doc.split("\n\n")[0].replace("\n", " ").strip()
+    args = dict(re.findall(r"^\s+(\w+): (.+)$", doc.split("Args:", 1)[1], re.M)) if "Args:" in doc else {}
+    props, req = {}, []
+    for name, p in inspect.signature(fn).parameters.items():
+        props[name] = {"type": "integer" if p.annotation is int else "string", "description": args.get(name, name)}
+        if p.default is inspect.Parameter.empty:
+            req.append(name)
+    return {"type": "function", "function": {"name": fn.__name__, "description": about,
+                                             "parameters": {"type": "object", "properties": props, "required": req}}}
+
+
+def ask_ollama(question, history, model, url="http://127.0.0.1:11434", **_):
+    """a local model through Ollama (nothing leaves the network); its tool calls run here, up to 12 rounds"""
+    import urllib.request
+    used = []
+    tools = {f.__name__: f for f in _tracked(used)}
+    msgs = [{"role": "system", "content": SYSTEM}] + [{"role": r, "content": c} for r, c in _turns(question, history)]
+    spec = [tool_schema(f) for f in TOOLS]
+    tin = tout = 0
+    for _round in range(12):
+        req = urllib.request.Request(url.rstrip("/") + "/api/chat", method="POST", headers={"Content-Type": "application/json"},
+                                     data=json.dumps({"model": model, "messages": msgs, "tools": spec, "stream": False}).encode())
+        with urllib.request.urlopen(req, timeout=300) as r:
+            d = json.loads(r.read())
+        tin += d.get("prompt_eval_count", 0) or 0
+        tout += d.get("eval_count", 0) or 0
+        m = d.get("message") or {}
+        calls = m.get("tool_calls") or []
+        msgs.append({"role": "assistant", "content": m.get("content", ""), **({"tool_calls": calls} if calls else {})})
+        if not calls:
+            return {"answer": (m.get("content") or "").strip() or "(no answer)", "tools": used, "model": model,
+                    "usage": {"input": tin, "output": tout, "cache_read": 0}}
+        for c in calls:
+            f = c.get("function") or {}
+            fn = tools.get(f.get("name"))
+            argsd = f.get("arguments") or {}
+            if isinstance(argsd, str):
+                try:
+                    argsd = json.loads(argsd)
+                except ValueError:
+                    argsd = {}
+            out = fn(**{k: v for k, v in argsd.items() if isinstance(k, str)}) if fn else f"Error: no tool {f.get('name')}"
+            msgs.append({"role": "tool", "tool_name": f.get("name", ""), "content": str(out)})
+    return {"answer": "(the model kept asking for data — try a simpler question)", "tools": used, "model": model,
+            "usage": {"input": tin, "output": tout, "cache_read": 0}}
+
+
+def ask(question, history=(), provider="claude", model="", effort="medium", url=""):
+    fn = {"claude": ask_claude, "gemini": ask_gemini, "ollama": ask_ollama}[provider]
+    return fn(question, history, model or PROVIDERS[provider], effort=effort, **({"url": url} if url else {}))
 
 
 def main():
@@ -291,16 +379,31 @@ def main():
         question = str(req.get("question", "")).strip()[:2000]
         if not question:
             raise ValueError("question missing")
-        model = req.get("model") or MODEL
-        if not re.match(r"^claude-[a-z0-9-]{3,40}$", model):
+        provider = req.get("provider") or "claude"
+        if provider not in PROVIDERS:
+            raise ValueError("provider: claude, gemini or ollama")
+        model = req.get("model") or PROVIDERS[provider]
+        if not re.match(r"^[A-Za-z0-9._:/-]{2,80}$", model):
             raise ValueError("bad model name")
+        url = req.get("url") or ""
+        if url and not re.match(r"^https?://[A-Za-z0-9.-]{1,120}(:\d{1,5})?/?$", url):
+            raise ValueError("bad Ollama address")
         effort = req.get("effort") if req.get("effort") in ("low", "medium", "high") else "medium"
-        print(json.dumps(ask(question, req.get("history") or [], model, effort)))
+        print(json.dumps(ask(question, req.get("history") or [], provider, model, effort, url)))
         return 0
     except Exception as e:  # noqa: BLE001 — one line for the dashboard
         name = e.__class__.__name__
+        text = str(e)
         msg = {"AuthenticationError": "the API key was refused (Settings → AI assistant)", "RateLimitError": "too many questions right now, try again in a minute",
-               "APIConnectionError": "Claude API not reachable from this server (internet / firewall)", "FileNotFoundError": "no API key yet (Settings → AI assistant)"}.get(name, str(e)[:300])
+               "APIConnectionError": "Claude API not reachable from this server (internet / firewall)", "FileNotFoundError": "no API key yet (Settings → AI assistant)",
+               "ModuleNotFoundError": "the Python SDK for this AI is missing on the server — run install.sh again",
+               "URLError": "the local model (Ollama) is not answering — is it running at the address in Settings?",
+               "ConnectionRefusedError": "the local model (Ollama) is not answering — is it running at the address in Settings?"}.get(name)
+        if not msg and name in ("ClientError", "APIError") and re.search(r"\b(400|401|403)\b.*(API key|API_KEY|PERMISSION|UNAUTHENTICATED)|API key not valid", text, re.I):
+            msg = "the API key was refused (Settings → AI assistant)"
+        if not msg and name == "HTTPError" and "404" in text:
+            msg = "the local model is not installed in Ollama (ollama pull MODEL)"
+        msg = msg or text[:300]
         print(json.dumps({"error": msg}))
         return 1
 

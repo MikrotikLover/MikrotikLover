@@ -239,7 +239,17 @@ Dashboard ab phone par **app ki tarah** install hota hai (apna icon, poori scree
 
 Dashboard → **Ask (AI)**. Sawal apni zubaan mein: *"kal sab se zyada YouTube kis ne chalaya?"*, *"Ali ka internet kyun band hai?"*, *"is hafte koi virus aaya?"* — jawab Roman Urdu mein, server ke data se.
 
-- **Kaun jawab deta hai:** Claude (Anthropic API, model `claude-opus-5-5`, official Python SDK). Pehli dafa API key daalein (console.anthropic.com → API keys); har sawal ki choti qeemat aap ke Anthropic account par.
+- **Kaun jawab deta hai — teen mein se ek chunein** (Ask (AI) page par, ya baad mein **Provider** button):
+
+  | Provider | Kya chahiye | Data kahan jata hai | Qeemat |
+  |---|---|---|---|
+  | **Claude** (Anthropic, `claude-opus-5-5`) | API key — console.anthropic.com | Anthropic | har sawal ki choti qeemat |
+  | **Gemini** (Google, `gemini-2.5-flash`) | API key — aistudio.google.com | Google | free tier bhi hai |
+  | **Local model** (Ollama, `llama3.1:8b` / `qwen2.5:7b` …) | Ollama ka address | kahin nahi — network ke andar | muft; achi GPU ya 16 GB RAM |
+
+  - Claude sab se samajhdar jawab deta hai. Local model dheere aur kam samajhdar, lekin data bahar nahi jata.
+  - Local model ke liye: Ollama install karein (isi server par ya kisi GPU wale PC par), `ollama pull llama3.1:8b`. Doosri machine ho to wahan `OLLAMA_HOST=0.0.0.0`.
+  - Model har provider ka alag yaad rehta hai (`radius-admin ai model NAME` sirf chuni hui provider ka badalta hai).
 - **Sirf parh sakta hai — 9 tools:**
   - app / site ke top users;
   - user ki poori report (plan, expiry, data / waqt baqi, RADIUS kyun mana kar raha hai, online, quarantine, aakhri blocks);
@@ -252,18 +262,26 @@ Dashboard → **Ask (AI)**. Sawal apni zubaan mein: *"kal sab se zyada YouTube k
   - user dhoondna.
 
   Koi tool kuch badal nahi sakta (database session bhi read-only). Badalna ho to woh page / command bata deta hai.
-- **Kya bahar jata hai:** sawal, aur us ke liye zaroori data (naam, sites, MB) Anthropic ko jata hai.
-- **Kahan rehti hai key:** API key sirf root ki file mein (`/etc/mikrotiklover-radius/anthropic.key`).
-- **CLI:** `radius-admin ai status|on|off|model|effort`, `echo KEY | radius-admin ai key`, `echo '{"question":"aaj kaun online hai?"}' | radius-admin ai ask`
-- **Test:** `tests/test-ai.sh` — nakli Claude API ke saath:
+- **Kya bahar jata hai:** sawal, aur us ke liye zaroori data (naam, sites, MB) — Claude ho to Anthropic ko, Gemini ho to Google ko, local model ho to kahin nahi.
+- **Kahan rehti hai key:** sirf root ki file mein (`/etc/mikrotiklover-radius/anthropic.key`, `gemini.key`). Backup server ki join file mein dono saath jati hain.
+- **CLI:**
+  - `radius-admin ai status|on|off|effort`
+  - `radius-admin ai provider claude|gemini|ollama`, `radius-admin ai model NAME`
+  - `echo KEY | radius-admin ai key` (Claude), `echo KEY | radius-admin ai gemini-key`
+  - `radius-admin ai ollama http://192.168.88.20:11434 qwen2.5:7b`
+  - `echo '{"question":"aaj kaun online hai?"}' | radius-admin ai ask`
+- **Test:** `tests/test-ai.sh` (34) — nakli Claude, Gemini aur Ollama API ke saath:
   - request (model, refusal fallback, effort, Roman Urdu system prompt + cache, 9 tools);
   - tool loop asli data se;
   - ghalat tool input mana;
   - read-only DB;
   - API key ki ghalti saaf alfaaz mein;
+  - Gemini: function calling loop, model, key header, ghalat key;
+  - Ollama: tool loop, typed tool parameters, Ollama band ho to saaf message;
+  - provider / model badalna;
   - dashboard API.
 
-  Asli Claude API se is sandbox mein nahi chalaya (key nahi).
+  Asli Claude / Gemini API ya asli Ollama se is sandbox mein nahi chalaya (key / GPU nahi).
 
 ## 4e. Doosra RADIUS server (backup)
 

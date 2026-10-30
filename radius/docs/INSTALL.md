@@ -340,7 +340,7 @@ Install ke baad yeh sab **band** ya default par hote hain. Jo chahiye, on karein
 | Asli certificate (Let's Encrypt) — Android par certificate install nahi, dashboard "Not secure" nahi | Settings → Certificate for phones | `radius-admin cert letsencrypt wifi.company.com --email E --http\|--cloudflare` · `cert status` · `cert import FULLCHAIN KEY` · `cert own` |
 | Hotspot login page phone khud khole (captive portal API, DHCP option 114) — public certificate ke baad | Settings → Certificate for phones → switch (default on) | `radius-admin captive status\|on\|off` |
 | Dashboard phone par app + alerts notification ki tarah (PWA, Web Push) | Settings → Phone app & notifications | `radius-admin push list\|test\|del ID` |
-| Network se poochho (AI, Roman Urdu, sirf parhta hai) | Ask (AI) → API key | `radius-admin ai status` · `echo KEY \| radius-admin ai key` |
+| Network se poochho (AI, Roman Urdu, sirf parhta hai) | Ask (AI) → Claude / Gemini / Local model (Ollama) chunein → key ya address | `radius-admin ai status` · `echo KEY \| radius-admin ai key` · `echo KEY \| radius-admin ai gemini-key` · `radius-admin ai ollama http://IP:11434 MODEL` |
 | Doosra RADIUS server (backup), database dono taraf copy | Settings → Backup RADIUS server | `radius-admin ha start BACKUP-IP` · backup par `ha join FILE` · phir `ha link` · `ha status` |
 | WPA-Enterprise users ki policy bina VLAN (MAC → IP: DHCP, phir ARP) | Blocking → Overview → "Wi-Fi users: policy by MAC" (default on) | `radius-admin wifipolicy status|on|off|list` |
 | Inline IPS (pehla packet ruke) + khud bypass agar Suricata band / atke | Security → Intrusion prevention → Mode → Inline | `radius-admin ips inline on eth1 eth2` · `ips inline drop` · `ips bypass on|off` · `ips inline off` |

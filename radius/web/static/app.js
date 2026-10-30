@@ -2241,18 +2241,56 @@ const aiSave = () => { try { sessionStorage.setItem("mlAiChat", JSON.stringify(a
 // the answer as text: line breaks kept, **bold** shown bold (no HTML from the answer is ever inserted)
 const aiText = (t) => h("div", { class: "ai-text" }, ...t.split("\n").map((line) => h("div", {}, ...line.split(/(\*\*[^*]+\*\*)/).map((p) => p.startsWith("**") && p.endsWith("**") ? h("b", {}, p.slice(2, -2)) : p))));
 
+const AI_PROVIDERS = {
+  claude: { name: "Claude (Anthropic)", note: "Sab se samajhdar jawab. Har sawal ki choti si qeemat API account par; sawal aur zaroori data Anthropic ko jata hai." },
+  gemini: { name: "Gemini (Google)", note: "Google AI Studio ki key; free tier mein bhi chalta hai. Sawal aur zaroori data Google ko jata hai." },
+  ollama: { name: "Local model (Ollama)", note: "Apne server / PC par chalne wala model — koi data network se bahar nahi jata, koi qeemat nahi. Achi GPU ya 16 GB RAM chahiye; jawab dheere aur kam samajhdar." },
+};
+// choose the provider and give it what it needs (a key, or the Ollama address); done() after saving
+function aiSetup(st, done) {
+  let pick = st.provider || "claude";
+  const box = h("div", { class: "stack" });
+  const draw = () => {
+    const p = AI_PROVIDERS[pick];
+    let fields, save;
+    if (pick === "claude") {
+      const key = h("input", { type: "password", placeholder: st.ready.claude ? "saved — leave empty to keep" : "sk-ant-…", autocomplete: "off", required: !st.ready.claude, pattern: "sk-ant-[A-Za-z0-9_-]{10,200}" });
+      fields = [h("label", { class: "field" }, "Anthropic API key (console.anthropic.com → API keys)", key)];
+      save = () => key.value.trim() ? api("POST", "/api/ai/key", { key: key.value.trim() }) : api("POST", "/api/ai/provider", { provider: "claude" });
+    } else if (pick === "gemini") {
+      const key = h("input", { type: "password", placeholder: st.ready.gemini ? "saved — leave empty to keep" : "AIza…", autocomplete: "off", required: !st.ready.gemini, pattern: "[A-Za-z0-9_-]{30,100}" });
+      fields = [h("label", { class: "field" }, "Gemini API key (aistudio.google.com → Get API key)", key)];
+      save = () => key.value.trim() ? api("POST", "/api/ai/gemini-key", { key: key.value.trim() }) : api("POST", "/api/ai/provider", { provider: "gemini" });
+    } else {
+      const url = h("input", { value: st.ollama_url || "http://127.0.0.1:11434", required: true, pattern: "https?://[A-Za-z0-9.\\-]{1,120}(:[0-9]{1,5})?/?" });
+      const model = h("input", { value: (st.models && st.models.ollama) || "llama3.1:8b", required: true, pattern: "[A-Za-z0-9._:\\/\\-]{2,80}" });
+      fields = [h("label", { class: "field" }, "Ollama address (the PC / server running it)", url),
+        h("label", { class: "field" }, "Model (one that knows tools: llama3.1:8b, qwen2.5:7b …)", model),
+        h("div", { class: "muted small" }, "Wahan pehle: ollama pull " + ((st.models && st.models.ollama) || "llama3.1:8b") + " — aur agar doosri machine hai to OLLAMA_HOST=0.0.0.0")];
+      save = () => api("POST", "/api/ai/ollama", { url: url.value.trim(), model: model.value.trim() });
+    }
+    const form = h("form", { class: "form", onsubmit: async (e) => {
+      e.preventDefault();
+      if (form.reportValidity() && await act(save().then((r) => r.ok === false ? r : api("POST", "/api/ai/on")), "AI assistant: " + p.name)) done();
+    } }, ...fields, h("div", { class: "muted small" }, p.note), h("button", { class: "primary" }, "Save and turn on"));
+    box.replaceChildren(
+      h("div", { class: "chips" }, ...Object.entries(AI_PROVIDERS).map(([k, v]) =>
+        h("button", { type: "button", class: "chip" + (k === pick ? " on" : ""), "aria-pressed": String(k === pick), onclick: () => { pick = k; draw(); } }, v.name))),
+      form);
+  };
+  draw();
+  return box;
+}
+
 ROUTES.ask = async () => {
   aiChat = aiLoad();                       // this tab's conversation so far
   const st = await api("GET", "/api/ai");
   if (!st.on) {
-    const key = h("input", { type: "password", placeholder: "sk-ant-…", autocomplete: "off", required: true, pattern: "sk-ant-[A-Za-z0-9_-]{10,200}" });
-    const form = h("form", { class: "form", onsubmit: async (e) => { e.preventDefault(); if (form.reportValidity() && await act(api("POST", "/api/ai/key", { key: key.value.trim() }), "AI assistant on")) route(); } },
-      h("label", { class: "field" }, "Anthropic API key (console.anthropic.com → API keys)", key), h("button", { class: "primary" }, "Turn on"));
     return shell("Ask (AI)", h("div", { class: "stack" }, card("Network se poochho", "an AI assistant for your network",
       h("div", { class: "stack" },
         h("div", {}, "Sawal apni zubaan mein likhein — jaise ", h("i", {}, "\"kal sab se zyada YouTube kis ne chalaya?\""), " — jawab Roman Urdu mein, server ke data se."),
-        h("div", { class: "muted small" }, "Claude (Anthropic) jawab deta hai. Woh sirf parh sakta hai: usage, users, blocks, security, health. Kuch badal nahi sakta. Har sawal ki choti si qeemat API account par lagti hai; sawal aur us ke jawab ke liye zaroori data Anthropic ko jata hai."),
-        st.sdk ? (isAdmin() ? form : null) : h("div", { class: "muted" }, "The Claude Python SDK is missing on the server — run install.sh again.")))));
+        h("div", { class: "muted small" }, "AI sirf parh sakta hai: usage, users, blocks, security, health. Kuch badal nahi sakta."),
+        st.sdk ? (isAdmin() ? aiSetup(st, () => route()) : null) : h("div", { class: "muted" }, "The AI Python SDK is missing on the server — run install.sh again.")))));
   }
   const list = h("div", { class: "ai-chat" });
   const q = h("textarea", { rows: 2, placeholder: "Sawal likhein… (Enter = bhejein)", maxlength: 2000 });
@@ -2282,11 +2320,12 @@ ROUTES.ask = async () => {
   q.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
   draw();
   shell("Ask (AI)", h("div", { class: "stack" },
-    card("Network se poochho", "Claude, read-only",
+    card("Network se poochho", (AI_PROVIDERS[st.provider] || AI_PROVIDERS.claude).name + " · " + st.model + ", read-only",
       h("div", { class: "stack" }, list,
         h("div", { class: "ai-ask" }, q, btn),
         h("div", { class: "chips" }, ...AI_EXAMPLES.map((x) => h("button", { class: "chip small", onclick: () => send(x) }, x))),
         h("div", { class: "toolbar" }, h("span", { class: "muted small grow" }, "Jawab server ke data se banta hai; ahem faisle se pehle dashboard par dekh lein."),
+          isAdmin() ? h("button", { class: "small", onclick: () => { const d = dialog("AI provider", aiSetup(st, () => { d.close(); route(); }), [{ label: "Close" }]); } }, "Provider") : null,
           aiChat.length ? h("button", { class: "small", onclick: () => { aiChat = []; aiSave(); draw(); } }, "Clear") : null)))));
 };
 

@@ -44,6 +44,9 @@ apt-get install -y -qq snmp >/dev/null 2>&1 || warn "net-snmp tools not availabl
 if apt-get install -y -qq python3-venv >/dev/null 2>&1 && { [ -x /opt/mikrotiklover/venv/bin/python ] || python3 -m venv --system-site-packages /opt/mikrotiklover/venv; } \
    && /opt/mikrotiklover/venv/bin/pip install -q --upgrade 'anthropic>=2,<3' >/dev/null 2>&1; then :
 else warn "Claude Python SDK not installed (no internet to pypi?): the AI assistant stays off — run install.sh again later"; fi
+# Gemini (Google) as the other choice; a local model (Ollama) needs no SDK
+[ ! -x /opt/mikrotiklover/venv/bin/pip ] || /opt/mikrotiklover/venv/bin/pip install -q --upgrade 'google-genai>=1,<3' >/dev/null 2>&1 \
+   || warn "Gemini Python SDK not installed: Claude and a local model (Ollama) still work"
 apt-get install -y -qq lego >/dev/null 2>&1 || warn "lego not available: Let's Encrypt certificate cannot be fetched here (radius-admin cert import still works)"
 [ -d "$RADDB" ] || die "$RADDB not found — unexpected FreeRADIUS layout"
 

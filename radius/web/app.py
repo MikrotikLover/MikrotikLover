@@ -4707,13 +4707,24 @@ def ha_start():
 
 
 # ------------------------------------------------------------------ "Network se poochho" (AI assistant, read-only tools)
+AI_MODELS = {"claude": "claude-opus-5-5", "gemini": "gemini-2.5-flash", "ollama": "llama3.1:8b"}
 @app.get("/api/ai")
 @login_required("admin")
 def ai_get():
-    st = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k IN ('ai_on','ai_model','ai_effort')")}
-    ok, out = radius_admin(["ai", "status"], log=False, timeout=30)
-    return jsonify(on=st.get("ai_on") == "1" and "API key      : set" in out, has_key="API key      : set" in out,
-                   sdk="Python SDK   : missing" not in out, model=st.get("ai_model") or "claude-opus-5-5", effort=st.get("ai_effort") or "medium")
+    st = {r["k"]: r["v"] for r in q("SELECT k, v FROM ml_setting WHERE k LIKE 'ai\\_%'")}
+    ok, out = radius_admin(["ai", "json"], log=False, timeout=30)
+    try:
+        js = json.loads(out.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        js = {}
+    provider = js.get("provider") if js.get("provider") in AI_MODELS else "claude"
+    ready = {p: bool((js.get("ready") or {}).get(p)) for p in AI_MODELS}
+    model = st.get(f"ai_model_{provider}") or (st.get("ai_model") if provider == "claude" and (st.get("ai_model") or "").startswith("claude") else "") \
+        or AI_MODELS[provider]
+    return jsonify(on=bool(js.get("on")), provider=provider, ready=ready,
+                   has_key=ready[provider], sdk=bool(js.get("sdk")), model=model,
+                   models={p: st.get(f"ai_model_{p}") or AI_MODELS[p] for p in AI_MODELS},
+                   ollama_url=st.get("ai_ollama_url") or "", effort=st.get("ai_effort") or "medium")
 
 
 @app.post("/api/ai/<action>")
@@ -4737,6 +4748,17 @@ def ai_action(action):
     if action == "key":
         key = field(data, "key", re.compile(r"^sk-ant-[A-Za-z0-9_-]{10,200}$"), required=True)
         return result(*radius_admin(["ai", "key"], stdin=key + "\n", action="AI assistant API key saved"))
+    if action == "gemini-key":
+        key = field(data, "key", re.compile(r"^[A-Za-z0-9_-]{30,100}$"), required=True)
+        return result(*radius_admin(["ai", "gemini-key"], stdin=key + "\n", action="AI assistant Gemini key saved"))
+    if action == "ollama":
+        url = field(data, "url", re.compile(r"^https?://[A-Za-z0-9.-]{1,120}(:[0-9]{1,5})?/?$"), required=True)
+        model = field(data, "model", re.compile(r"^[A-Za-z0-9._:/-]{2,80}$"))
+        return result(*radius_admin(["ai", "ollama", url] + ([model] if model else []), action=f"AI assistant: local model at {url}"))
+    if action == "provider":
+        return result(*radius_admin(["ai", "provider", field(data, "provider", re.compile(r"^(claude|gemini|ollama)$"), required=True)]))
+    if action == "model":
+        return result(*radius_admin(["ai", "model", field(data, "model", re.compile(r"^[A-Za-z0-9._:/-]{2,80}$"), required=True)]))
     if action in ("on", "off"):
         return result(*radius_admin(["ai", action]))
     if action == "effort":
