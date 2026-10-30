@@ -299,7 +299,8 @@ def main():
     text = ""
     if pol:
         try:
-            text = open(os.path.join(opt("--policies", POLICY_DIR), pol + ".txt"), encoding="utf-8").read()
+            # a joined policy (several policies of one user) is in mix/
+            text = open(os.path.join(opt("--policies", POLICY_DIR), "mix" if pol.startswith("mix-") else "", pol + ".txt"), encoding="utf-8").read()
         except OSError:
             sys.exit(f"no policy '{pol}'")
     at = datetime.strptime(opt("--at"), "%Y-%m-%d %H:%M") if opt("--at") else None

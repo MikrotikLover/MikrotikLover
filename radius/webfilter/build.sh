@@ -335,7 +335,8 @@ pol_out=$(mktemp)
 # a policy turned off (radius-admin policy off NAME: its name in POLICY_DIR/.off) gets no router rules; its
 # users stay in it and get every rule back when it is turned on again
 policy_off() { [ -f "$POLICY_DIR/.off" ] && grep -qx "$1" "$POLICY_DIR/.off"; }
-policy_files() { [ "${PAUSED:-0}" = 1 ] && return 0; for f in "$POLICY_DIR"/*.txt; do [ -f "$f" ] && [ "$(basename "$f")" != README.txt ] && ! policy_off "$(basename "$f" .txt)" && echo "$f"; done; }
+# + the joined policies of users with several (POLICY_DIR/mix/mix-*.txt, made by radius-admin: policymix.py)
+policy_files() { [ "${PAUSED:-0}" = 1 ] && return 0; for f in "$POLICY_DIR"/*.txt "$POLICY_DIR"/mix/mix-*.txt; do [ -f "$f" ] && [ "$(basename "$f")" != README.txt ] && ! policy_off "$(basename "$f" .txt)" && echo "$f"; done; }
 app_slug() { local s=${1,,}; s=${s//[^a-z0-9]/-}; while [[ $s == *--* ]]; do s=${s//--/-}; done; s=${s#-}; echo "${s%-}"; }
 dnsnames=()
 for pf in $(policy_files); do

@@ -339,6 +339,28 @@ function userForm(groups, policies) {
     h("label", { class: "check full" }, h("input", { type: "checkbox", name: "nt_hash" }), "Store NT-hash instead of the password (WPA-Enterprise only — breaks hotspot CHAP login)"));
 }
 
+// pick one or several policies (several = the server joins them into one: block rules of all, exceptions of any)
+function pickPolicies(title, policies, selected, onApply) {
+  const chosen = new Set(selected || []);
+  const order = [...(selected || [])];
+  const count = h("span", { class: "muted small" });
+  const sync = () => { count.textContent = chosen.size > 1 ? `${chosen.size} policies — joined: every block of each, any one's exceptions` : chosen.size ? "1 policy" : "none: the group's policy"; };
+  const list = h("div", { class: "pick-list tall" }, policies.map((p) => h("label", { class: "pick" },
+    h("input", { type: "checkbox", value: p.name, checked: chosen.has(p.name), onchange: (e) => {
+      if (e.target.checked) { chosen.add(p.name); if (!order.includes(p.name)) order.push(p.name); } else { chosen.delete(p.name); }
+      sync(); } }),
+    h("span", {}, h("b", {}, p.name), p.description ? h("span", { class: "muted small" }, ` — ${p.description}`) : null))));
+  sync();
+  dialog(title, h("div", { class: "stack" }, count, list,
+    h("div", { class: "muted small" }, "Tick several to give them together. An online user is logged out once and gets it at the next login.")), [
+    { label: "Cancel" },
+    { label: "Group's policy", action: async () => { if (!(await onApply(""))) return false; } },
+    { label: "Save", class: "primary", action: async () => {
+      if (!chosen.size) { toast("Tick a policy (or choose “Group's policy”)", true); return false; }
+      if (!(await onApply(order.filter((n) => chosen.has(n)).join(",")))) return false;
+    } }]);
+}
+
 ROUTES.users = async (name) => {
   if (name) return userDetail(name);
   const [{ users }, { groups, policies }] = await Promise.all([api("GET", "/api/users"), api("GET", "/api/groups")]);
@@ -348,18 +370,14 @@ ROUTES.users = async (name) => {
   const holder = h("div");
   const picked = new Set();
   // policy straight from the list: one user (the select in the row) or many (tick them, then the bar)
-  const polOpts = (u) => [h("option", { value: "" }, u && u.policy_source === "group" && u.policy ? `group: ${u.policy}` : "— group's / none —"),
-    ...policies.map((p) => h("option", { value: p.name, selected: !!u && u.policy_source !== "group" && u.policy === p.name }, p.name))];
   const give = async (names, policy) => {
     const r = await act(api("POST", "/api/policies/give", { users: names, policy }));
     if (r) { picked.clear(); route(); }
     return r;
   };
-  const bulkPol = h("select", { "aria-label": "Policy for the selected users" }, h("option", { value: "__", selected: true, disabled: true }, "— choose a policy —"),
-    policies.map((p) => h("option", { value: p.name }, `${p.name} — ${p.description || ""}`)), h("option", { value: "" }, "↩ back to the group's policy"));
   const bulkCount = h("b");
-  const bulk = h("div", { class: "toolbar bulk-bar", hidden: true }, bulkCount, h("span", {}, "→ policy"), bulkPol,
-    h("button", { class: "primary", onclick: () => bulkPol.value === "__" ? toast("Choose a policy first", true) : give([...picked], bulkPol.value) }, "Apply"),
+  const bulk = h("div", { class: "toolbar bulk-bar", hidden: true }, bulkCount,
+    h("button", { class: "primary", onclick: () => pickPolicies(`Policy for ${picked.size} user(s)`, policies, [], (v) => give([...picked], v)) }, "Give policy…"),
     h("button", { onclick: () => { picked.clear(); draw(); } }, "Clear"));
   const syncBulk = () => { bulk.hidden = !picked.size; bulkCount.textContent = `${picked.size} selected`; };
   const draw = () => {
@@ -373,9 +391,10 @@ ROUTES.users = async (name) => {
           onchange: (e) => { e.target.checked ? picked.add(u.username) : picked.delete(u.username); syncBulk(); all.checked = shown.every((x) => picked.has(x.username)); } }) }] : []),
       { label: "User", render: (u) => h("a", { href: `#/users/${encodeURIComponent(u.username)}` }, u.username) },
       { label: "Group", render: (u) => u.grp || "—" },
-      { label: "Policy", render: (u) => isAdmin()
-          ? h("select", { class: "inline-select", "aria-label": `Policy for ${u.username}`, onchange: async (e) => { if (!(await give([u.username], e.target.value))) draw(); } }, polOpts(u))
-          : u.policy ? h("span", {}, u.policy, " ", u.policy_source === "group" ? h("span", { class: "muted" }, "(group)") : null) : "—" },
+      { label: "Policy", render: (u) => {
+          const label = u.policy ? h("span", {}, u.policy, " ", u.policy_source === "group" ? h("span", { class: "muted" }, "(group)") : null) : h("span", { class: "muted" }, "—");
+          return isAdmin() ? h("button", { class: "small pol-btn", "aria-label": `Policy for ${u.username}`,
+            onclick: () => pickPolicies(`Policy for ${u.username}`, policies, u.policy_source === "user" ? (u.policies || []) : [], (v) => give([u.username], v)) }, label, " ✎") : label; } },
       { label: "Plan / expiry", render: (u) => u.plan ? h("span", {}, u.plan, " ", h("span", { class: "muted" }, u.expires_at ? (new Date(u.expires_at.replace(" ", "T")) < new Date() ? "expired" : `till ${u.expires_at.slice(0, 16)}`) : "not started")) : "—" },
       { label: "Status", render: (u) => u.disabled ? badge("disabled", "bad") : u.online ? badge("online", "ok") : badge("offline") },
       { label: "Last login", render: (u) => ago(u.last_login) },
@@ -403,18 +422,19 @@ async function userDetail(name) {
   const [d, { groups, policies }] = await Promise.all([api("GET", `/api/users/${encodeURIComponent(name)}`), api("GET", "/api/groups")]);
   const enc = encodeURIComponent(name);
   const disabled = d.check.some((c) => c.attribute === "Auth-Type" && c.value === "Reject");
-  const ownPolicy = (d.reply.find((r) => r.attribute === "Mikrotik-Address-List")?.value || "").replace(/^policy-/, "");
+  const ownPolicies = d.policies || [];
+  const ownPolicy = ownPolicies.join(" + ");
   const online = d.sessions.filter((s) => !s.acctstoptime);
   const days = d.usage.map((u) => ({ label: u.day.slice(5), down: Number(u.down), up: Number(u.up) }));
 
   const groupSel = h("select", {}, h("option", { value: "" }, "— none —"), groups.map((g) => h("option", { value: g.name, selected: g.name === d.group }, g.name)));
-  const policySel = h("select", {}, h("option", { value: "" }, "— group policy —"), policies.map((p) => h("option", { value: p.name, selected: p.name === ownPolicy }, p.name)));
   const adminBox = isAdmin() ? card("Manage", null, h("div", { class: "form" },
     h("label", { class: "field" }, "Group", h("div", { class: "toolbar" }, groupSel,
       h("button", { onclick: () => act(api("POST", `/api/users/${enc}/group`, { group: groupSel.value })).then(route) }, "Save"))),
-    h("label", { class: "field" }, "Own web-filter policy", h("span", { class: "help" }, "Overrides the group's policy. Hotspot users; the user is disconnected so it applies at the next login."),
-      h("div", { class: "toolbar" }, policySel,
-        h("button", { onclick: () => act(api("POST", `/api/users/${enc}/policy`, { policy: policySel.value })).then(route) }, "Save"))),
+    h("div", { class: "field" }, "Own web-filter policy", h("span", { class: "help" }, "One or several (joined). Overrides the group's policy; the user is disconnected so it applies at the next login."),
+      h("div", { class: "toolbar" }, h("span", {}, ownPolicy ? h("b", {}, ownPolicy) : h("span", { class: "muted" }, "— group policy —")),
+        h("button", { onclick: () => pickPolicies(`Policy for ${name}`, policies, ownPolicies,
+          async (v) => { const r = await act(api("POST", `/api/users/${enc}/policy`, { policy: v })); if (r) route(); return r; }) }, "Change…"))),
     (() => {
       const phIn = h("input", { value: d.phone || "", placeholder: "03001234567", size: 14, inputmode: "tel" });
       return h("label", { class: "field" }, "Phone (warning SMS)", h("span", { class: "help" }, "SMS warning before expiry or when the data is almost used up (Settings → Warn users)."),

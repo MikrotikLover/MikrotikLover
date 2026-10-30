@@ -191,16 +191,21 @@ cmd_user() {
             echo "REPLACE INTO ml_contact (username, phone) VALUES ($(q "$u"), $(q "$ph"))" | db; ok "Phone of '$u': $ph"
         fi ;;
     policy)
-        local u=${1:-} p=${2:-}; valid_name "$u" username; [ -n "$p" ] || die "usage: radius-admin user policy NAME POLICY|-"
+        local u=${1:-} p=${2:-}; valid_name "$u" username; [ -n "$p" ] || die "usage: radius-admin user policy NAME POLICY[,POLICY...]|-   (several: joined into one)"
         user_exists "$u" || die "No such user '$u'"
         if [ "$p" = - ]; then
             echo "DELETE FROM radreply WHERE username=$(q "$u") AND attribute='Mikrotik-Address-List';" | db
             ok "User '$u' now follows the group policy"
         else
-            valid_policy "$p"; policy_exists "$p" || die "No policy '$p' (radius-admin policy list)"
+            local v; v=$(policy_value "$p") || exit 1
+            [[ $v != policy-mix-* ]] || [ -f "$POLICY_DIR/mix/${v#policy-}.txt" ] || die "policies not joined"
             echo "START TRANSACTION; DELETE FROM radreply WHERE username=$(q "$u") AND attribute='Mikrotik-Address-List';
-                  INSERT INTO radreply (username,attribute,op,value) VALUES ($(q "$u"),'Mikrotik-Address-List',':=',$(q "policy-$p")); COMMIT;" | db
-            ok "User '$u' → policy '$p' (overrides the group policy)"
+                  INSERT INTO radreply (username,attribute,op,value) VALUES ($(q "$u"),'Mikrotik-Address-List',':=',$(q "$v")); COMMIT;" | db
+            ok "User '$u' → policy '$(policy_label "$v")' (overrides the group policy)"
+            if [[ $v == policy-mix-* ]] && ! grep -q "policy-${v#policy-}" "$ROUTER_DIR/sync.rsc" 2>/dev/null; then
+                cmd_policy build >/dev/null 2>&1 && echo "  several policies joined ($v): the routers get it at their next auto-sync (15 min)" \
+                    || warn "router rules not rebuilt (radius-admin policy build)"
+            fi
         fi
         kick_user "$u" quiet   # re-login picks up the new policy
         ;;
@@ -2630,6 +2635,30 @@ ROUTER_DIR=/var/lib/mikrotiklover/router
 WF_DIR=/usr/local/lib/mikrotiklover/webfilter
 
 policy_exists() { [ -f "$POLICY_DIR/$1.txt" ]; }
+# several policies for one user (a,b,c): the server joins them into one policy mix-… (tools/policymix.py)
+POLMIX=/usr/local/lib/mikrotiklover/policymix.py
+POLICY_NEW_MIX=0
+policy_value() { # SPEC (a or a,b,c) -> the address list name to give (policy-a / policy-mix-…); makes the mix file
+    local spec=$1 p n=0 ms
+    ms=$(python3 -I "$POLMIX" name "$spec" >/dev/null 2>&1 && echo "$spec" | tr ', +' '\n\n\n' | grep . | awk '!s[$0]++') || die "Invalid policy list '$spec' (a-z 0-9 -, separated by commas)"
+    for p in $ms; do valid_policy "$p"; policy_exists "$p" || die "No policy '$p' (radius-admin policy list)"; n=$((n + 1)); done
+    [ "$n" -gt 0 ] || die "no policy given"
+    if [ "$n" = 1 ]; then echo "policy-$ms"; return; fi
+    local name; name=$(python3 -I "$POLMIX" name "$spec")
+    [ -f "$POLICY_DIR/mix/$name.txt" ] || POLICY_NEW_MIX=1
+    python3 -I "$POLMIX" write --dir "$POLICY_DIR" "$spec" >/dev/null || die "policies not joined"
+    echo "policy-$name"
+}
+policy_label() { # policy-x / policy-mix-… -> "x" / "a + b"
+    local v=${1#policy-}
+    if [[ $v == mix-* ]]; then local m; m=$(python3 -I "$POLMIX" members --dir "$POLICY_DIR" "$v"); echo "${m//,/ + }"; else echo "$v"; fi
+}
+policy_mix_regen() { # every build: mixes made again from their policies' text; unused ones removed
+    local used; used=$(echo "SELECT DISTINCT SUBSTRING(value, 8) FROM radreply WHERE attribute='Mikrotik-Address-List' AND value LIKE 'policy-mix-%'" | db 2>/dev/null || true)
+    # shellcheck disable=SC2086
+    python3 -I "$POLMIX" regen --dir "$POLICY_DIR" $used >/dev/null 2>&1 || warn "joined policies (mix) not remade"
+}
+
 policy_users() { # number of users + groups that use policy $1
     echo "SELECT (SELECT COUNT(*) FROM radreply WHERE attribute='Mikrotik-Address-List' AND value=$(q "policy-$1"))
                + (SELECT COUNT(*) FROM radgroupreply WHERE attribute='Mikrotik-Address-List' AND value=$(q "policy-$1"))" | db
@@ -3180,8 +3209,9 @@ cmd_policy() {
     case $sub in
     give) # one policy for many users at once: policy give POLICY|- USER... (or "-" = names on stdin, one per line)
         local p=${1:-}; shift || true
-        [ -n "$p" ] && [ $# -gt 0 ] || die "usage: radius-admin policy give POLICY|- USER [USER...]   (- as the only user: names on stdin)   — '-' as POLICY: back to the group's policy"
-        [ "$p" = - ] || { valid_policy "$p"; policy_exists "$p" || die "No policy '$p' (radius-admin policy list)"; }
+        [ -n "$p" ] && [ $# -gt 0 ] || die "usage: radius-admin policy give POLICY[,POLICY...]|- USER [USER...]   (- as the only user: names on stdin)   — '-' as POLICY: back to the group's policy"
+        local val=""
+        [ "$p" = - ] || { val=$(policy_value "$p") || exit 1; }
         local -a names=()
         if [ "$*" = - ]; then while IFS= read -r u; do u=${u//[[:space:]]/}; [ -z "$u" ] || names+=("$u"); done
         else names=("$@"); fi
@@ -3194,14 +3224,22 @@ cmd_policy() {
                 echo "DELETE FROM radreply WHERE username=$(q "$u") AND attribute='Mikrotik-Address-List';" | db
             else
                 echo "START TRANSACTION; DELETE FROM radreply WHERE username=$(q "$u") AND attribute='Mikrotik-Address-List';
-                      INSERT INTO radreply (username,attribute,op,value) VALUES ($(q "$u"),'Mikrotik-Address-List',':=',$(q "policy-$p")); COMMIT;" | db
+                      INSERT INTO radreply (username,attribute,op,value) VALUES ($(q "$u"),'Mikrotik-Address-List',':=',$(q "$val")); COMMIT;" | db
             fi
             kick_user "$u" quiet || true   # re-login picks up the new policy
             done=$((done + 1))
         done
         [ ${#missing[@]} -eq 0 ] || warn "no such user(s): ${missing[*]}"
         [ "$done" -gt 0 ] || die "no user changed"
-        ok "$done user(s) → $([ "$p" = - ] && echo "the group's policy" || echo "policy '$p'") (online ones are logged out once and get it at the next login)" ;;
+        ok "$done user(s) → $([ "$p" = - ] && echo "the group's policy" || echo "policy '$(policy_label "$val")'") (online ones are logged out once and get it at the next login)"
+        if [[ $val == policy-mix-* ]] && ! grep -q "$val" "$ROUTER_DIR/sync.rsc" 2>/dev/null; then
+            cmd_policy build >/dev/null 2>&1 && echo "  several policies joined: the routers get it at their next auto-sync (15 min)" || warn "router rules not rebuilt (radius-admin policy build)"
+        fi ;;
+    mixes) # users with several policies: which joined policy, of what, for how many
+        local any=0 n v
+        while IFS=$'\t' read -r v n; do any=1; printf '%-16s %-40s %s user(s)\n' "${v#policy-}" "$(policy_label "$v")" "$n"; done \
+            < <(echo "SELECT value, COUNT(*) FROM radreply WHERE attribute='Mikrotik-Address-List' AND value LIKE 'policy-mix-%' GROUP BY value" | db)
+        [ $any = 1 ] || echo "No user has several policies (radius-admin user policy ali students,no-video)" ;;
     net|nets)
         local act=${1:-list}; shift || true
         case $act in
@@ -3285,6 +3323,7 @@ cmd_policy() {
         local lists; lists=$(mktemp -d)
         { echo "SELECT domain FROM ml_vpn_domain ORDER BY domain" | db 2>/dev/null || true; } | grep -E '^[a-z0-9.-]+$' > "$lists/vpn-domains.txt" || true
         ao_ensure
+        policy_mix_regen
         if ! WF_OUT="$lists" POLICY_DIR="$POLICY_DIR" AO_DIR="$AO_DIR" WEBSCAN_DIR="$WEBSCAN_DIR" VPN_DOMAINS="$lists/vpn-domains.txt" CDNMAP=/usr/local/lib/mikrotiklover/cdnmap.py \
                QUARANTINE_SERVER="$(setting_get server_ip)" WINUPDATE="$(v=$(setting_get winupdate 2>/dev/null || true); echo "${v:-on}")" \
                PAUSED="$([ "$(setting_get blocking_pause 2>/dev/null)" = 1 ] && echo 1 || echo 0)" \
@@ -4691,7 +4730,8 @@ Groups (speed limit, VLAN, timeouts, devices per user)
 
 Policies / blocking (per user, group, IP range — see webfilter/policies/)
   user policy NAME POLICY|-            this user only (overrides group); kicks to apply
-  policy give POLICY|- USER [USER...]  many users at once (- = back to the group's policy)
+  policy give POLICY[,POLICY..]|- USER...  many users at once (- = back to the group's policy)
+  user policy NAME a,b,c · policy mixes  several policies for one user: joined into one (mix-…) by the server
   group add NAME --policy POLICY       whole group
   kick USER|MAC                        disconnect now (re-login applies changes)
   blocked [N] [-u USER]                who tried to open blocked sites (router log, with the policy)

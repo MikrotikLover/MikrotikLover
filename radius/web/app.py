@@ -34,6 +34,7 @@ STATE_DIR = os.environ.get("MLWEB_STATE", "/var/lib/mikrotiklover")
 
 NAME_RE = re.compile(r"^[A-Za-z0-9._@+-]{1,64}$")
 POLICY_RE = re.compile(r"^[a-z0-9-]{1,40}$")
+POLICY_LIST_RE = re.compile(r"^[a-z0-9-]{1,40}(,[a-z0-9-]{1,40}){0,9}$")     # one policy, or several (joined: mix-…)
 MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}([-:.]?[0-9A-Fa-f]{2}){5}$|^[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}$")
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 PASS_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
@@ -403,6 +404,9 @@ def users():
         r["policy_source"] = "user" if own else ("group" if grp_list else "")
         if not own and grp_list:
             r["policy"] = grp_list[7:] if grp_list.startswith("policy-") else grp_list
+        r["policies"] = policy_parts(r["policy"])            # several policies of one user: the joined one's parts
+        if len(r["policies"]) > 1:
+            r["policy"] = " + ".join(r["policies"])
         r["disabled"], r["is_mac"], r["nt_hash"] = bool(r["disabled"]), bool(r["is_mac"]), bool(r["nt_hash"])
         out.append(r)
     return jsonify(users=out)
@@ -432,7 +436,9 @@ def user_detail(name):
     contact = q1("SELECT phone FROM ml_contact WHERE username=%s", (name,))
     notice = q1("SELECT ml_notice(%s) AS t", (name,))
     remembered = q("SELECT mac, created, last_seen FROM ml_remember WHERE username=%s ORDER BY last_seen DESC", (name,))
-    return jsonify(name=name, group=grp["groupname"] if grp else "", account=account_info(name),
+    own = next((r["value"] for r in reply if r["attribute"] == "Mikrotik-Address-List"), "")
+    own = own[7:] if own.startswith("policy-") else ""
+    return jsonify(name=name, group=grp["groupname"] if grp else "", account=account_info(name), policies=policy_parts(own),
                    phone=contact["phone"] if contact else "", notice=(notice or {}).get("t") or "",
                    check=jsonable(check), reply=jsonable(reply),
                    sessions=jsonable(sessions), logins=jsonable(logins), usage=jsonable(usage), sites=jsonable(sites),
@@ -473,7 +479,7 @@ def user_action(name, action):
         group = field(data, "group", NAME_RE) or "-"
         return result(*radius_admin(["user", "group", name, group]))
     if action == "policy":
-        policy = field(data, "policy", POLICY_RE) or "-"
+        policy = field(data, "policy", POLICY_LIST_RE, maxlen=400) or "-"
         return result(*radius_admin(["user", "policy", name, policy]))
     if action in ("disable", "enable"):
         return result(*radius_admin(["user", action, name]))
@@ -811,7 +817,7 @@ def block_decision(host, ip):
     if policy_is_off(policy):                            # turned off: nothing of it is blocked
         return False, {"user": user, "policy": policy}
     try:
-        text = open(os.path.join(POLICY_DIR, policy + ".txt"), encoding="utf-8").read()
+        text = policy_text(policy)
     except OSError:
         return False, {"user": user, "policy": policy}
     try:
@@ -1071,7 +1077,7 @@ def why_blocked():
     text = ""
     if policy:
         try:
-            text = open(os.path.join(POLICY_DIR, policy + ".txt"), encoding="utf-8").read()
+            text = policy_text(policy)
         except OSError:
             text = ""
     vpn_extra = [r["domain"] for r in q("SELECT domain FROM ml_vpn_domain")] if q1("SHOW TABLES LIKE 'ml_vpn_domain'") else []
@@ -2060,6 +2066,25 @@ def policies_off():
         return set()
 
 
+def policy_text(name):
+    """a policy's file text: its own file, or a joined policy (several policies of one user: mix/mix-…)"""
+    sub = "mix" if name.startswith("mix-") else ""
+    return open(os.path.join(POLICY_DIR, sub, name + ".txt"), encoding="utf-8").read()
+
+
+def policy_parts(name):
+    """'students' -> ['students']; a joined policy 'mix-…' -> its policies"""
+    if not name.startswith("mix-"):
+        return [name] if name else []
+    try:
+        for line in open(os.path.join(POLICY_DIR, "mix", name + ".txt"), encoding="utf-8"):
+            if line.startswith("# mix: "):
+                return [p for p in line[7:].strip().split(",") if p]
+    except OSError:
+        pass
+    return [name]
+
+
 def policy_is_off(name):
     return name in policies_off()
 
@@ -2067,7 +2092,8 @@ def policy_is_off(name):
 def policy_members():
     users, groups = {}, {}
     for r in q("SELECT username, value FROM radreply WHERE attribute='Mikrotik-Address-List' AND value LIKE 'policy-%%'"):
-        users.setdefault(r["value"][7:], []).append(r["username"])
+        for part in policy_parts(r["value"][7:]):            # several policies: the user counts for each
+            users.setdefault(part, []).append(r["username"])
     for r in q("SELECT groupname, value FROM radgroupreply WHERE attribute='Mikrotik-Address-List' AND value LIKE 'policy-%%'"):
         groups.setdefault(r["value"][7:], []).append(r["groupname"])
     return users, groups
@@ -2233,7 +2259,7 @@ def policy_save():
 def policy_give():
     """one policy (or '' = back to the group's) for many users at once"""
     data = body()
-    policy = field(data, "policy", POLICY_RE) or "-"
+    policy = field(data, "policy", POLICY_LIST_RE, maxlen=400) or "-"
     users = data.get("users")
     if not isinstance(users, list) or not users or len(users) > 2000:
         abort(400, "choose 1 to 2000 users")
