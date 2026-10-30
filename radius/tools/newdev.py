@@ -18,7 +18,7 @@ import argparse, re, sys
 MAC_RE = re.compile(r"^([0-9A-Fa-f]{2})[-:.]?([0-9A-Fa-f]{2})[-:.]?([0-9A-Fa-f]{2})[-:.]?([0-9A-Fa-f]{2})[-:.]?"
                     r"([0-9A-Fa-f]{2})[-:.]?([0-9A-Fa-f]{2})$")
 IP_RE = re.compile(r"^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$")
-STATUSES = ("pending", "approved", "denied")
+STATUSES = ("pending", "approved", "denied", "disabled")
 
 
 def norm_mac(m):

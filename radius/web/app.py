@@ -1524,7 +1524,7 @@ def router_newdev():
                            host=IF(VALUES(host)<>'', VALUES(host), host)""",
                       (mac, "approved" if learning else "pending", host, ip, rip, "learned" if learning else "",
                        "learning" if learning else "", learning))
-    ips = [r["ip"] for r in q("""SELECT ip FROM ml_newdev WHERE router=%s AND status IN ('pending','denied') AND ip<>''
+    ips = [r["ip"] for r in q("""SELECT ip FROM ml_newdev WHERE router=%s AND status IN ('pending','denied','disabled') AND ip<>''
                                  AND last_seen > NOW() - INTERVAL 1 DAY""", (rip,))]
     return app.response_class(newdev.reconcile(ips), mimetype="text/plain", headers={"Cache-Control": "no-store"})
 
@@ -1532,7 +1532,7 @@ def router_newdev():
 def newdev_waiting(ip):
     """the device row when this IP is a device waiting for approval (or denied)"""
     try:
-        return q1("""SELECT mac, status, host, first_seen FROM ml_newdev WHERE ip=%s AND status IN ('pending','denied')
+        return q1("""SELECT mac, status, host, first_seen FROM ml_newdev WHERE ip=%s AND status IN ('pending','denied','disabled')
                      AND last_seen > NOW() - INTERVAL 1 DAY ORDER BY last_seen DESC LIMIT 1""", (ip,))
     except pymysql.MySQLError:
         return None
@@ -1545,8 +1545,9 @@ def newdev_page(row):
     except pymysql.MySQLError:
         st = {}
     brand, contact = st.get("brand") or "Wi-Fi", st.get("contact") or ""
-    denied = row["status"] == "denied"
-    head = "Is device ko network istemal karne ki ijazat nahi" if denied else "Aap ka device manzoori (approval) ka intezar kar raha hai"
+    denied = row["status"] in ("denied", "disabled")
+    head = ("Is device ka internet admin ne band (disable) kiya hai" if row["status"] == "disabled" else
+            "Is device ko network istemal karne ki ijazat nahi" if denied else "Aap ka device manzoori (approval) ka intezar kar raha hai")
     text = ("Admin ne is device ko mana kar diya hai." if denied else
             "Is network par har naya device admin ki manzoori ke baad hi internet istemal kar sakta hai. "
             "Admin ko khabar mil gayi hai — manzoori ke ek minute ke andar internet khud chal parega.")
@@ -1578,7 +1579,7 @@ def newdev_info():
     except ValueError:
         st = {}
     rows = jsonable(q("""SELECT mac, status, name, username, host, ip, router, how, first_seen, last_seen, decided_by, decided_at
-                         FROM ml_newdev ORDER BY FIELD(status,'pending','denied','approved'), last_seen DESC LIMIT 2000"""))
+                         FROM ml_newdev ORDER BY FIELD(status,'pending','denied','disabled','approved'), last_seen DESC LIMIT 2000"""))
     return jsonify(settings=st, devices=rows)
 
 
@@ -1586,14 +1587,15 @@ def newdev_info():
 @login_required("admin")
 def newdev_action(action):
     data = body()
-    if action in ("on", "off", "approve-all"):
+    if action in ("on", "off", "approve-all") or (action in ("enable", "disable") and not data.get("mac")):
+        action = {"enable": "on", "disable": "off"}.get(action, action)
         args = ["newdev", action]
         if action == "on":
             args += ["--learn", str(body_int(data, "learn", 24, 0, 720))]
         return result(*radius_admin(args, timeout=300))
     if action == "strict":
         return result(*radius_admin(["newdev", "strict", "on" if data.get("on") else "off"], timeout=300))
-    if action not in ("approve", "deny", "forget", "add"):
+    if action not in ("approve", "deny", "forget", "add", "enable", "disable"):
         abort(404)
     mac = field(data, "mac", MAC_RE, required=True, maxlen=17)
     args = ["newdev", action, mac]

@@ -191,12 +191,14 @@ sudo radius-admin newdev on --learn 0        # foran sakhti: har device intezar 
 sudo radius-admin newdev list pending        # kaun intezar mein hai (naam = DHCP host name, IP, router)
 sudo radius-admin newdev approve aa:bb:cc:dd:ee:ff -n "Ali ka laptop" [-u ali]    # ek minute mein internet
 sudo radius-admin newdev deny MAC | approve-all | forget MAC
+sudo radius-admin newdev disable MAC         # approved device ka internet band (naam / user yaad) — enable MAC se wapas
+sudo radius-admin newdev disable | enable    # poora feature band / chalu (MAC ke baghair) = off / on
 sudo radius-admin newdev add MAC -n "Naya printer"    # aane se pehle hi ijazat
 sudo radius-admin newdev strict on           # server band ho tab bhi naya device rukay (default: server band = naya device chal jata hai)
 sudo radius-admin newdev status | off
 ```
 
-- **Dashboard:** **New devices** — Waiting / Denied / Approved, Approve (naam, kis user ka), Deny, Forget, "Allow a device", on/off, strict.
+- **Dashboard:** **New devices** — Waiting / Approved / Disabled / Denied; Approve (naam, kis user ka), **Disable / Enable** har device, Deny, Forget, "Allow a device"; upar switch se poora feature **Enabled / Disabled**, aur strict.
 - **Router par:** kuch paste nahi karna — **auto-sync** khud laga deta hai (agle sync par, 15 min): DHCP `lease-script` (naya lease foran server se poochta hai), har minute bound leases ki report, address list `ml-newdev` + firewall (sirf DNS aur server ka page). Approve / deny **ek minute** mein router tak.
 - **Hotspot wale DHCP servers chhod diye jate hain** (wahan apna login hai). Agar kisi DHCP server par admin ki **apni lease-script** ho to woh nahi badalti — wahan naya device minute wali check se pakra jata hai (router log mein warning).
 - Approval **MAC** se hai aur har router par chalti hai (aik jagah approve = har branch par). Phone ka "Private / random MAC" har Wi-Fi par alag MAC deta hai — woh phone us network par naya device hai.

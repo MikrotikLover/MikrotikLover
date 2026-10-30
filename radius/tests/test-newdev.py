@@ -138,6 +138,14 @@ if "--live" in sys.argv:
       and db(f"SELECT ip FROM ml_newdev WHERE mac='{TM[1]}'") == "", ans)
     sh("radius-admin", "newdev", "approve", T[2])
     t("live: list empty once approved", keep(post("-\n")[1]) == [])
+    rc, out = sh("radius-admin", "newdev", "disable", T[2])
+    t("live: disable an approved device -> back in the list, name kept", rc == 0 and keep(post("-\n")[1]) == ["10.77.0.2"]
+      and db(f"SELECT status FROM ml_newdev WHERE mac='{TM[2]}'") == "disabled", out)
+    rc, out = sh("radius-admin", "newdev", "enable", T[2])
+    t("live: enable it again -> out of the list", rc == 0 and keep(post("-\n")[1]) == []
+      and db(f"SELECT status FROM ml_newdev WHERE mac='{TM[2]}'") == "approved", out)
+    rc, out = sh("radius-admin", "newdev", "list", "disabled")
+    t("live: list disabled", rc == 0, out)
     db(f"UPDATE ml_newdev SET router='10.99.99.99' WHERE mac='{TM[1]}'")
     db(f"UPDATE ml_newdev SET ip='10.77.0.5' WHERE mac='{TM[1]}'")
     t("live: another router's waiting devices are not in this router's list", keep(post("-\n")[1]) == [])
@@ -171,9 +179,9 @@ if "--live" in sys.argv:
     rc, out = sh("radius-admin", "policy", "build")
     sync = open("/var/lib/mikrotiklover/router/sync.rsc").read()
     t("live: sync.rsc carries the router part (on)", rc == 0 and "/system script add name=ml-newdev" in sync, out)
-    sh("radius-admin", "newdev", "off")
+    sh("radius-admin", "newdev", "disable")
     sync = open("/var/lib/mikrotiklover/router/sync.rsc").read()
-    t("live: off -> sync.rsc takes it out", "approval: off" in sync and "/system script add name=ml-newdev" not in sync)
+    t("live: disable (no MAC) = whole feature off: sync.rsc takes it out", "approval: off" in sync and "/system script add name=ml-newdev" not in sync)
     db("DELETE FROM ml_newdev WHERE mac LIKE '02-7E-57-%'")
     if old.get("on"):                      # back as it was
         sh("radius-admin", "newdev", "on", "--learn", "0")

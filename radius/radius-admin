@@ -1910,10 +1910,10 @@ cmd_newdev() { # every new device on the LAN needs the admin's approval before i
         echo "New device approval : $([ "$(setting_get newdev_on)" = 1 ] && echo on || echo off)   (radius-admin newdev on|off)"
         echo "Learning            : $(echo "SELECT IF($(q "${lu:-2000-01-01}") > NOW(), CONCAT('until ', $(q "${lu:-}"), ' — devices seen now are approved by themselves'), 'off')" | db)"
         echo "Server down         : $([ "$(setting_get newdev_strict)" = 1 ] && echo "strict — a new device waits (radius-admin newdev strict off)" || echo "new devices still get internet (radius-admin newdev strict on)")"
-        echo "Devices             : $(echo "SELECT CONCAT(SUM(status='pending'), ' waiting, ', SUM(status='approved'), ' approved, ', SUM(status='denied'), ' denied') FROM ml_newdev" | db | sed 's/NULL/0/g')"
+        echo "Devices             : $(echo "SELECT CONCAT(SUM(status='pending'), ' waiting, ', SUM(status='approved'), ' approved, ', SUM(status='disabled'), ' disabled, ', SUM(status='denied'), ' denied') FROM ml_newdev" | db | sed 's/NULL/0/g')"
         echo "Routers             : need auto-sync; the rules come with the next sync (15 min), approvals within a minute"
         echo "Waiting page        : $( [[ $(setting_get server_ip) =~ ^[0-9]+(\.[0-9]+){3}$ ]] && echo "http://$(setting_get server_ip):8081 (every http:// address of a waiting device)" || echo "none — set the server IP: radius-admin security quarantine-server IP")" ;;
-    on)
+    on|enable-all)
         local learn=24
         while [ $# -gt 0 ]; do case $1 in
             --learn) [[ ${2:-} =~ ^([0-9]{1,3})h?$ ]] || die "--learn HOURS (0 = approve nothing by itself)"; learn=${BASH_REMATCH[1]}; shift ;;
@@ -1941,15 +1941,15 @@ cmd_newdev() { # every new device on the LAN needs the admin's approval before i
     list)
         local st=${1:-all} where=""
         [ "${1:-}" = --json ] && st=all
-        case $st in pending|waiting) where="WHERE status='pending'" ;; approved|denied) where="WHERE status='$st'" ;; all|--json) ;;
-            *) die "usage: radius-admin newdev list [pending|approved|denied|all] [--json]" ;; esac
+        case $st in pending|waiting) where="WHERE status='pending'" ;; approved|denied|disabled) where="WHERE status='$st'" ;; all|--json) ;;
+            *) die "usage: radius-admin newdev list [pending|approved|denied|disabled|all] [--json]" ;; esac
         if [ "${1:-}" = --json ] || [ "${2:-}" = --json ]; then
             echo "SELECT JSON_ARRAYAGG(JSON_OBJECT('mac', mac, 'status', status, 'name', name, 'username', username, 'host', host, 'ip', ip,
                   'router', router, 'how', how, 'first_seen', first_seen, 'last_seen', last_seen, 'decided_by', decided_by, 'decided_at', decided_at))
-                  FROM (SELECT * FROM ml_newdev $where ORDER BY FIELD(status,'pending','denied','approved'), last_seen DESC LIMIT 2000) x" | db | sed 's/^NULL$/[]/'
+                  FROM (SELECT * FROM ml_newdev $where ORDER BY FIELD(status,'pending','denied','disabled','approved'), last_seen DESC LIMIT 2000) x" | db | sed 's/^NULL$/[]/'
         else
             echo "SELECT mac, status, IF(name<>'', name, host) AS name, username AS user, ip, router, last_seen FROM ml_newdev $where
-                  ORDER BY FIELD(status,'pending','denied','approved'), last_seen DESC" | dbt
+                  ORDER BY FIELD(status,'pending','denied','disabled','approved'), last_seen DESC" | dbt
         fi ;;
     approve|deny)
         local m="" name="" user="" set
@@ -1963,6 +1963,12 @@ cmd_newdev() { # every new device on the LAN needs the admin's approval before i
         [ -z "$user" ] || set="$set, username=$(q "$user")"
         echo "UPDATE ml_newdev SET $set WHERE mac=$(q "$m")" | db
         ok "$m $([ "$sub" = approve ] && echo "approved — internet within a minute" || echo "denied — stays without internet")" ;;
+    enable|disable) # with a MAC: that device on / off (name and user kept); without: the whole feature on / off
+        if [ -z "${1:-}" ]; then cmd_newdev "$([ "$sub" = enable ] && echo on || echo off)"; return; fi
+        local m; m=$(newdev_mac "$1")
+        [ -n "$(echo "SELECT 1 FROM ml_newdev WHERE mac=$(q "$m")" | db)" ] || die "No device $m seen yet (radius-admin newdev add $m)"
+        echo "UPDATE ml_newdev SET status=$(q "$([ "$sub" = enable ] && echo approved || echo disabled)"), decided_by=$(q "$who"), decided_at=NOW() WHERE mac=$(q "$m")" | db
+        ok "$m $([ "$sub" = enable ] && echo "enabled — internet within a minute" || echo "disabled — no internet within a minute (name and user kept; radius-admin newdev enable $m)")" ;;
     approve-all)
         local n; n=$(echo "SELECT COUNT(*) FROM ml_newdev WHERE status='pending'" | db)
         echo "UPDATE ml_newdev SET status='approved', decided_by=$(q "$who"), decided_at=NOW() WHERE status='pending'" | db
@@ -1987,7 +1993,7 @@ cmd_newdev() { # every new device on the LAN needs the admin's approval before i
               'strict', IFNULL((SELECT v FROM ml_setting WHERE k='newdev_strict'),'0')='1',
               'learn_until', (SELECT IF(v > NOW(), v, NULL) FROM ml_setting WHERE k='newdev_learn_until'),
               'server_ip', IFNULL((SELECT v FROM ml_setting WHERE k='server_ip'),''))" | db ;;
-    *) die "usage: radius-admin newdev status | on [--learn 24h] | off | learn HOURS | strict on|off | list [pending|approved|denied] | approve MAC [-n NAME] [-u USER] | deny MAC | approve-all | add MAC [-n NAME] | forget MAC" ;;
+    *) die "usage: radius-admin newdev status | on|enable [--learn 24h] | off|disable | enable|disable MAC | learn HOURS | strict on|off | list [pending|approved|denied] | approve MAC [-n NAME] [-u USER] | deny MAC | approve-all | add MAC [-n NAME] | forget MAC" ;;
     esac
 }
 
@@ -4702,7 +4708,7 @@ MAC authentication (devices without username/password: printers, CCTV, TVs, POS)
   wifipolicy on|off|status · wifipolicy list   Wi-Fi (WPA-Enterprise) users + MAC devices: policy by MAC, no VLAN (router: DHCP, else ARP)
                                         a phone that logged in with a password logs in by its MAC next time (random MACs)
   newdev on [--learn 24h] | off | status | list [pending] | approve MAC [-n NAME] [-u USER] | deny MAC | approve-all
-  newdev add MAC [-n NAME] | forget MAC | strict on|off | learn HOURS   every new device on the LAN waits for your approval
+  newdev add MAC [-n NAME] | forget MAC | enable|disable MAC | strict on|off | learn HOURS   every new device on the LAN waits for your approval
 
 Routers (MikroTik = NAS)
   nas add IP[/PREFIX] [SECRET] [NAME]   (no SECRET: random one is generated)
