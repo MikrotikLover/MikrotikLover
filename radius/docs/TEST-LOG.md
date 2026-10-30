@@ -203,3 +203,18 @@ Shuru: 2026-10-16 23:17 UTC (17 Oct 04:17 PKT). Har qadam neeche likha jata hai:
 | 09:30 | Found while testing: the SSH-keys unit ordered itself before ssh.socket, which made a systemd ordering cycle and SSH never started → before ssh.service only; apt through the sandbox proxy got 405 → build needs no proxy, only its CA; a failed step left the build VM running until the timeout → it powers off and says ML-BUILD-FAILED, the host stops at once; the checksum list listed itself; the build's clean-up exit code; netip lost the reason of a refusal and stopped on a card without an address (pipefail); hyperv-daemons is not a package on Ubuntu 24.04 → left out (the console shows the address) | fixed |
 | 09:30 | Full suite before main (while the image was being built on the same CPUs): 61 suites, lint, UI 74 + policy editor 43 green; inline IPS 'within 3 seconds' and one remember-device check missed under that load, both pass when run again alone | ok |
 | 10:45 | VM image built again from the committed code (exit 0) and booted: test-vm-image.sh 22 all green; console screenshot: the login prompt reprints the banner (dashboard address, first login, console user, fixed IP, routers) and then "ready" with the first password | ok — after it only the banner's wording was shortened (two lines wrapped at 80 columns) |
+
+## 30 Oct 2026 — Passpoint (Hotspot 2.0) + asli RouterOS (CHR) par test
+
+| Test | Nateeja |
+|---|---|
+| Passpoint: `tests/test-passpoint.py` (settings, router scripts, iPhone + Android profiles) | ✅ sab pass |
+| Passpoint live (`--live`): profile ke andar se naam/password/CA/domain parh kar `eapol_test` se EAP-TTLS login (Android, iPhone, NT-hash user), ghalat password, download page (sahi Content-Type), accounting asli naam par, link band | ✅ sab pass |
+| `tests/test-chr.sh --ros 7` — RouterOS **7.25** CHR (QEMU): har `mikrotik/*.rsc`, Router setup ke 5 sets (do dafa), Passpoint router se parh kar check | ✅ 57 pass, 0 fail (fixes ke baad) |
+| `tests/test-chr.sh --ros 6` — RouterOS **6.49.23** CHR: v6 copies, legacy Passpoint | ✅ 42 pass, 0 fail (fix ke baad) |
+| ❌→✅ BUG: `move ... destination=0` — jab sirf hamare rules hon (maslan IPv6 filter khali) to RouterOS poora `/import` rok deta hai ("can not move object before itself"); kabhi rules upar bhi nahi jate. FIX: pehle doosre rule se pehle move (har .rsc, build.sh, firewall.py, radius-admin) |
+| ❌→✅ BUG (RouterOS 6): v6 copy blocked naam par `address=0.0.0.0` likhti thi — 6.49 use mana karta hai ("bad A data"), v6 routers par blocking ki files pehli line par ruk jati thin. FIX: `type=NXDOMAIN` |
+| ❌→✅ BUG (7.25): `pppoe-server.rsc` ka `include=all-ppp` ab nahi hota → PPP profile `interface-list=LAN` |
+| ❌→✅ BUG (7.25): keywords ka 16 words wala DNS regexp "too complex" → 8 words per rule |
+| ❌→✅ BUG: Router setup dobara chalane par (ya haath se import ke baad) wpa / mac-auth / pppoe "already exists" par ruk jate; mac-auth us router par rukta jis mein `wifi2`/`wlan1` na ho → ab pehle check, phir set |
+| ⚠️ Baqi (theek nahi kiya): kuch category files ek hi naam block karti hain (social / video-streaming / social-video), aur `webfilter-policies.rsc` wohi address list bharta hai jo `allow-only-*.rsc` — dono haath se import karein to RouterOS 7.25 doosri copy par ruk jata hai. CHR test inhein alag alag chalata hai |
