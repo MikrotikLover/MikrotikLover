@@ -11,6 +11,9 @@
 #   CERT_ORG        organisation in the certificates (default: MikrotikLover)
 #   RENEW_CERT=1    issue a new server certificate (same CA, clients keep working)
 #   RENEW_CA=1      new CA + server certificate (clients must re-trust the CA)
+#   ML_PREPARE_ONLY=1   packages only, then stop (VM image build: settings, passwords and certificates
+#                       are made on each VM's first boot, so no two VMs share them)
+#   ML_FIRST_PASS_FILE  also write the first dashboard login into this file (root only)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,19 +38,24 @@ command -v apt-get >/dev/null || die "Only Debian/Ubuntu are supported"
 # ---------------------------------------------------------------- packages
 log "Installing FreeRADIUS + MariaDB"
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
+apt-get update -qq || warn "apt-get update failed (no internet?) — using the packages already on this machine"
 apt-get install -y -qq freeradius freeradius-mysql freeradius-utils mariadb-server openssl rsyslog python3 python3-pymysql dnsmasq-base openssh-client iputils-ping >/dev/null
 # eapol_test lets "radius-admin test --peap" simulate a real Wi-Fi client (optional package)
 apt-get install -y -qq eapoltest >/dev/null 2>&1 || warn "eapoltest not available; PEAP self-test disabled"
 apt-get install -y -qq snmp >/dev/null 2>&1 || warn "net-snmp tools not available: SNMP v3 devices cannot be read (v1 / v2c work)"
 # "Network se poochho" (AI assistant): the official Claude Python SDK in its own venv (sees the system pymysql)
 if apt-get install -y -qq python3-venv >/dev/null 2>&1 && { [ -x /opt/mikrotiklover/venv/bin/python ] || python3 -m venv --system-site-packages /opt/mikrotiklover/venv; } \
-   && /opt/mikrotiklover/venv/bin/pip install -q --upgrade 'anthropic>=2,<3' >/dev/null 2>&1; then :
+   && { /opt/mikrotiklover/venv/bin/pip install -q --upgrade 'anthropic>=2,<3' >/dev/null 2>&1 || /opt/mikrotiklover/venv/bin/python -c 'import anthropic' 2>/dev/null; }; then :
 else warn "Claude Python SDK not installed (no internet to pypi?): the AI assistant stays off — run install.sh again later"; fi
 # Gemini (Google) as the other choice; a local model (Ollama) needs no SDK
 [ ! -x /opt/mikrotiklover/venv/bin/pip ] || /opt/mikrotiklover/venv/bin/pip install -q --upgrade 'google-genai>=1,<3' >/dev/null 2>&1 \
-   || warn "Gemini Python SDK not installed: Claude and a local model (Ollama) still work"
+   || /opt/mikrotiklover/venv/bin/python -c 'import google.genai' 2>/dev/null || warn "Gemini Python SDK not installed: Claude and a local model (Ollama) still work"
 apt-get install -y -qq lego >/dev/null 2>&1 || warn "lego not available: Let's Encrypt certificate cannot be fetched here (radius-admin cert import still works)"
+if [ "${ML_PREPARE_ONLY:-0}" = 1 ]; then
+    apt-get install -y -qq python3-flask python3-waitress python3-werkzeug nginx sudo python3-cryptography cron >/dev/null
+    log "Packages ready (ML_PREPARE_ONLY): the rest runs on the first real install"
+    exit 0
+fi
 [ -d "$RADDB" ] || die "$RADDB not found — unexpected FreeRADIUS layout"
 
 # ---------------------------------------------------------------- settings
@@ -563,6 +571,7 @@ EOF
     if [ "$(mysql -N "$DB_NAME" -e 'SELECT COUNT(*) FROM web_admin')" = 0 ]; then
         WEB_FIRST_PASS=$(openssl rand -base64 18 | tr -dc 'A-HJ-NP-Za-km-z2-9' | cut -c1-14)
         printf '%s\n' "$WEB_FIRST_PASS" | /usr/local/sbin/radius-admin web passwd admin -p - >/dev/null
+        [ -z "${ML_FIRST_PASS_FILE:-}" ] || (umask 077; printf 'Dashboard first login: admin / %s   (change it under Settings)\n' "$WEB_FIRST_PASS" > "$ML_FIRST_PASS_FILE")
     fi
     WEB_URL="https://$(hostname -I 2>/dev/null | awk '{print $1}'):$WEB_PORT"
 fi

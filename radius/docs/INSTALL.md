@@ -101,6 +101,37 @@ Server ko fixed IP dein (netplan / router DHCP reservation).
 
 ---
 
+## 2b. Asaan raasta: tayyar VM image (install ki zaroorat nahi)
+
+Agar server ek VM hai (Proxmox, VMware, VirtualBox, Hyper-V), to section 2 aur 3 chhor dein:
+
+1. **Image import karein:**
+   - Proxmox / KVM: `.qcow2` — Proxmox par: `qm importdisk VMID mikrotiklover-radius-….qcow2 local-lvm`.
+   - VMware / VirtualBox: `.ova` — File → Import.
+   - Hyper-V: `.vhdx` — New VM → Generation 1 → "Use an existing virtual hard disk".
+2. **VM ki settings:** 2 CPU, 2–4 GB RAM, network **bridged** (wohi LAN jahan MikroTik hai).
+3. **Start karein.** 2–5 minute baad console par likha aata hai:
+   ```
+   MikrotikLover is ready: https://192.168.88.23:8443/
+   Dashboard first login: admin / xxxxxxxxxxxxxx
+   ```
+   Is waqt har VM ke apne passwords aur certificates bante hain. Internet ki zaroorat nahi.
+4. **Console login:** `mladmin` / `mikrotiklover` — foran naya password maanga jayega.
+5. **Fixed IP dein:**
+   ```bash
+   sudo radius-admin netip static 192.168.88.10/24 192.168.88.1
+   ```
+   Ya router par DHCP reservation de dein.
+6. **Time zone:**
+   ```bash
+   sudo timedatectl set-timezone Asia/Karachi
+   ```
+   Phir seedha **section 4** (router add karna) par jayein.
+
+Dashboard ka password bhool jayein to: `sudo cat /root/mikrotiklover-first-login.txt` (ya `sudo radius-admin web passwd admin`).
+
+---
+
 ## 3. Install
 
 **ZIP se (jo file aap ke paas hai):**
@@ -513,6 +544,7 @@ Log files: `/var/log/mikrotik/` (`dns.log`, `webfilter.log`, `router.log`, `traf
 | UDP 162 | Devices → server | SNMP traps: UPS on battery, port down, printer jam (radius-admin snmp trapd on) |
 | TCP 22 (ya jo port diya) | Server → backup server | Off-site backup (SSH), sirf jab set ho |
 | TCP 443 / 587 | Server → internet | Alerts: Telegram, CallMeBot (WhatsApp), SMTP email |
+| TCP 22 | Admin PC → server | SSH (VM image: user `mladmin`, pehli login par naya password) |
 
 | Path | Kya |
 |---|---|
@@ -520,3 +552,5 @@ Log files: `/var/log/mikrotik/` (`dns.log`, `webfilter.log`, `router.log`, `traf
 | `/var/lib/mikrotiklover/` | Policies, seekhi hui apps, VPN/threat lists, router sync files |
 | `/var/backups/mikrotiklover/` | Backups |
 | `/usr/local/sbin/radius-admin` | Sab kaam ka CLI (`radius-admin help`) |
+| `/etc/netplan/50-mikrotiklover.yaml` | Server ka apna IP (`radius-admin netip`) |
+| `/var/log/mikrotiklover-firstboot.log`, `/root/mikrotiklover-first-login.txt` | VM image: pehli boot ka log, dashboard ka pehla password |

@@ -1572,6 +1572,83 @@ cmd_ai() { # "Network se poochho": questions in plain words, answered by Claude 
     esac
 }
 
+# ======================================================================= this server's own address (VM image, console)
+NETPLAN_DIR=${NETPLAN_DIR:-/etc/netplan}
+netip_if() { ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | sed 's/@.*//' | grep -E '^(en|eth)' | head -1; }
+cmd_netip() {
+    local sub=${1:-show}; shift || true
+    local ifc="" a=() i
+    for ((i = 1; i <= $#; i++)); do if [ "${!i}" = --if ]; then i=$((i + 1)); ifc=${!i:-}; else a+=("${!i}"); fi; done
+    set -- "${a[@]}"
+    [ -n "$ifc" ] || ifc=$(netip_if)
+    [[ $ifc =~ ^[A-Za-z0-9._-]{1,15}$ ]] || die "no network card found (--if NAME)"
+    local f="$NETPLAN_DIR/50-mikrotiklover.yaml" old; old=$(ip -4 -o addr show dev "$ifc" 2>/dev/null | awk '{print $4}' | head -1 || true)
+    case $sub in
+    show)
+        echo "Card     : $ifc"
+        echo "Address  : ${old:-none}"
+        echo "Gateway  : $(ip -4 route show default 2>/dev/null | awk '{print $3}' | head -1 | grep . || echo none)"
+        echo "DNS      : $(awk '/^nameserver/{print $2}' /etc/resolv.conf 2>/dev/null | paste -sd' ' | grep . || echo none)"
+        echo "Set by   : $( [ -f "$f" ] && { grep -q 'dhcp4: true' "$f" && echo "DHCP ($f)" || echo "fixed address ($f)"; } || echo "the system's own netplan files")"
+        echo "Change   : radius-admin netip static 192.168.88.10/24 192.168.88.1 [DNS]  |  radius-admin netip dhcp" ;;
+    static|dhcp)
+        local yaml
+        if [ "$sub" = static ]; then
+            local addr=${1:-} gw=${2:-} dns=${3:-${2:-}}
+            yaml=$(python3 - "$addr" "$gw" "$dns" "$ifc" 2>&1 <<'PY'
+import ipaddress, sys
+addr, gw, dns, ifc = sys.argv[1:5]
+try:
+    i = ipaddress.IPv4Interface(addr)
+    g = ipaddress.IPv4Address(gw)
+    d = [str(ipaddress.IPv4Address(x)) for x in dns.replace(",", " ").split()]
+except ValueError as e:
+    sys.exit(f"usage: radius-admin netip static ADDRESS/PREFIX GATEWAY [DNS]  ({e})")
+if "/" not in addr or i.network.prefixlen > 30 or i.ip in (i.network.network_address, i.network.broadcast_address):
+    sys.exit("the address needs its network size and must be a host in it, like 192.168.88.10/24")
+if g not in i.network or g == i.ip:
+    sys.exit(f"the gateway {g} is not in {i.network} (or is the address itself)")
+print(f"""# Managed by radius-admin netip
+network:
+  version: 2
+  ethernets:
+    {ifc}:
+      dhcp4: false
+      addresses: [{i.with_prefixlen}]
+      routes:
+        - to: default
+          via: {g}
+      nameservers:
+        addresses: [{", ".join(d)}]
+""")
+PY
+) || die "$(printf '%s' "$yaml" | tail -1)"
+        else
+            yaml=$(printf '# Managed by radius-admin netip\nnetwork:\n  version: 2\n  ethernets:\n    %s:\n      dhcp4: true\n' "$ifc")
+        fi
+        install -d -m 755 "$NETPLAN_DIR"
+        # other netplan files for this card would be merged with this one: set them aside (kept as .ml-off)
+        local o; for o in "$NETPLAN_DIR"/*.yaml; do
+            [ -f "$o" ] && [ "$o" != "$f" ] && grep -qE "^\s+$ifc:|match:" "$o" && mv "$o" "$o.ml-off" && echo "   set aside: $o (now $o.ml-off)"
+        done
+        (umask 077; printf '%s\n' "$yaml" > "$f.tmp") && mv "$f.tmp" "$f"; chmod 600 "$f"
+        if [ "${NETPLAN_APPLY:-1}" = 1 ]; then
+            command -v netplan >/dev/null || die "netplan not found: $f written, set the address by hand"
+            netplan generate >/dev/null 2>&1 || die "netplan refused $f"
+            netplan apply >/dev/null 2>&1 || warn "netplan apply reported a problem — check: ip addr"
+        fi
+        if [ "$sub" = static ]; then
+            local new=${1%/*}
+            [ -z "$(setting_get server_ip 2>/dev/null)" ] || [ "$(setting_get server_ip 2>/dev/null)" = "${old%/*}" ] && setting_set server_ip "$new" 2>/dev/null || true
+            ok "this server: $1 via $2 on $ifc"
+            [ -z "$old" ] || [ "${old%/*}" = "$new" ] || echo "   The dashboard and SSH are now on $new. Routers: change the /radius address from ${old%/*} to $new"
+        else
+            ok "this server takes its address by DHCP on $ifc"
+        fi ;;
+    *) die "usage: radius-admin netip show | static ADDRESS/PREFIX GATEWAY [DNS] | dhcp   [--if CARD after the word]" ;;
+    esac
+}
+
 # ======================================================================= second RADIUS server (backup)
 HA_PY=/usr/local/lib/mikrotiklover/ha.py
 HA_CNF=/etc/mysql/mariadb.conf.d/60-mikrotiklover-ha.cnf
@@ -4392,6 +4469,7 @@ MAC authentication (devices without username/password: printers, CCTV, TVs, POS)
   cert status · cert letsencrypt NAME --email E --http|--cloudflare · cert import FULLCHAIN KEY · cert renew · cert own
                                         public certificate for phones + dashboard (no CA install on Android); routers unchanged
   ha status | ha start BACKUP-IP | ha join FILE | ha link IP | ha stop   second RADIUS server (database copied both ways)
+  netip show | netip static 192.168.88.10/24 192.168.88.1 [DNS] | netip dhcp   this server's own address (netplan)
   ai status|on|off · ai provider claude|gemini|ollama · ai key / gemini-key (stdin) · ai ollama URL [MODEL] · ai model NAME
                                         'Network se poochho': questions answered by Claude, Gemini or a local model; read-only tools
   push list|test|del ID                  dashboard app notifications on the admins' phones (turned on in the app)
@@ -4466,6 +4544,7 @@ case ${1:-help} in
     push) shift; cmd_push "$@" ;;
     ai) shift; cmd_ai "$@" ;;
     ha) shift; cmd_ha "$@" ;;
+    netip) shift; cmd_netip "$@" ;;
     doctor|health) shift; python3 -I /usr/local/lib/mikrotiklover/health.py --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@" ;;
     backups) cmd_backups ;;
     restore) shift; cmd_restore "$@" ;;

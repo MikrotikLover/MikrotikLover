@@ -26,6 +26,8 @@ curl -fsSL .../radius/get.sh | sudo bash -s -- --domain radius.yourcompany.com -
 ```
 **Update:** wohi command dobara chalayein — users, settings aur data rehte hain (dashboard ki port / allow list bhi yaad rehti hai).
 
+**Ya tayyar VM image (Proxmox, VMware, VirtualBox, Hyper-V):** install ki zaroorat nahi — image import karein aur start karein. Neeche [1c](#1c-tayyar-vm-image) dekhein.
+
 Ya haath se:
 ```bash
 git clone <this-repo> && cd MikrotikLover/radius
@@ -52,6 +54,64 @@ RADIUS ports sirf apne MikroTik routers ke liye kholein:
 ```bash
 sudo ufw allow from <mikrotik-public-ip> to any port 1812:1813 proto udp
 ```
+
+## 1c. Tayyar VM image
+
+Ubuntu 24.04 LTS + saare packages + MikrotikLover, ek file mein. Import karein, start karein — bas.
+
+| Image | Kahan chalayein |
+|---|---|
+| `.qcow2` | Proxmox, KVM / virt-manager, Unraid |
+| `.ova` | VMware Workstation / ESXi, VirtualBox (File → Import Appliance) |
+| `.vhdx` | Hyper-V (Generation 1; ya Generation 2 + Secure Boot template "Microsoft UEFI Certificate Authority") |
+
+**VM settings:** 2 CPU, 2–4 GB RAM, network **bridged** (MikroTik routers wala LAN — NAT nahi), disk 20 GB (baad mein barha sakte hain).
+
+**Pehli dafa start karne par** (2–5 minute) VM khud set up hota hai:
+- har VM ke **apne** database passwords, certificates (CA + server), RADIUS secrets aur dashboard login banta hai — do VM kabhi ek jaise nahi hote (installer image banate waqt nahi, pehli boot par chalta hai);
+- **internet ki zaroorat nahi** — sab packages image mein hain;
+- SSH ki apni keys banti hain.
+
+Phir VM ki screen (console) par:
+```
+MikrotikLover is ready: https://192.168.88.23:8443/
+Dashboard first login: admin / xxxxxxxxxxxxxx
+```
+- **Console / SSH login:** `mladmin` / `mikrotiklover` — pehli login par naya password maanga jata hai.
+- **Dashboard password dobara dekhna:** `sudo cat /root/mikrotiklover-first-login.txt`
+- **Fixed IP** (server ka IP badalna nahi chahiye — routers isi par RADIUS bhejte hain):
+  ```bash
+  sudo radius-admin netip static 192.168.88.10/24 192.168.88.1      # address/size  gateway  [DNS]
+  sudo radius-admin netip show                                       # abhi kya hai
+  sudo radius-admin netip dhcp                                       # wapas DHCP
+  ```
+  Ya router par DHCP reservation de dein.
+- Agar setup fail ho: `sudo cat /var/log/mikrotiklover-firstboot.log`, phir `sudo systemctl restart mikrotiklover-firstboot`.
+- **Update:** baaqi servers jaisa — `curl -fsSL .../radius/get.sh | sudo bash` (code `/opt/mikrotiklover` mein hai).
+
+**Image khud banana** (kisi bhi Ubuntu machine par, internet ke saath):
+```bash
+sudo apt install qemu-utils qemu-system-x86 cloud-image-utils
+sudo radius/vm/build-image.sh --out ~/vm-image                     # qcow2 + ova + vhdx
+sudo radius/vm/build-image.sh --formats qcow2 --size 40G            # sirf ek format, bari disk
+#   company proxy ke peeche:  --proxy http://PROXY:3128 [--ca proxy-ca.crt]
+```
+- Ubuntu ki official cloud image download hoti hai, aur Ubuntu ki checksum list se check hoti hai.
+- Image ke andar sab packages install hote hain (`ML_PREPARE_ONLY=1 ./install.sh`), aur VMware / Hyper-V / VirtualBox ke drivers aur guest tools bhi.
+- Phir har VM ka alag hissa saaf kiya jata hai: machine id, SSH keys, logs aur proxy.
+- KVM ke saath ~10 minute; KVM ke baghair (nested VM / CI) ~1 ghanta.
+- Saath mein `.sha256` checksum file aur build log bhi banta hai.
+
+**Test:** `tests/test-vm-image.sh IMAGE.qcow2 --ova FILE --vhdx FILE` — image ki copy boot karta hai jaise customer karega:
+- pehli boot;
+- console par address + password;
+- dashboard login;
+- dashboard se router add, phir RADIUS Access-Accept / Reject;
+- SSH keys, zaroori password change;
+- `netip`, health check;
+- OVA ki OVF / checksums / VMDK, VHDX.
+
+`tests/test-netip.sh` — fixed IP / DHCP files aur ghalat input.
 
 ## 2. MikroTik router add karein (NAS)
 
