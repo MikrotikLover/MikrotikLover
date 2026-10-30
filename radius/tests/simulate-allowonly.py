@@ -7,7 +7,11 @@ RSC = os.path.join(os.path.dirname(__file__), "..", "mikrotik", "allow-only-what
 lists, rules, menu = {}, [], None
 for line in open(RSC):
     s = line.strip()
-    if s.startswith("/"): menu = s
+    # ':do { /menu add … } on-error={…}' (an entry another file may already have added): its menu and its add
+    m = re.match(r"^:do \{ (/[a-z0-9 -]+?) (add .*) \} on-error=", s)
+    if m:
+        menu, s = m.group(1), m.group(2)
+    elif s.startswith("/"): menu = s
     if not s.startswith("add "): continue
     props = dict(re.findall(r'([a-z-]+)=("[^"]*"|\S+)', s))
     props = {k: v.strip('"') for k, v in props.items()}

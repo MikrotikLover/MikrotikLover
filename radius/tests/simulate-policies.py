@@ -6,7 +6,11 @@ RSC = os.path.join(os.path.dirname(__file__), "..", "mikrotik", "webfilter-polic
 chains, nat, lists, menu = {}, [], {}, None
 for line in open(RSC):
     s = line.strip()
-    if s.startswith("/"): menu = s
+    # ':do { /menu add … } on-error={…}' (an entry another file may already have added): its menu and its add
+    m = re.match(r"^:do \{ (/[a-z0-9 -]+?) (add .*) \} on-error=", s)
+    if m:
+        menu, s = m.group(1), m.group(2)
+    elif s.startswith("/"): menu = s
     if not s.startswith("add "): continue
     r = {k: v.strip('"') for k, v in re.findall(r'([a-z-]+)=("[^"]*"|\S+)', s)}
     if menu == "/ip firewall nat": nat.append(r)

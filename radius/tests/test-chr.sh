@@ -18,6 +18,8 @@
 # A line RouterOS cannot run stops the import with an error: that is a FAIL here.
 # CHR has no Wi-Fi radio: the Wi-Fi menus are set up, the per-radio lines run on no radio.
 # Needs: qemu-system-x86, sshpass, unzip, curl.     Exit 0 = all passed.
+# Without those tools or without download.mikrotik.com it says "skipped" and exits 0 (the full suite runs it too);
+# CHR_REQUIRED=1 makes that an error (exit 2).
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROS=7 VER="" CACHE=${HOME:-/root}/.cache/mikrotiklover-chr SYNC="" KEEP=0 PORT=${CHR_SSH_PORT:-2222}
@@ -30,8 +32,13 @@ while [ $# -gt 0 ]; do
     esac; shift
 done
 [[ $ROS =~ ^[67]$ ]] || { echo "--ros 6 or 7" >&2; exit 2; }
+skip() { # nothing to test with here: a skip, or an error with CHR_REQUIRED=1
+    echo "$1" >&2
+    [ "${CHR_REQUIRED:-0}" = 1 ] && exit 2
+    echo "skip: CHR test not run ($1)"; echo "all CHR tests passed (skipped)"; exit 0
+}
 for t in qemu-system-x86_64 sshpass unzip curl python3; do
-    command -v $t >/dev/null || { echo "missing $t (apt install qemu-system-x86 sshpass unzip curl)" >&2; exit 2; }
+    command -v $t >/dev/null || skip "missing $t (apt install qemu-system-x86 sshpass unzip curl)"
 done
 
 PASS=0 FAIL=0
@@ -43,7 +50,7 @@ note() { printf '  ---- %s\n' "$*"; }
 DL=https://download.mikrotik.com/routeros
 if [ -z "$VER" ]; then
     VER=$(curl -fsS -m 30 "$DL/$([ "$ROS" = 7 ] && echo NEWESTa7.stable || echo NEWEST6.long-term)" | awk '{print $1}')
-    [[ $VER =~ ^[67]\.[0-9.]+$ ]] || { echo "could not find the newest RouterOS $ROS version (download.mikrotik.com reachable?)" >&2; exit 2; }
+    [[ $VER =~ ^[67]\.[0-9.]+$ ]] || skip "could not find the newest RouterOS $ROS version (download.mikrotik.com reachable?)"
 fi
 [ "${VER%%.*}" = "$ROS" ] || { echo "--version $VER is not RouterOS $ROS" >&2; exit 2; }
 mkdir -p "$CACHE"
@@ -51,7 +58,7 @@ IMG=$CACHE/chr-$VER.img PKGZIP=$CACHE/all_packages-x86-$VER.zip
 if [ ! -s "$IMG" ]; then
     echo "Downloading CHR $VER ..."
     curl -fsS -m 600 -o "$IMG.zip" "$DL/$VER/chr-$VER.img.zip" && unzip -o -q "$IMG.zip" -d "$CACHE" && rm -f "$IMG.zip" \
-        || { echo "CHR image download failed" >&2; exit 2; }
+        || { rm -f "$IMG.zip"; skip "CHR image download failed (download.mikrotik.com reachable?)"; }
 fi
 [ -s "$PKGZIP" ] || curl -fsS -m 300 -o "$PKGZIP" "$DL/$VER/all_packages-x86-$VER.zip" || rm -f "$PKGZIP"
 
