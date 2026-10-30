@@ -34,6 +34,12 @@ valid_ip() {
     [ -z "${BASH_REMATCH[6]}" ] || (( BASH_REMATCH[6] <= 32 )) || die "Invalid prefix in '$1'"
 }
 
+rsc_move_top() { # MENU FIND-EXPRESSION -> RouterOS line: these rules above every other one
+    # (not "move ... destination=0": in a script that stops the whole /import when only these rules are there)
+    local neg; neg=$(sed -E 's/[[:space:]]+([a-z-]+[=~])/ and \1/g' <<<"$2")
+    printf ':do { :local o [%s find where !(%s)]; :if ([:len $o] > 0) do={ %s move [%s find %s] destination=[:pick $o 0] } }\n' "$1" "$neg" "$1" "$1" "$2"
+}
+
 gen_pass() { local s; s=$(openssl rand -base64 96 | tr -dc 'A-HJ-NP-Za-km-z2-9'); printf '%s' "${s:0:${1:-10}}"; }
 
 nt_hash() { printf '%s' "$1" | iconv -f UTF-8 -t UTF-16LE | openssl dgst -md4 -provider legacy -provider default -r | cut -d' ' -f1 | tr a-f A-F; }
@@ -1259,6 +1265,112 @@ cmd_captive() {
     esac
 }
 
+# ---------------------------------------------------------------- Passpoint (Hotspot 2.0)
+PP_TOOL=/usr/local/lib/mikrotiklover/passpoint.py
+pp_cert_name() { # the name in the certificate Wi-Fi clients get (own or public)
+    if [ "$(setting_get cert_mode 2>/dev/null)" = public ] && [ -n "$(setting_get public_domain 2>/dev/null)" ]; then setting_get public_domain; else echo "$RADIUS_DOMAIN"; fi
+}
+pp_json() { # the pp_* settings as JSON (domain defaults to the certificate's name: phones check the server by it)
+    { echo "SELECT SUBSTRING(k, 4), v FROM ml_setting WHERE k LIKE 'pp\\_%'" | db; } | python3 -I -c '
+import json, sys
+d = {k: v for k, _, v in (l.rstrip("\n").partition("\t") for l in sys.stdin) if k}
+d.setdefault("domain", sys.argv[1])
+print(json.dumps(d))' "$(pp_cert_name)"
+}
+pp_password() { # USER [PASS] -> the password for the profile (saved one when it is saved as text)
+    local u=$1 p=${2:-}
+    user_exists "$u" || die "No such user '$u'"
+    if [ "$p" = - ]; then IFS= read -r p || true; [ -n "$p" ] || die "-p -: the password on stdin"; fi   # dashboard: not on the command line
+    if [ -z "$p" ]; then
+        p=$(echo "SELECT value FROM radcheck WHERE username=$(q "$u") AND attribute='Cleartext-Password' LIMIT 1" | db)
+        [ -n "$p" ] || die "'$u' has no saved password (NT-hash): give it with -p PASS (the profile carries it)"
+    fi
+    printf '%s' "$p"
+}
+pp_profile() { # ios|android USER PASS -> profile on stdout
+    local ca=() mode; mode=$(setting_get cert_mode 2>/dev/null || true)
+    [ "$mode" = public ] || ca=(--ca "$CERT_DIR/ca.der")      # own CA: the phone gets it with the profile
+    printf '%s\n' "$3" | python3 -I "$PP_TOOL" "$1" --settings "$(pp_json)" --user "$2" --server-name "$(pp_cert_name)" "${ca[@]}"
+}
+
+cmd_passpoint() {
+    local sub=${1:-status}; shift || true
+    case $sub in
+    status)
+        local j; j=$(pp_json)
+        python3 -I "$PP_TOOL" check --settings "$j" >/dev/null 2>&1 || { echo "Passpoint: not set up — radius-admin passpoint set --domain wifi.yourcompany.com --name \"Your Company\""; return 0; }
+        python3 -I -c '
+import json, sys
+st = json.loads(sys.argv[1])
+print("Passpoint domain  : %s   (phones match the Wi-Fi by it; logins are anonymous@%s outside)" % (st["domain"], st["domain"]))
+print("Name              : %s" % st["name"])
+print("Wi-Fi name (SSID) : %s" % st["ssid"])
+print("Venue             : %s — %s (%s network)" % (st["venue_name"], st["venue"], st["network"]))
+print("Roaming OI        : %s" % (st["roaming_oi"] or "-"))' "$(python3 -I "$PP_TOOL" check --settings "$j")"
+        echo "Server certificate: $(pp_cert_name)$([ "$(pp_cert_name)" = "$(python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])["domain"])' "$j")" ] || echo "   (not the domain: Android 11 and older want them the same)")"
+        echo "Open links        : $(echo "SELECT COUNT(*) FROM ml_passpoint_link WHERE expires > NOW()" | db)   (radius-admin passpoint links)" ;;
+    json) python3 -I "$PP_TOOL" check --settings "$(pp_json)" 2>/dev/null || echo '{}' ;;
+    set)
+        local -A new=()
+        while [ $# -gt 0 ]; do
+            case $1 in
+            --domain) new[domain]=${2:-} ;; --name) new[name]=${2:-} ;; --ssid) new[ssid]=${2:-} ;;
+            --venue) new[venue]=${2:-} ;; --venue-name) new[venue_name]=${2:-} ;; --network) new[network]=${2:-} ;;
+            --roaming-oi) new[roaming_oi]=${2:-}; [ "${2:-}" != - ] || new[roaming_oi]="" ;;
+            *) die "usage: radius-admin passpoint set [--domain D] [--name N] [--ssid S] [--venue V] [--venue-name N] [--network T] [--roaming-oi HEX|-]" ;;
+            esac
+            [ $# -ge 2 ] || die "$1 needs a value"; shift 2
+        done
+        [ ${#new[@]} -gt 0 ] || die "usage: radius-admin passpoint set --domain wifi.yourcompany.com [--name \"Your Company\"] [--ssid Office-Passpoint] ..."
+        local j k checked; j=$(pp_json)
+        for k in "${!new[@]}"; do j=$(python3 -I -c 'import json,sys; d=json.loads(sys.argv[1]); d[sys.argv[2]]=sys.argv[3]; print(json.dumps(d))' "$j" "$k" "${new[$k]}"); done
+        checked=$(python3 -I "$PP_TOOL" check --settings "$j" 2>&1) || die "${checked#ERROR: }"
+        for k in domain name ssid venue venue_name network roaming_oi; do
+            setting_set "pp_$k" "$(python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$checked" "$k")"
+        done
+        ok "Passpoint settings saved. Routers: radius-admin passpoint router ROUTER-IP (or dashboard → Router setup). Old phone profiles stay valid only while the domain is the same" ;;
+    router)
+        local nas="" legacy=0 sip secret tpl
+        while [ $# -gt 0 ]; do case $1 in --legacy) legacy=1 ;; --server) sip=${2:-}; shift ;; *) nas=$1 ;; esac; shift; done
+        [ -n "$nas" ] || die "usage: radius-admin passpoint router ROUTER-IP [--legacy] [--server THIS-SERVER-IP]"
+        secret=$(echo "SELECT secret FROM nas WHERE nasname=$(q "$nas") LIMIT 1" | db)
+        [ -n "$secret" ] || die "No router '$nas' (radius-admin nas add $nas first)"
+        sip=${sip:-$(setting_get server_ip)}
+        [ -n "$sip" ] || die "this server's IP as the router sees it: --server IP (or set it once in the dashboard)"
+        valid_ip "$sip"
+        tpl=/usr/local/lib/mikrotiklover/mikrotik/passpoint-$([ $legacy = 1 ] && echo wireless-legacy || echo wifi-ros7).rsc
+        python3 -I "$PP_TOOL" router --settings "$(pp_json)" --template "$tpl" --server "$sip" --secret "$secret" ;;
+    profile)
+        local u="" p="" kind="" out=""
+        while [ $# -gt 0 ]; do case $1 in --ios|--apple) kind=ios ;; --android) kind=android ;; -p) p=${2:-}; shift ;; -o) out=${2:-}; shift ;; *) u=$1 ;; esac; shift; done
+        [ -n "$u" ] && [ -n "$kind" ] || die "usage: radius-admin passpoint profile USER --ios|--android [-p PASS] [-o FILE]"
+        p=$(pp_password "$u" "$p")
+        if [ -n "$out" ]; then (umask 077; pp_profile "$kind" "$u" "$p" > "$out") || { rm -f "$out"; die "profile not made"; }
+            ok "$out — $([ $kind = ios ] && echo "open it on the iPhone / Mac (AirDrop, mail), then Settings → Profile Downloaded → Install" || echo "Android installs it only when a browser downloads it: use radius-admin passpoint link $u")"
+        else pp_profile "$kind" "$u" "$p"; fi ;;
+    link) # one download page per user (iPhone + Android), valid for some hours
+        local u="" p="" hours=24 tok ios andr host
+        while [ $# -gt 0 ]; do case $1 in -p) p=${2:-}; shift ;; --hours) hours=${2:-}; shift ;; *) u=$1 ;; esac; shift; done
+        [ -n "$u" ] || die "usage: radius-admin passpoint link USER [-p PASS] [--hours 24]   |  passpoint links  |  passpoint unlink USER|TOKEN"
+        valid_int "$hours" "--hours"; (( hours >= 1 && hours <= 168 )) || die "--hours: 1 to 168"
+        python3 -I "$PP_TOOL" check --settings "$(pp_json)" >/dev/null 2>&1 || die "Passpoint is not set up: radius-admin passpoint set --domain ..."
+        p=$(pp_password "$u" "$p")
+        ios=$(pp_profile ios "$u" "$p" | base64 -w0) || die "profile not made"
+        andr=$(pp_profile android "$u" "$p") || die "profile not made"
+        tok=$(openssl rand -hex 16)
+        echo "DELETE FROM ml_passpoint_link WHERE expires < NOW() OR username=$(q "$u");
+              INSERT INTO ml_passpoint_link (token, username, ios, android, expires) VALUES ('$tok', $(q "$u"), $(q "$ios"), $(q "$andr"), NOW() + INTERVAL $hours HOUR)" | db
+        host=$( [ "$(setting_get cert_mode 2>/dev/null)" = public ] && setting_get public_domain || setting_get server_ip)
+        [ -n "$host" ] || host=$(hostname -I 2>/dev/null | awk '{print $1}')
+        ok "Passpoint link for $u (open it on the phone; valid $hours h; it carries the password — send it only to $u):"
+        echo "https://${host:-SERVER}:${WEB_PORT:-8443}/api/public/passpoint/$tok" ;;
+    links) echo "SELECT username, CONCAT(LEFT(token, 8), '…') AS token, fetched, created, expires FROM ml_passpoint_link WHERE expires > NOW() ORDER BY created DESC" | dbt ;;
+    unlink) [ -n "${1:-}" ] || die "usage: radius-admin passpoint unlink USER|TOKEN"
+        echo "DELETE FROM ml_passpoint_link WHERE username=$(q "$1") OR token=$(q "$1")" | db; ok "link(s) of '$1' removed" ;;
+    *) die "usage: radius-admin passpoint status | set ... | router ROUTER-IP [--legacy] | profile USER --ios|--android | link USER | links | unlink USER" ;;
+    esac
+}
+
 public_name_rsc() { # router part of sync.rsc: the public name (radius-admin cert letsencrypt) points to this server on the LAN
     local dom sip; dom=$(setting_get public_domain 2>/dev/null || true); sip=$(setting_get server_ip 2>/dev/null || true)
     echo "/ip dns static"
@@ -2439,7 +2551,7 @@ mail_rsc() { # router part of sync.rsc: protect the mail server on the LAN (pass
     if [ "$(setting_get mail_smtp_out 2>/dev/null)" != 0 ]; then
         echo "add chain=forward in-interface-list=LAN out-interface-list=!LAN protocol=tcp dst-port=25 src-address=!$ip connection-state=new action=reject reject-with=tcp-reset log=yes log-prefix=\"WF-spambot\" comment=\"mlmail: only the mail server sends mail directly\""
     fi
-    echo 'move [find chain=forward comment~"^mlmail:"] destination=0'
+    rsc_move_top "/ip firewall filter" 'chain=forward comment~"^mlmail:"'
 }
 
 cmd_mail() { # the mail server on the LAN (MDaemon …): settings, checks, safe doors, protection (tools/mailsec.py)
@@ -2620,7 +2732,7 @@ ips_rsc() { # router part of sync.rsc: a copy of internet traffic to the server 
         echo 'remove [find comment~"^mlips:"]'
         echo 'add chain=prerouting src-address-list=ml-ips action=drop comment="mlips: blocked by the IPS (from)"'
         echo 'add chain=prerouting dst-address-list=ml-ips action=drop comment="mlips: blocked by the IPS (to)"'
-        echo 'move [find comment~"^mlips:"] destination=0'
+        rsc_move_top "/ip firewall raw" 'comment~"^mlips:"'
     elif [ "$(setting_get ips_on 2>/dev/null)" = 1 ] && [[ $sip =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
         [ "$(setting_get ips_mirror 2>/dev/null)" = all ] || cb=" connection-bytes=0-262144"
         echo "# IPS (radius-admin ips): a copy of internet traffic to Suricata on $sip; addresses it blocks (list ml-ips, every minute) are dropped"
@@ -2633,7 +2745,7 @@ ips_rsc() { # router part of sync.rsc: a copy of internet traffic to the server 
         echo 'remove [find comment~"^mlips:"]'
         echo 'add chain=prerouting src-address-list=ml-ips action=drop comment="mlips: blocked by the IPS (from)"'
         echo 'add chain=prerouting dst-address-list=ml-ips action=drop comment="mlips: blocked by the IPS (to)"'
-        echo 'move [find comment~"^mlips:"] destination=0'
+        rsc_move_top "/ip firewall raw" 'comment~"^mlips:"'
     else
         echo "# IPS off (radius-admin ips on)"
         echo "/ip firewall mangle"
@@ -3387,6 +3499,7 @@ GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_setting TO 'radius_web'@'localho
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_status TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_stat TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_setup TO 'radius_web'@'localhost';
+GRANT UPDATE ON \`$DB_NAME\`.ml_passpoint_link TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_fetch TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE ON \`$DB_NAME\`.ml_traffic TO 'radius_web'@'localhost';
 GRANT INSERT, DELETE ON \`$DB_NAME\`.ml_block_event TO 'radius_web'@'localhost';
@@ -4474,6 +4587,9 @@ MAC authentication (devices without username/password: printers, CCTV, TVs, POS)
                                         'Network se poochho': questions answered by Claude, Gemini or a local model; read-only tools
   push list|test|del ID                  dashboard app notifications on the admins' phones (turned on in the app)
   captive on|off|status                 phones find the hotspot login by themselves (RFC 8908 API, DHCP option 114; needs cert letsencrypt)
+  passpoint status · passpoint set --domain D [--name N] [--ssid S] [--venue V] [--venue-name N] [--network T] [--roaming-oi HEX|-]
+  passpoint router ROUTER-IP [--legacy] · passpoint profile USER --ios|--android [-o FILE] · passpoint link USER [--hours 24]
+  passpoint links · passpoint unlink USER   Passpoint (Hotspot 2.0): phones with the profile join every office Wi-Fi by themselves
   wifipolicy on|off|status · wifipolicy list   Wi-Fi (WPA-Enterprise) users + MAC devices: policy by MAC, no VLAN (router: DHCP, else ARP)
                                         a phone that logged in with a password logs in by its MAC next time (random MACs)
 
@@ -4541,6 +4657,7 @@ case ${1:-help} in
     wifipolicy) shift; cmd_wifipolicy "$@" ;;
     cert) shift; cmd_cert "$@" ;;
     captive) shift; cmd_captive "$@" ;;
+    passpoint|hs20) shift; cmd_passpoint "$@" ;;
     push) shift; cmd_push "$@" ;;
     ai) shift; cmd_ai "$@" ;;
     ha) shift; cmd_ha "$@" ;;

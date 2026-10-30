@@ -19,4 +19,4 @@ add name=ml-devices mode=dynamic-keys authentication-types=wpa2-psk wpa2-pre-sha
     radius-mac-authentication=yes radius-mac-accounting=yes radius-mac-mode=as-username radius-mac-format=XX:XX:XX:XX:XX:XX
 /interface wireless
 remove [find name="wlan-devices"]
-add master-interface=[find default-name=wlan1] ssid="Devices-WiFi" security-profile=ml-devices name=wlan-devices disabled=no
+:if ([:len [/interface wireless find default-name=wlan1]] > 0) do={ /interface wireless add master-interface=[/interface wireless find default-name=wlan1] ssid="Devices-WiFi" security-profile=ml-devices name=wlan-devices disabled=no }

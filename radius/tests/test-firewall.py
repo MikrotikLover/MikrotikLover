@@ -64,7 +64,9 @@ text = fw.rsc(st, "https://r/api/public/router/geo.rsc?key=K", "abc123")
 check("router file: address lists (no countries), jumps on new connections only, off policy left out",
       text.count("add list=mlfw-office") == 3 and "mlgeo" not in text.split("/ip firewall filter")[0] and text.count("connection-state=new action=jump") == 2
       and "mlfw:4" not in text, text)
-check("router file: jumps moved to the top; old rules removed first", 'move [find comment~"^mlfw: policies"] destination=0' in text and text.index('remove [find comment~"^mlfw"]') < text.index("jump-target=mlfw-fwd"))
+check("router file: jumps moved to the top (safe when they are the only rules); old rules removed first",
+      '/ip firewall filter move [/ip firewall filter find comment~"^mlfw: policies"] destination=[:pick $o 0]' in text
+      and 'find where !(comment~"^mlfw: policies")' in text and "destination=0" not in text and text.index('remove [find comment~"^mlfw"]') < text.index("jump-target=mlfw-fwd"))
 check("port forward: tcp + udp, one per allowed source; disabled one left out", text.count("chain=dstnat") == 4 and "192.168.88.30" not in text
       and "src-address-list=mlgeo-PK" in text and "to-addresses=192.168.88.20 to-ports=37777" in text, text)
 check("country lists fetched only when the version changes", ':if ($mlGeoVer != "abc123")' in text and "geo.rsc?key=K" in text)

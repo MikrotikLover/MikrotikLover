@@ -388,6 +388,19 @@ CREATE TABLE IF NOT EXISTS ml_router_setup (
 -- the same set-up written for RouterOS 6 (the router asks for it with ?v=6)
 ALTER TABLE ml_router_setup ADD COLUMN IF NOT EXISTS script6 MEDIUMTEXT NULL;
 
+-- Passpoint (Hotspot 2.0): one download page per user with the phone profiles (radius-admin passpoint link USER)
+CREATE TABLE IF NOT EXISTS ml_passpoint_link (
+  token CHAR(32) NOT NULL PRIMARY KEY,
+  username VARCHAR(64) NOT NULL,
+  ios MEDIUMTEXT NOT NULL,
+  android MEDIUMTEXT NOT NULL,
+  fetched INT UNSIGNED NOT NULL DEFAULT 0,
+  created DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires DATETIME NOT NULL,
+  KEY (username),
+  KEY (expires)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- IP binding: every user keeps the address DHCP gave them (or the one the admin chose); routers get DHCP static leases
 CREATE TABLE IF NOT EXISTS ml_ip_bind (
   username VARCHAR(64) NOT NULL PRIMARY KEY,

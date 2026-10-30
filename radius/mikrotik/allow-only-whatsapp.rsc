@@ -92,4 +92,5 @@ add chain=forward src-address-list=allow-only-whatsapp connection-state=new acti
 add chain=forward src-address-list=allow-only-whatsapp protocol=tcp action=reject reject-with=tcp-reset comment="allowonly:whatsapp block rest"
 add chain=forward src-address-list=allow-only-whatsapp action=reject reject-with=icmp-admin-prohibited comment="allowonly:whatsapp block rest"
 # Above every other forward rule (fasttrack included), in this order.
-move [find comment~"^allowonly:whatsapp"] destination=0
+# above every other rule (destination=0 is not safe in a script: it stops the import when only these rules are there)
+:do { :local o [/ip firewall filter find where !(comment~"^allowonly:whatsapp")]; :if ([:len $o] > 0) do={ /ip firewall filter move [/ip firewall filter find comment~"^allowonly:whatsapp"] destination=[:pick $o 0] } }

@@ -35,7 +35,8 @@ add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt prot
 add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt dst-address-list=doh-servers protocol=tcp dst-port=443 action=reject reject-with=tcp-reset comment="webfilter: block DNS-over-HTTPS"
 add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt dst-address-list=doh-servers protocol=udp dst-port=443 action=drop comment="webfilter: block DNS-over-HTTP/3"
 # Put the webfilter rules above any "accept LAN" rule.
-move [find comment~"^webfilter:"] destination=0
+# above every other rule (destination=0 is not safe in a script: it stops the import when only these rules are there)
+:do { :local o [/ip firewall filter find where !(comment~"^webfilter:")]; :if ([:len $o] > 0) do={ /ip firewall filter move [/ip firewall filter find comment~"^webfilter:"] destination=[:pick $o 0] } }
 
 # Encrypted-DNS hostnames
 /ip dns static
@@ -94,7 +95,8 @@ add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt prot
 add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.mask.icloud.com" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
 add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="mask-h2.icloud.com" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
 add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.mask-h2.icloud.com" action=reject reject-with=tcp-reset comment="webfilter: DoH by name"
-move [find comment~"^webfilter:"] destination=0
+# above every other rule (destination=0 is not safe in a script: it stops the import when only these rules are there)
+:do { :local o [/ip firewall filter find where !(comment~"^webfilter:")]; :if ([:len $o] > 0) do={ /ip firewall filter move [/ip firewall filter find comment~"^webfilter:"] destination=[:pick $o 0] } }
 
 # ---- IPv6: close the same bypasses (direct DNS, DoT, DoH) if your LAN has IPv6
 /ipv6 firewall address-list
@@ -110,4 +112,5 @@ add chain=forward in-interface-list=LAN protocol=tcp dst-port=853 action=reject 
 add chain=forward in-interface-list=LAN protocol=udp dst-port=853 action=drop comment="webfilter: v6 DNS-over-QUIC"
 add chain=forward in-interface-list=LAN dst-address-list=doh-servers protocol=tcp dst-port=443 action=reject reject-with=tcp-reset comment="webfilter: v6 DNS-over-HTTPS"
 add chain=forward in-interface-list=LAN dst-address-list=doh-servers protocol=udp dst-port=443 action=drop comment="webfilter: v6 DNS-over-HTTP/3"
-move [find comment~"^webfilter:"] destination=0
+# above every other rule (destination=0 is not safe in a script: it stops the import when only these rules are there)
+:do { :local o [/ipv6 firewall filter find where !(comment~"^webfilter:")]; :if ([:len $o] > 0) do={ /ipv6 firewall filter move [/ipv6 firewall filter find comment~"^webfilter:"] destination=[:pick $o 0] } }

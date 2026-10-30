@@ -657,6 +657,7 @@ add chain=wfp-whatsapp-only action=reject reject-with=icmp-admin-prohibited comm
 }
 # Policy rules above every other forward rule; DNS rules above the base DNS redirect.
 /ip firewall filter
-move [find comment~"^wfpolicy:"] destination=0
+# above every other rule (destination=0 is not safe in a script: it stops the import when only these rules are there)
+:do { :local o [/ip firewall filter find where !(comment~"^wfpolicy:")]; :if ([:len $o] > 0) do={ /ip firewall filter move [/ip firewall filter find comment~"^wfpolicy:"] destination=[:pick $o 0] } }
 /ip firewall nat
-:if ([:len [/ip firewall nat find comment~"^wfpolicy:"]] > 0) do={ /ip firewall nat move [/ip firewall nat find comment~"^wfpolicy:"] destination=0 }
+:do { :local o [/ip firewall nat find where !(comment~"^wfpolicy:")]; :if ([:len $o] > 0) do={ /ip firewall nat move [/ip firewall nat find comment~"^wfpolicy:"] destination=[:pick $o 0] } }

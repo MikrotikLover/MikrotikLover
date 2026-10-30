@@ -215,7 +215,8 @@ Router **RouterOS 7** ho ya **RouterOS 6.47+** (6.49 long-term behtar), sab kuch
 - **RouterOS 6 copy mein kya badalta hai:** DNS naam `match-subdomain` ki jagah `regexp` (naam + har subdomain); "naam → address list" (allow-only apps, allow-site) RouterOS 6 khud DNS se nahi bhar sakta, is liye **server apne DNS log aur apni lookup se addresses bhejta hai** (har ghante naya build, 1 din timeout); `/ip dns adlist` (7.15+) aur naya `/interface wifi` chhod diye jate hain; IPv6 wala hissa sirf tab chalta hai jab `ipv6` package on ho (RouterOS 6 par aksar off hota hai, warna import ruk jata).
 - **Check:** `python3 /usr/local/lib/mikrotiklover/rosv6.py check FILE.rsc` batata hai koi RouterOS-7-only line to nahi bachi; `rosv6.py convert < v7.rsc > v6.rsc` haath se v6 copy banata hai.
 - Health check par RouterOS 6 router ka "has the newest rules" us ki v6 copy ke version se milaya jata hai.
-- Test: `tests/test-rosv6.py` (har `mikrotik/*.rsc` ki v6 copy: koi v7-only line nahi, lint ok), `tests/test-ros6.sh` (server: sync6.rsc, `?v=6`, DNS log se addresses, health), `tests/test-routersetup.py` (v6 setup script). Asli RouterOS 6 / 7 (CHR) par import yahan nahi chala — is sandbox se `download.mikrotik.com` band hai.
+- Test: `tests/test-rosv6.py` (har `mikrotik/*.rsc` ki v6 copy: koi v7-only line nahi, lint ok), `tests/test-ros6.sh` (server: sync6.rsc, `?v=6`, DNS log se addresses, health), `tests/test-routersetup.py` (v6 setup script).
+- **Asli RouterOS par test (CHR):** `tests/test-chr.sh --ros 7` aur `--ros 6` — MikroTik ka Cloud Hosted Router QEMU mein chala kar har script **asli RouterOS par import** karta hai (neeche [6b](#6b-asli-routeros-par-test-chr) dekhein).
 
 `mikrotik/` folder mein ready scripts hain. File mein `RADIUS_SERVER_IP`, `RADIUS_SECRET` aur SSID replace karein, Winbox → Files mein upload karein, phir Terminal mein `/import file-name=...`.
 
@@ -233,6 +234,8 @@ Router **RouterOS 7** ho ya **RouterOS 6.47+** (6.49 long-term behtar), sab kuch
 | `traffic-flow.rsc` | Data download/upload per site / IP / user (`radius-admin traffic`) |
 | `pppoe-server.rsc` | PPPoE server (ISP style) with RADIUS, pool, accounting |
 | `allow-only-whatsapp.rsc` | Sirf WhatsApp |
+| `passpoint-wifi-ros7.rsc` | **Passpoint / Hotspot 2.0** — RouterOS 7 **wifi** package (section 5a) |
+| `passpoint-wireless-legacy.rsc` | Passpoint purane **wireless** package par (RouterOS 6, hAP ac², cAP ac, …) |
 
 Wi-Fi aur hotspot dono ek router par hain to ek hi entry kafi hai: `/radius add address=... secret=... service=wireless,hotspot`.
 
@@ -382,6 +385,38 @@ Ek server band ho (bijli, kharabi, update) to doosra login sambhalta hai. Users 
 | iPhone / macOS | username/password → certificate par **Trust** |
 
 CA file: `/etc/freeradius/3.0/certs/mikrotiklover/ca.der` (Android/Windows) ya `ca.pem`. Android par: Settings → Security → Encryption & credentials → Install a certificate → Wi-Fi certificate.
+
+## 5a. Passpoint (Hotspot 2.0) — phone office ka Wi-Fi khud join kare
+
+Passpoint ke saath user ke phone mein **ek dafa profile** install hota hai; us ke baad phone **har office / branch** ka Wi-Fi khud pehchaan kar join karta hai — network chunna nahi, password likhna nahi. Router Wi-Fi par batata hai "main `wifi.yourcompany.com` ka network hoon" (ANQP), phone ka profile wohi domain dhoondta hai.
+
+- Login **WPA2-Enterprise (EAP-TTLS + MSCHAPv2)** isi RADIUS server se — wohi users, groups, speed, VLAN, policies, accounting.
+- Bahar sirf `anonymous@DOMAIN` jata hai; asli naam encrypted tunnel ke andar. Accounting asli user ke naam par hoti hai (MAC se).
+- Phones: **Android 8+** aur **iPhone / iPad / Mac** (iOS 7+). Router ka apna Wi-Fi waisa hi rehta hai — Passpoint har radio par ek alag virtual AP banta hai.
+
+```bash
+# 1. Settings (domain = RADIUS certificate ka naam behtar: phone server ko isi naam se check karta hai)
+sudo radius-admin passpoint set --domain radius.yourcompany.com --name "Your Company" --ssid Office-Passpoint
+sudo radius-admin passpoint status
+#    --venue industrial-factory|business-professional-office|...  --venue-name "Plant 2"  --network private  --roaming-oi 5a03ba0000
+
+# 2. Router: script bhar kar milta hai (ya dashboard → Router setup → Passpoint)
+sudo radius-admin passpoint router 192.168.88.1            # RouterOS 7 (wifi package)
+sudo radius-admin passpoint router 192.168.88.1 --legacy   # purana wireless package / RouterOS 6
+
+# 3. Phone: ek link (iPhone aur Android dono ke button), 24 ghante ke liye
+sudo radius-admin passpoint link ali                       # NT-hash user:  -p PASSWORD
+sudo radius-admin passpoint links | passpoint unlink ali
+sudo radius-admin passpoint profile ali --ios -o ali.mobileconfig    # file (AirDrop / mail se iPhone par)
+```
+
+- **Dashboard:** Settings → **Passpoint** (settings + khule links), Users → user → **Passpoint link**, Router setup → **Passpoint** (RouterOS 7 router jis par purana *wireless* menu ho: "Old 'wireless' menu" tick karein; RouterOS 6 khud legacy version leta hai).
+- **Android:** link **Chrome** mein kholein → Android → Install. (Android profile sirf browser download se install hota hai, file manager se nahi — is liye link.)
+- **iPhone:** link Safari mein → iPhone → Settings → *Profile Downloaded* → Install.
+- Profile mein password hota hai — link sirf usi user ko bhejein; link 1–168 ghante ke baad khud band, `unlink` se foran.
+- Apna CA (default): profile CA saath le jata hai. Public certificate (`cert letsencrypt`): phone ka apna trust store.
+- **Domain badla** to purane profiles match nahi karenge — naye links bhejein.
+- Test: `tests/test-passpoint.py` (settings, router scripts, profiles), `sudo tests/test-passpoint.py --live` (asli EAP-TTLS login `eapol_test` se — profile ke andar se naam, password, CA aur domain parh kar, jaise phone karta hai; download page; accounting asli naam par), aur `tests/test-chr.sh` (asli RouterOS 7 aur 6 par import).
 
 ## 5b. Website / URL blocking by category
 
@@ -679,6 +714,8 @@ python3 tests/test-cdnmap.py          # CDN detective: names, CNAME evidence, co
 python3 tests/test-cdnlearn.py        # auto-learner: cname / ip / co-occurrence, SDK not learned, reject
 python3 tests/test-cdndiscover.py     # new apps: grouping, name from website/domain, category, rename/merge/drop
 URL=https://127.0.0.1:8443 USER=admin PASS=... node tests/ui-dashboard.mjs   # web dashboard (Playwright)
+python3 tests/test-passpoint.py       # Passpoint: settings, router scripts, phone profiles (--live: asli login)
+tests/test-chr.sh --ros 7             # asli RouterOS (CHR, QEMU) par har script import — section 6b
 ```
 
 **Limitations (honestly):**
@@ -1198,6 +1235,23 @@ sudo systemctl stop freeradius && sudo freeradius -X    # har request ka poora d
 | `Access-Reject` | Galat password, user disabled, ya `--max-sessions` poore |
 | Android connect nahi hota | Domain field = `RADIUS_DOMAIN`, CA certificate sahi select karein |
 | Hotspot login fail, Wi-Fi theek | User `--nt-hash` se bana hai — hotspot CHAP ke liye `user passwd NAME` (bina `--nt-hash`) |
+
+## 6b. Asli RouterOS par test (CHR)
+
+`tests/test-chr.sh` MikroTik ka **Cloud Hosted Router** (CHR — x86 RouterOS, `download.mikrotik.com` se) QEMU mein chalata hai aur har script us par **asli `/import`** karta hai. RouterOS jo line nahi chala sakta wahan import ruk jata hai — wohi FAIL hai.
+
+```bash
+sudo apt install qemu-system-x86 sshpass unzip curl
+tests/test-chr.sh --ros 7                  # naya stable RouterOS 7
+tests/test-chr.sh --ros 6                  # RouterOS 6 long-term: server ki v6 copies
+tests/test-chr.sh --version 7.20.4 --keep  # khaas version; aakhir mein CHR chalta rehta hai (ssh -p 2222 admin@127.0.0.1)
+tests/test-chr.sh --sync /var/lib/mikrotiklover/router/sync.rsc   # server ki apni router rules bhi
+```
+
+- CHR ko ghar ke router jaisa banata hai (bridge, LAN/WAN list, DHCP, 3 ports) aur `wireless` package bhi lagata hai (purane wireless wali scripts ke liye).
+- Import hota hai: har `mikrotik/*.rsc` (placeholders bhar kar), dashboard ke **Router setup** ke 5 sets (Wi-Fi + Passpoint, legacy, hotspot, ISP, blocking — **do dafa**, doosri dafa bhi bina error), Passpoint asli settings ke saath — phir router se parh kar check (domain, realm, OI, venue, WPA2-EAP, ek hi profile).
+- KVM ho to jaldi; KVM ke baghair (cloud VM / CI) 15–25 minute.
+- CHR mein Wi-Fi radio nahi hota: Wi-Fi menus set hote hain, radio wali lines (har radio par virtual AP) khali chalti hain.
 
 ## 7. Maintenance
 

@@ -13,4 +13,5 @@ add chain=forward in-interface-list=LAN protocol=tcp dst-port=853 action=reject 
 add chain=forward in-interface-list=LAN protocol=udp dst-port=853 action=drop comment="webfilter: v6 DNS-over-QUIC"
 add chain=forward in-interface-list=LAN dst-address-list=doh-servers protocol=tcp dst-port=443 action=reject reject-with=tcp-reset comment="webfilter: v6 DNS-over-HTTPS"
 add chain=forward in-interface-list=LAN dst-address-list=doh-servers protocol=udp dst-port=443 action=drop comment="webfilter: v6 DNS-over-HTTP/3"
-move [find comment~"^webfilter:"] destination=0
+# above every other rule (destination=0 is not safe in a script: it stops the import when only these rules are there)
+:do { :local o [/ipv6 firewall filter find where !(comment~"^webfilter:")]; :if ([:len $o] > 0) do={ /ipv6 firewall filter move [/ipv6 firewall filter find comment~"^webfilter:"] destination=[:pick $o 0] } }

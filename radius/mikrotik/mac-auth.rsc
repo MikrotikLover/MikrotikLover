@@ -20,9 +20,9 @@ add name=sec-devices authentication-types=wpa2-psk passphrase="DevicesWiFiKey123
 add name=cfg-devices ssid="Devices-WiFi" security=sec-devices country=Pakistan mode=ap
 /interface wifi access-list
 add action=query-radius ssid-regexp="^Devices-WiFi\$" comment="MikrotikLover MAC auth"
-# Add the SSID as a virtual AP on the 2.4 GHz radio:
-/interface wifi
-add master-interface=[find default-name=wifi2] configuration=cfg-devices name=wifi-devices disabled=no
+# Add the SSID as a virtual AP on the 2.4 GHz radio (wifi2 on dual-band routers, else wifi1; no radio: nothing,
+# instead of stopping the import there):
+:do { :local r [/interface wifi find default-name=wifi2]; :if ([:len $r] = 0) do={ :set r [/interface wifi find default-name=wifi1] }; :if ([:len $r] > 0) do={ /interface wifi add master-interface=[:pick $r 0] configuration=cfg-devices name=wifi-devices disabled=no } }
 
 # ---- B) Legacy "wireless" package (RouterOS 6/7, wlan1): MAC check + WPA2-PSK
 # /interface wireless security-profiles

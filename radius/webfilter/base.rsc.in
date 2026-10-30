@@ -35,6 +35,7 @@ add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt prot
 add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt dst-address-list=doh-servers protocol=tcp dst-port=443 action=reject reject-with=tcp-reset comment="webfilter: block DNS-over-HTTPS"
 add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt dst-address-list=doh-servers protocol=udp dst-port=443 action=drop comment="webfilter: block DNS-over-HTTP/3"
 # Put the webfilter rules above any "accept LAN" rule.
-move [find comment~"^webfilter:"] destination=0
+# above every other rule (destination=0 is not safe in a script: it stops the import when only these rules are there)
+:do { :local o [/ip firewall filter find where !(comment~"^webfilter:")]; :if ([:len $o] > 0) do={ /ip firewall filter move [/ip firewall filter find comment~"^webfilter:"] destination=[:pick $o 0] } }
 
 # Encrypted-DNS hostnames

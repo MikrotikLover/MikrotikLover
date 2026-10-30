@@ -412,6 +412,18 @@ async function userDetail(name) {
           if (r.password) showSecret("Password changed", "New password:", r.password);
         } }]);
       } }, "Change password"),
+      h("button", { onclick: () => {
+        const f = h("form", { class: "form" },
+          h("label", { class: "field" }, "Password", h("span", { class: "help" }, "only needed when it is saved as NT-hash; the profile carries it"),
+            h("input", { name: "password", type: "password", autocomplete: "off", placeholder: "empty = the saved one" })),
+          h("label", { class: "field" }, "Valid for (hours)", h("input", { name: "hours", type: "number", min: 1, max: 168, value: 24 })));
+        dialog(`Passpoint for ${name}`, f, [{ label: "Cancel" }, { label: "Make link", class: "primary", action: async () => {
+          const r = await act(api("POST", "/api/passpoint/link", { user: name, ...formValues(f) }));
+          if (!r) return false;
+          showSecret("Passpoint link", `Open this on ${name}'s phone (iPhone or Android). It carries the password — send it only to ${name}:`, r.url,
+            "After installing, the phone joins every office Wi-Fi with Passpoint by itself.");
+        } }]);
+      } }, "Passpoint link"),
       online.length ? h("button", { onclick: () => act(api("POST", `/api/users/${enc}/kick`, {})).then(route) }, "Kick now") : null,
       h("button", { onclick: () => act(api("POST", `/api/users/${enc}/${disabled ? "enable" : "disable"}`, {})).then(route) }, disabled ? "Enable" : "Disable"),
       h("button", { class: "danger", onclick: async () => {
@@ -857,6 +869,7 @@ ROUTES.settings = async () => {
       h("div", { class: "toolbar" }, h("button", { class: "primary", onclick: async (e) => { e.target.disabled = true; await act(api("POST", "/api/backups")); route(); } }, "Backup now"))));
     wide.push(offsiteCard(bk.offsite || { type: "off" }));
     wide.push(await certCard());
+    wide.push(await passpointCard());
     wide.push(await pushCard());
     wide.push(await haCard());
     wide.push(await alertsCard());
@@ -891,6 +904,37 @@ ROUTES.settings = async () => {
       { label: "Action", key: "action", wrap: true }, { label: "Result", render: (a) => a.result === "ok" ? badge("ok", "ok") : badge(a.result, "bad") }], audit)));
   }
   shell("Settings", h("div", { class: "stack" }, h("div", { class: "grid g-2" }, parts), wide));
+};
+
+// Passpoint (Hotspot 2.0): phones with the profile join every office Wi-Fi by themselves
+const PP_VENUES = ["business-professional-office", "business-unspecified", "industrial-factory", "industrial-unspecified",
+  "educational-university-or-college", "educational-secondary-school", "educational-primary-school", "institutional-hospital",
+  "mercantile-retail-store", "mercantile-shopping-mall", "residential-hotel", "residential-dormitory", "assembly-restaurant",
+  "assembly-coffee-shop", "unspecified"];
+const PP_NETWORKS = ["private", "private-with-guest", "public-chargeable", "public-free", "personal-device"];
+const passpointCard = async () => {
+  const d = await api("GET", "/api/passpoint");
+  const st = d.settings || {};
+  const sel = (name, list) => h("select", { name }, list.map((v) => h("option", { value: v, selected: v === st[name] }, v)));
+  const f = h("form", { class: "form cols", onsubmit: async (e) => {
+    e.preventDefault();
+    if (await act(api("POST", "/api/passpoint/settings", formValues(f)))) route();
+  } },
+    h("label", { class: "field" }, "Passpoint domain", h("span", { class: "help" }, "best: the RADIUS certificate's name — phones match the Wi-Fi by it"),
+      h("input", { name: "domain", value: st.domain || "", placeholder: "wifi.yourcompany.com", required: true })),
+    h("label", { class: "field" }, "Name", h("span", { class: "help" }, "company / profile name on the phone"), h("input", { name: "name", value: st.name || "", maxlength: 64 })),
+    h("label", { class: "field" }, "Wi-Fi name (SSID)", h("input", { name: "ssid", value: st.ssid || "", maxlength: 32 })),
+    h("label", { class: "field" }, "Place name", h("input", { name: "venue_name", value: st.venue_name || "", maxlength: 64 })),
+    h("label", { class: "field" }, "Place type", sel("venue", PP_VENUES)),
+    h("label", { class: "field" }, "Network type", sel("network", PP_NETWORKS)),
+    h("label", { class: "field" }, "Roaming OI (optional)", h("span", { class: "help" }, "6 or 10 hex digits; only for roaming federations"),
+      h("input", { name: "roaming_oi", value: st.roaming_oi || "", placeholder: "empty", maxlength: 10 })),
+    h("div", { class: "toolbar full" }, h("button", { class: "primary", type: "submit" }, "Save")));
+  return card("Passpoint (Hotspot 2.0)", "phones join the office Wi-Fi by themselves — routers: Router setup → Passpoint; phones: Users → a user → Passpoint link",
+    f, d.links.length ? table([{ label: "Open link for", key: "username" }, { label: "Opened", num: true, key: "fetched" },
+      { label: "Valid till", render: (l) => String(l.expires).slice(0, 16) },
+      { label: "", render: (l) => h("button", { class: "small danger", onclick: async () => {
+        if (await act(api("POST", "/api/passpoint/unlink", { user: l.username }))) route(); } }, "Remove") }], d.links) : null);
 };
 
 // "Pehle se khabardari": warn users before the package or the data runs out
@@ -1378,6 +1422,7 @@ ROUTES.setup = async (preset = "blocking") => {
     hotspot: "Login page with vouchers / social WiFi on the LAN",
     wpa_ros7: "Staff log in with their own username + password (RouterOS 7 'wifi' routers: hAP ax, cAP ax …; a RouterOS 6 router gets the old-wireless version by itself)",
     wpa_legacy: "Same, for older routers with the 'wireless' menu (hAP ac², RB951 …)",
+    passpoint: "A Passpoint Wi-Fi next to the router's own: phones with the profile (Users → Passpoint link) join it by themselves, in every office. Settings → Passpoint",
     pppoe: "Customers dial in with PPPoE (ISP style)",
     macauth: "Printers, TVs, CCTV join a separate Wi-Fi by MAC address",
     webfilter: "Needed by blocking, logs and auto-sync — added by itself when needed",
@@ -1399,6 +1444,8 @@ ROUTES.setup = async (preset = "blocking") => {
     fld("Router's LAN address", "lan_net", { placeholder: "192.168.88.1/24" }), fld("Login page name", "dns_name", { placeholder: "login.wifi" }));
   extra.wpa_ros7 = h("div", { class: "form cols sub-opts" }, fld("Staff Wi-Fi name", "staff_ssid", { placeholder: "Office-WiFi", maxlength: 32 }));
   extra.wpa_legacy = h("div", { class: "form cols sub-opts" }, fld("Staff Wi-Fi name", "staff_ssid_legacy", { placeholder: "Office-WiFi", maxlength: 32 }));
+  extra.passpoint = h("div", { class: "form cols sub-opts" }, h("label", { class: "check full" }, h("input", { type: "checkbox", name: "passpoint_legacy" }),
+    h("div", {}, h("b", {}, "Old 'wireless' menu"), h("span", {}, "Tick for a RouterOS 7 router with wlan1/wlan2 (hAP ac², cAP ac …). RouterOS 6 gets it by itself."))));
   extra.pppoe = h("div", { class: "form cols sub-opts" }, fld("Customer side port", "pppoe_if", { placeholder: "ether2" }, "interface, bridge or VLAN"));
   extra.macauth = h("div", { class: "form cols sub-opts" }, fld("Devices Wi-Fi name", "devices_ssid", { placeholder: "Devices-WiFi", maxlength: 32 }),
     fld("Devices Wi-Fi password", "devices_key", { placeholder: "8 letters or more", maxlength: 63, autocomplete: "off" }));

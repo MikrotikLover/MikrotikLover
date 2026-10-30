@@ -54,4 +54,5 @@ add chain=forward src-address-list=allow-only-hikconnect connection-state=new ac
 add chain=forward src-address-list=allow-only-hikconnect protocol=tcp action=reject reject-with=tcp-reset comment="allowonly:hikconnect block rest"
 add chain=forward src-address-list=allow-only-hikconnect action=reject reject-with=icmp-admin-prohibited comment="allowonly:hikconnect block rest"
 # Above every other forward rule (fasttrack included), in this order.
-move [find comment~"^allowonly:hikconnect"] destination=0
+# above every other rule (destination=0 is not safe in a script: it stops the import when only these rules are there)
+:do { :local o [/ip firewall filter find where !(comment~"^allowonly:hikconnect")]; :if ([:len $o] > 0) do={ /ip firewall filter move [/ip firewall filter find comment~"^allowonly:hikconnect"] destination=[:pick $o 0] } }

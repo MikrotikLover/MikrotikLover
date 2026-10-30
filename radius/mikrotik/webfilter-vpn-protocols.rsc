@@ -21,4 +21,5 @@ add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt prot
 add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=udp dst-port=500,4500 action=drop comment="webfilter:vpn IPsec"
 add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=ipsec-esp action=drop comment="webfilter:vpn IPsec ESP"
 add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=9001,9030,9050,9150 action=reject reject-with=tcp-reset comment="webfilter:vpn Tor"
-move [find comment~"^webfilter:vpn"] destination=0
+# above every other rule (destination=0 is not safe in a script: it stops the import when only these rules are there)
+:do { :local o [/ip firewall filter find where !(comment~"^webfilter:vpn")]; :if ([:len $o] > 0) do={ /ip firewall filter move [/ip firewall filter find comment~"^webfilter:vpn"] destination=[:pick $o 0] } }

@@ -35,6 +35,14 @@ valid_name() { # valid_name NAME FILE: a domain, or a pattern with * (e.g. video
     echo "build.sh: invalid domain '$1' in $2" >&2; exit 1
 }
 
+# these rules above every other one. Not "move ... destination=0": in a script that stops the whole /import
+# when only these rules are there (RouterOS: "can not move object before itself"), checked on a CHR.
+move_top_line() { # MENU FIND-EXPRESSION
+    local neg; neg=$(sed -E 's/[[:space:]]+([a-z-]+[=~])/ and \1/g' <<<"$2")
+    printf ':do { :local o [%s find where !(%s)]; :if ([:len $o] > 0) do={ %s move [%s find %s] destination=[:pick $o 0] } }\n' "$1" "$neg" "$1" "$1" "$2"
+}
+move_top() { echo "# above every other rule (destination=0 is not safe in a script: it stops the import when only these rules are there)"; move_top_line "$@"; }
+
 domains() { # domains FILE -> validated lowercase domains, one per line
     local d
     while IFS= read -r d || [ -n "$d" ]; do
@@ -74,7 +82,7 @@ static_block() { # static_block CATEGORY FILE  -> RouterOS lines
         echo "add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host=\"$d\" action=reject reject-with=tcp-reset comment=\"webfilter: DoH by name\""
         echo "add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host=\"*.$d\" action=reject reject-with=tcp-reset comment=\"webfilter: DoH by name\""
     done
-    echo "move [find comment~\"^webfilter:\"] destination=0"
+    move_top "/ip firewall filter" 'comment~"^webfilter:"'
     cat base-ipv6.rsc.in
 } > "$OUT/webfilter-base.rsc"
 
@@ -129,7 +137,7 @@ join() { local IFS='|'; echo "$*"; }
             echo "add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host=\"$pat\" action=reject reject-with=tcp-reset comment=\"webfilter:keywords\""
         done
     done
-    echo "move [find comment=\"webfilter:keywords\"] destination=0"
+    move_top "/ip firewall filter" 'comment="webfilter:keywords"'
 } > "$OUT/webfilter-keywords.rsc"
 echo "build.sh: keywords — ${#kw_any[@]} anywhere, ${#kw_start[@]} at start" >&2
 
@@ -253,7 +261,7 @@ for prof in "$AO_DIR"/*.txt; do
         echo "remove [find comment~\"^$C\"]"
         ao_rules "$p" forward " src-address-list=$L" "$C"
         echo "# Above every other forward rule (fasttrack included), in this order."
-        echo "move [find comment~\"^$C\"] destination=0"
+        move_top "/ip firewall filter" "comment~\"^$C\""
     } > "$OUT/allow-only-$p.rsc"
     echo "build.sh: allow-only $p — ${#nets[@]} networks, ${#hosts[@]} hosts, ${#deny[@]} denied names" >&2
 done
@@ -603,8 +611,8 @@ sni_rules() { # sni_rules CHAIN PREFIX < patterns
     fi
     echo "# Policy rules above every other forward rule; DNS rules above the base DNS redirect."
     echo "/ip firewall filter"
-    echo "move [find comment~\"^wfpolicy:\"] destination=0"
+    move_top "/ip firewall filter" 'comment~"^wfpolicy:"'
     echo "/ip firewall nat"
-    echo ":if ([:len [/ip firewall nat find comment~\"^wfpolicy:\"]] > 0) do={ /ip firewall nat move [/ip firewall nat find comment~\"^wfpolicy:\"] destination=0 }"
+    move_top_line "/ip firewall nat" 'comment~"^wfpolicy:"'
 } > "$OUT/webfilter-policies.rsc"
 rm -f "$pol_out"

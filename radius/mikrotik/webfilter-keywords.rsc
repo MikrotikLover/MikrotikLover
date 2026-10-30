@@ -39,4 +39,5 @@ add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt prot
 add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="xnx*" action=reject reject-with=tcp-reset comment="webfilter:keywords"
 add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*.xnx*" action=reject reject-with=tcp-reset comment="webfilter:keywords"
 add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt protocol=tcp dst-port=443 tls-host="*-xnx*" action=reject reject-with=tcp-reset comment="webfilter:keywords"
-move [find comment="webfilter:keywords"] destination=0
+# above every other rule (destination=0 is not safe in a script: it stops the import when only these rules are there)
+:do { :local o [/ip firewall filter find where !(comment="webfilter:keywords")]; :if ([:len $o] > 0) do={ /ip firewall filter move [/ip firewall filter find comment="webfilter:keywords"] destination=[:pick $o 0] } }

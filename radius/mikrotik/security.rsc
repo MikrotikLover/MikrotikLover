@@ -43,7 +43,8 @@ add chain=input src-address-list=ml-synflood action=log log-prefix="WF-synflood"
 add chain=input src-address-list=ml-synflood action=drop comment="mlsec: SYN flood"
 add chain=forward src-address-list=ml-synflood action=drop comment="mlsec: SYN flood"
 # all of the above before the other rules (they only touch the listed / attacking addresses)
-move [find comment~"^mlsec:"] destination=0
+# above every other rule (destination=0 is not safe in a script: it stops the import when only these rules are there)
+:do { :local o [/ip firewall filter find where !(comment~"^mlsec:")]; :if ([:len $o] > 0) do={ /ip firewall filter move [/ip firewall filter find comment~"^mlsec:"] destination=[:pick $o 0] } }
 
 # drop the listed addresses before connection tracking (cheaper under attack)
 /ip firewall raw

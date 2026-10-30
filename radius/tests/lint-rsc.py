@@ -13,6 +13,9 @@ FW = {"chain", "in-interface-list", "out-interface-list", "sniff-target", "sniff
       "reject-with", "comment", "tls-host", "place-before", "disabled", "jump-target", "time",
       "log", "log-prefix", "connection-state", "limit", "tcp-flags", "psd", "connection-limit",
       "address-list", "address-list-timeout", "new-packet-mark", "passthrough"}
+# Passpoint / Hotspot 2.0 (checked on RouterOS 7.25 CHR: /interface wifi interworking, /interface wireless interworking-profiles)
+IW = {"name", "hotspot20", "hotspot20-dgaf", "network-type", "internet", "venue", "venue-names", "operator-names",
+      "domain-names", "realms", "roaming-ois", "ipv4-availability", "ipv6-availability", "wan-status", "hessid", "comment"}
 PROPS = {
     "/radius": {"address", "secret", "service", "timeout", "comment", "src-address"},
     "/radius incoming": {"accept"},
@@ -27,14 +30,16 @@ PROPS = {
     "/ip firewall raw": FW,
     "/ip firewall mangle": FW,
     "/ipv6 firewall filter": FW,
-    "/interface wifi security": {"name", "authentication-types", "eap-accounting", "passphrase"},
-    "/interface wifi configuration": {"name", "ssid", "security", "country", "mode"},
+    "/interface wifi security": {"name", "authentication-types", "eap-accounting", "passphrase", "management-protection"},
+    "/interface wifi configuration": {"name", "ssid", "security", "country", "mode", "interworking"},
+    "/interface wifi interworking": IW,
     "/interface wifi access-list": {"action", "ssid-regexp", "comment", "mac-address"},
     "/interface wifi": {"configuration", "disabled", "master-interface", "name"},
+    "/interface wireless interworking-profiles": IW,
     "/interface wireless security-profiles": {"name", "mode", "authentication-types", "eap-methods",
         "unicast-ciphers", "group-ciphers", "radius-eap-accounting", "wpa2-pre-shared-key",
         "radius-mac-authentication", "radius-mac-accounting", "radius-mac-mode", "radius-mac-format"},
-    "/interface wireless": {"security-profile", "ssid", "mode", "disabled", "master-interface", "name", "vlan-mode"},
+    "/interface wireless": {"security-profile", "ssid", "mode", "disabled", "master-interface", "name", "vlan-mode", "interworking-profile"},
     "/ip dhcp-server option": {"name", "code", "value", "comment"},
     "/ip dhcp-server network": {"address", "gateway", "dns-server", "dhcp-option", "comment", "netmask", "domain"},
     "/ip traffic-flow": {"enabled", "interfaces", "active-flow-timeout", "inactive-flow-timeout", "cache-entries"},

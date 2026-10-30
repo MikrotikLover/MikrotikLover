@@ -11,7 +11,7 @@ Security model
   session cookie HttpOnly + SameSite=Strict + Secure, CSRF token on every change,
   JSON-only POST bodies, strict CSP. Roles: admin (changes) and viewer (read only).
 """
-import hmac, ipaddress, json, os, re, secrets, subprocess, sys, threading, time
+import base64, hmac, ipaddress, json, os, re, secrets, subprocess, sys, threading, time
 from datetime import datetime, timedelta
 from functools import wraps
 
@@ -2987,6 +2987,13 @@ def router_setup_make():
     for k, _, _ in routersetup.MODULES:
         o[k] = bool(data.get(k))
     o["hotspot_create"], o["base_done"], o["hotspot_mac"] = bool(data.get("hotspot_create")), bool(data.get("base_done")), bool(data.get("hotspot_mac"))
+    o["passpoint_legacy"] = bool(data.get("passpoint_legacy"))
+    if o["passpoint"]:          # this server's Passpoint settings (domain, name, Wi-Fi name ...)
+        okp, outp = radius_admin(["passpoint", "json"], log=False, timeout=30)
+        try:
+            o["passpoint_settings"] = json.loads(outp) if okp else {}
+        except ValueError:
+            o["passpoint_settings"] = {}
     try:
         routersetup._ip(o["server_ip"], "server IP")
     except ValueError as e:
@@ -3050,6 +3057,124 @@ def router_setup_status(token):
     if not row:
         abort(404)
     return jsonify(fetched=int(row["fetched"]), seconds_left=max(0, int(row["left_s"])))
+
+
+# ------------------------------------------------------------------ Passpoint (Hotspot 2.0)
+PP_KEYS = {"domain": "--domain", "name": "--name", "ssid": "--ssid", "venue": "--venue", "venue_name": "--venue-name",
+           "network": "--network", "roaming_oi": "--roaming-oi"}
+
+
+@app.get("/api/passpoint")
+@login_required("admin")
+def passpoint_info():
+    ok, out = radius_admin(["passpoint", "json"], log=False, timeout=30)
+    try:
+        st = json.loads(out) if ok else {}
+    except ValueError:
+        st = {}
+    links = jsonable(q("""SELECT username, fetched, created, expires FROM ml_passpoint_link
+                          WHERE expires > NOW() ORDER BY created DESC LIMIT 200"""))
+    return jsonify(settings=st, links=links)
+
+
+@app.post("/api/passpoint/settings")
+@login_required("admin")
+def passpoint_settings():
+    data = body()
+    args = ["passpoint", "set"]
+    for k, flag in PP_KEYS.items():
+        if k in data:
+            v = str(data.get(k) or "").strip()[:128]
+            args += [flag, v if (v or k != "roaming_oi") else "-"]
+    if len(args) == 2:
+        abort(400, "nothing to save")
+    return result(*radius_admin(args, action="passpoint settings"))
+
+
+@app.post("/api/passpoint/link")
+@login_required("admin")
+def passpoint_link():
+    """A download page for one user's phone profiles; the password goes on stdin (never in the audit log)."""
+    data = body()
+    user = field(data, "user", NAME_RE, required=True)
+    pw = str(data.get("password") or "")
+    if len(pw) > 128 or "\n" in pw:
+        abort(400, "invalid password")
+    hours = body_int(data, "hours", 24, 1, 168)
+    ok, out = radius_admin(["passpoint", "link", user, "--hours", str(hours)] + (["-p", "-"] if pw else []),
+                           stdin=(pw + "\n") if pw else None, action=f"passpoint link {user}")
+    if not ok:
+        return result(False, out)
+    url = next((l.strip() for l in out.splitlines() if l.strip().startswith("https://")), "")
+    return jsonify(ok=True, url=url, message=out)
+
+
+@app.post("/api/passpoint/unlink")
+@login_required("admin")
+def passpoint_unlink():
+    user = field(body(), "user", NAME_RE, required=True)
+    return result(*radius_admin(["passpoint", "unlink", user], action=f"passpoint unlink {user}"))
+
+
+def _pp_row(token):
+    if not SETUP_TOKEN_RE.match(token):
+        abort(404)
+    row = q1("SELECT username, ios, android FROM ml_passpoint_link WHERE token=%s AND expires > NOW()", (token,))
+    if not row:
+        abort(404)
+    return row
+
+
+@app.get("/api/public/passpoint/<token>")
+def passpoint_page(token):
+    """What the user opens on the phone: one button for iPhone / iPad / Mac, one for Android."""
+    from html import escape
+    row = _pp_row(token)
+    st = {}
+    ok, out = radius_admin(["passpoint", "json"], log=False, timeout=30)
+    if ok:
+        try:
+            st = json.loads(out)
+        except ValueError:
+            pass
+    name = escape(st.get("name") or "Office Wi-Fi")
+    ua = request.headers.get("User-Agent", "")
+    first = "android" if "Android" in ua else "ios"
+    btn = {"ios": f'<a class="b" href="{token}/ios">iPhone / iPad / Mac</a>'
+                  '<p>Download, then <b>Settings → Profile Downloaded → Install</b>.</p>',
+           "android": f'<a class="b" href="{token}/android">Android</a>'
+                      '<p>Open this page in <b>Chrome</b>; tap the button, then <b>Install</b>. (Android 8 or newer)</p>'}
+    page = ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'<meta name="robots" content="noindex"><title>{name} Wi-Fi</title><style>'
+            'body{font-family:system-ui,sans-serif;margin:0;padding:24px 16px;background:#f6f7f9;color:#111}'
+            '.c{max-width:420px;margin:auto;background:#fff;border-radius:14px;padding:20px;box-shadow:0 1px 4px #0002}'
+            'h1{font-size:1.3em;margin:0 0 6px}.b{display:block;text-align:center;background:#1d4ed8;color:#fff;'
+            'padding:14px;border-radius:10px;text-decoration:none;font-weight:600;margin-top:18px}'
+            'p{line-height:1.45;margin:8px 0}.m{color:#555;font-size:.9em}'
+            '@media(prefers-color-scheme:dark){body{background:#111;color:#eee}.c{background:#1c1c1e}.m{color:#aaa}}'
+            f'</style></head><body><div class="c"><h1>{name} Wi-Fi</h1>'
+            f'<p>For <b>{escape(row["username"])}</b>. After this the phone joins the office Wi-Fi by itself, '
+            'in every office — no password to type.</p>'
+            + btn[first] + btn["android" if first == "ios" else "ios"] +
+            '<p class="m">This link is only for you and works for a short time. Do not share it.</p></div></body></html>')
+    resp = app.response_class(page, mimetype="text/html")
+    resp.headers["X-ML-CSP"] = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    return resp
+
+
+@app.get("/api/public/passpoint/<token>/<kind>")
+def passpoint_download(token, kind):
+    if kind not in ("ios", "android"):
+        abort(404)
+    row = _pp_row(token)
+    q("UPDATE ml_passpoint_link SET fetched=fetched+1 WHERE token=%s", (token,))
+    if kind == "ios":
+        data, mime, fname = base64.b64decode(row["ios"]), "application/x-apple-aspen-config", "wifi.mobileconfig"
+    else:     # Android installs it only from a download with exactly this type
+        data, mime, fname = row["android"], "application/x-wifi-config", "wifi.config"
+    return app.response_class(data, mimetype=mime, headers={
+        "Content-Disposition": f'attachment; filename="{fname}"', "Cache-Control": "no-store",
+        "X-ML-CSP": "default-src 'none'"})
 
 
 # ------------------------------------------------------------------ network control: router health reports

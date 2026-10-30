@@ -5,7 +5,8 @@ one line to paste into the router's terminal.
 
 build(opts, mikrotik_dir, autosync_text) -> script text; raises ValueError for bad input.
 """
-import os, re
+import os, re, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 IFACE_RE = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
 IP_RE = re.compile(r"^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$")
@@ -19,6 +20,7 @@ MODULES = [
     ("hotspot", "hotspot.rsc", "Hotspot (vouchers, social WiFi)"),
     ("wpa_ros7", "wpa-enterprise-wifi-ros7.rsc", "Staff Wi-Fi WPA-Enterprise (RouterOS 7, wifi)"),
     ("wpa_legacy", "wpa-enterprise-wireless-legacy.rsc", "Staff Wi-Fi WPA-Enterprise (old wireless)"),
+    ("passpoint", "passpoint-wifi-ros7.rsc", "Passpoint / Hotspot 2.0 (phones join by themselves)"),
     ("pppoe", "pppoe-server.rsc", "PPPoE server"),
     ("macauth", "mac-auth.rsc", "Devices by MAC (printer, TV, CCTV)"),
     ("webfilter", "webfilter-base.rsc", "Blocking base (needed for policies)"),
@@ -30,7 +32,8 @@ MODULES = [
     ("languard", "lan-guard.rsc", "LAN guard (fake router, ARP spoofing)"),
     ("snmp", "snmp.rsc", "SNMP for the Devices page (CPU, temperature, ports; traps)"),
 ]
-SERVICES = {"hotspot": "hotspot", "wpa_ros7": "wireless", "wpa_legacy": "wireless", "pppoe": "ppp", "macauth": "wireless,hotspot"}
+SERVICES = {"hotspot": "hotspot", "wpa_ros7": "wireless", "wpa_legacy": "wireless", "passpoint": "wireless", "pppoe": "ppp",
+            "macauth": "wireless,hotspot"}
 NEEDS_BASE = ("logging", "dnslog", "autosync")      # these build on webfilter-base
 
 
@@ -55,7 +58,8 @@ def _strip_radius(text):
 
 
 # RouterOS 6 has no "wifi" package: these parts use the old wireless files there
-ROS6_FILES = {"wpa_ros7": "wpa-enterprise-wireless-legacy.rsc", "macauth": "mac-auth-wireless-legacy.rsc"}
+ROS6_FILES = {"wpa_ros7": "wpa-enterprise-wireless-legacy.rsc", "macauth": "mac-auth-wireless-legacy.rsc",
+              "passpoint": "passpoint-wireless-legacy.rsc"}
 
 
 def build(o, mikrotik_dir, autosync_text="", ros="7"):
@@ -129,6 +133,8 @@ def build(o, mikrotik_dir, autosync_text="", ros="7"):
             continue
         if o.get("_ros6") and key in ROS6_FILES:
             fname = ROS6_FILES[key]
+        if key == "passpoint" and o.get("passpoint_legacy"):      # RouterOS 7 router with the old 'wireless' menu
+            fname = ROS6_FILES[key]
         text = open(os.path.join(mikrotik_dir, fname), encoding="utf-8").read()
         body = "\n".join(l for l in text.splitlines() if not l.startswith("#"))
         body = _strip_radius(body.strip() + "\n")
@@ -143,6 +149,13 @@ def build(o, mikrotik_dir, autosync_text="", ros="7"):
             if not SSID_RE.match(ssid) or not KEY_RE.match(pw):
                 raise ValueError("devices Wi-Fi: a name and a password of 8-63 characters")
             body = body.replace("Devices-WiFi", ssid).replace("DevicesWiFiKey123", pw)
+        if key == "passpoint":
+            import passpoint
+            try:
+                st = passpoint.settings(o.get("passpoint_settings") or {})
+            except ValueError as e:
+                raise ValueError(f"Passpoint: {e} (Wi-Fi users page → Passpoint, or radius-admin passpoint set)")
+            body = passpoint.router(st, body)
         if key == "pppoe":
             body = body.replace("interface=ether2", f"interface={_iface(o.get('pppoe_if') or 'ether2', 'PPPoE interface')}")
         if key == "hotspot" and o.get("hotspot_mac"):

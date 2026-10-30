@@ -507,7 +507,9 @@ def rsc(st, geo_url=None, geo_ver=""):
         L.append('add chain=input connection-state=new action=jump jump-target=mlfw-in comment="mlfw: policies (to the router)"')
         for r in rules:
             L += rule_lines(st, r)
-        L.append('move [find comment~"^mlfw: policies"] destination=0')
+        # above every other rule; "destination=0" would stop the import when only these rules are there
+        L.append(':do { :local o [/ip firewall filter find where !(comment~"^mlfw: policies")]; :if ([:len $o] > 0) do={ '
+                 '/ip firewall filter move [/ip firewall filter find comment~"^mlfw: policies"] destination=[:pick $o 0] } }')
     L += ["/ip firewall nat", 'remove [find comment~"^mlfw-vip:"]']
     for v in st["vips"]:
         if v["enabled"]:
