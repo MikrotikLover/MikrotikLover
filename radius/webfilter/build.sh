@@ -124,8 +124,13 @@ join() { local IFS='|'; echo "$*"; }
     echo
     echo "/ip dns static"
     echo "remove [find comment=\"webfilter:keywords\"]"
-    [ ${#kw_any[@]} -eq 0 ]   || echo "add regexp=\".*($(join "${kw_any[@]}")).*\" type=NXDOMAIN comment=\"webfilter:keywords\""
-    [ ${#kw_start[@]} -eq 0 ] || echo "add regexp=\"(^|.*[.-])($(join "${kw_start[@]}")).*\" type=NXDOMAIN comment=\"webfilter:keywords\""
+    # 8 words per rule: RouterOS 7.25 refuses a longer one ("regular expression too complex", checked on a CHR)
+    for ((i = 0; i < ${#kw_any[@]}; i += 8)); do
+        echo "add regexp=\".*($(join "${kw_any[@]:i:8}")).*\" type=NXDOMAIN comment=\"webfilter:keywords\""
+    done
+    for ((i = 0; i < ${#kw_start[@]}; i += 8)); do
+        echo "add regexp=\"(^|.*[.-])($(join "${kw_start[@]:i:8}")).*\" type=NXDOMAIN comment=\"webfilter:keywords\""
+    done
     echo
     echo "/ip firewall filter"
     echo "remove [find comment=\"webfilter:keywords\"]"

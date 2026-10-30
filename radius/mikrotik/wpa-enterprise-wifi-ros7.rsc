@@ -12,12 +12,15 @@ add address=RADIUS_SERVER_IP secret="RADIUS_SECRET" service=wireless timeout=3s 
 /radius incoming
 set accept=yes
 
+# made once, then set: importing again (or Router setup twice) updates instead of stopping on "already there"
+:if ([:len [/interface wifi security find name="sec-enterprise"]] = 0) do={ /interface wifi security add name=sec-enterprise }
 /interface wifi security
-add name=sec-enterprise authentication-types=wpa2-eap eap-accounting=yes
+set [find name="sec-enterprise"] authentication-types=wpa2-eap eap-accounting=yes
 # Only-new devices?  use authentication-types=wpa2-eap,wpa3-eap
 
+:if ([:len [/interface wifi configuration find name="cfg-enterprise"]] = 0) do={ /interface wifi configuration add name=cfg-enterprise }
 /interface wifi configuration
-add name=cfg-enterprise ssid="Office-WiFi" security=sec-enterprise country=Pakistan mode=ap
+set [find name="cfg-enterprise"] ssid="Office-WiFi" security=sec-enterprise country=Pakistan mode=ap
 
 /interface wifi
 set [find default-name=wifi1] configuration=cfg-enterprise disabled=no

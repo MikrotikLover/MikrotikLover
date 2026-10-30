@@ -14,14 +14,18 @@ set accept=yes
 
 # ---- A) RouterOS 7 "wifi" package (RouterOS 7.13+): every new client is checked against RADIUS.
 #      A separate SSID for devices with WPA2-PSK + MAC check is recommended.
+:if ([:len [/interface wifi security find name="sec-devices"]] = 0) do={ /interface wifi security add name=sec-devices }
 /interface wifi security
-add name=sec-devices authentication-types=wpa2-psk passphrase="DevicesWiFiKey123"
+set [find name="sec-devices"] authentication-types=wpa2-psk passphrase="DevicesWiFiKey123"
+:if ([:len [/interface wifi configuration find name="cfg-devices"]] = 0) do={ /interface wifi configuration add name=cfg-devices }
 /interface wifi configuration
-add name=cfg-devices ssid="Devices-WiFi" security=sec-devices country=Pakistan mode=ap
+set [find name="cfg-devices"] ssid="Devices-WiFi" security=sec-devices country=Pakistan mode=ap
 /interface wifi access-list
+remove [find comment="MikrotikLover MAC auth"]
 add action=query-radius ssid-regexp="^Devices-WiFi\$" comment="MikrotikLover MAC auth"
 # Add the SSID as a virtual AP on the 2.4 GHz radio (wifi2 on dual-band routers, else wifi1; no radio: nothing,
 # instead of stopping the import there):
+:do { /interface wifi remove [find name="wifi-devices"] } on-error={}
 :do { :local r [/interface wifi find default-name=wifi2]; :if ([:len $r] = 0) do={ :set r [/interface wifi find default-name=wifi1] }; :if ([:len $r] > 0) do={ /interface wifi add master-interface=[:pick $r 0] configuration=cfg-devices name=wifi-devices disabled=no } }
 
 # ---- B) Legacy "wireless" package (RouterOS 6/7, wlan1): MAC check + WPA2-PSK

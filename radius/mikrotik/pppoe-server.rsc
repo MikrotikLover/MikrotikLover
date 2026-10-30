@@ -12,14 +12,18 @@
 #   radius-admin user add ahmed -p 'Secret#1' && radius-admin user plan ahmed home-10m
 #   radius-admin user ip ahmed 10.20.0.50          (optional static IP)
 
+:if ([:len [/ip pool find name="pppoe-pool"]] = 0) do={ /ip pool add name=pppoe-pool ranges=10.20.0.10-10.20.3.254 }
 /ip pool
-add name=pppoe-pool ranges=10.20.0.10-10.20.3.254
+set [find name="pppoe-pool"] ranges=10.20.0.10-10.20.3.254
 
+:if ([:len [/ppp profile find name="pppoe-radius"]] = 0) do={ /ppp profile add name=pppoe-radius }
+# interface-list=LAN: every customer's PPPoE link is LAN (NAT, DNS, blocking) — RouterOS 7.25 has no include=all-ppp
 /ppp profile
-add name=pppoe-radius local-address=10.20.0.1 remote-address=pppoe-pool dns-server=10.20.0.1 \
-    use-encryption=no only-one=yes change-tcp-mss=yes comment="MikrotikLover PPPoE"
+set [find name="pppoe-radius"] local-address=10.20.0.1 remote-address=pppoe-pool dns-server=10.20.0.1 \
+    use-encryption=no only-one=yes change-tcp-mss=yes interface-list=LAN comment="MikrotikLover PPPoE"
 
 /interface pppoe-server server
+remove [find service-name="MikrotikLover"]
 add service-name=MikrotikLover interface=ether2 default-profile=pppoe-radius \
     authentication=pap,chap,mschap2 one-session-per-host=yes max-mtu=1480 max-mru=1480 disabled=no
 
@@ -32,6 +36,4 @@ set accept=yes
 /ppp aaa
 set use-radius=yes accounting=yes interim-update=5m
 
-# Customers get NATed to the internet like the LAN (default config uses the WAN list)
-/interface list
-set [find name=LAN] include=all-ppp
+# Customers get NATed to the internet like the LAN: the profile above puts every PPPoE link in the LAN list

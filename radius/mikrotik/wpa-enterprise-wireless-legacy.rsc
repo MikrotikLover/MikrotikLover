@@ -12,8 +12,9 @@ add address=RADIUS_SERVER_IP secret="RADIUS_SECRET" service=wireless timeout=3s 
 /radius incoming
 set accept=yes
 
+:if ([:len [/interface wireless security-profiles find name="enterprise"]] = 0) do={ /interface wireless security-profiles add name=enterprise }
 /interface wireless security-profiles
-add name=enterprise mode=dynamic-keys authentication-types=wpa2-eap eap-methods=passthrough \
+set [find name="enterprise"] mode=dynamic-keys authentication-types=wpa2-eap eap-methods=passthrough \
     unicast-ciphers=aes-ccm group-ciphers=aes-ccm radius-eap-accounting=yes
 
 /interface wireless

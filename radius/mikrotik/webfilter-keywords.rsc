@@ -9,7 +9,8 @@
 
 /ip dns static
 remove [find comment="webfilter:keywords"]
-add regexp=".*(porn|xxx|xnxx|xvideos|xhamster|redtube|youporn|brazzers|hentai|nsfw|sexvideo|sexmovie|sexcam|freesex|hotsex|livesex).*" type=NXDOMAIN comment="webfilter:keywords"
+add regexp=".*(porn|xxx|xnxx|xvideos|xhamster|redtube|youporn|brazzers).*" type=NXDOMAIN comment="webfilter:keywords"
+add regexp=".*(hentai|nsfw|sexvideo|sexmovie|sexcam|freesex|hotsex|livesex).*" type=NXDOMAIN comment="webfilter:keywords"
 add regexp="(^|.*[.-])(sex|nude|xnx).*" type=NXDOMAIN comment="webfilter:keywords"
 
 /ip firewall filter
