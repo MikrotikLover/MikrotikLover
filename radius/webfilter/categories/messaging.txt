@@ -1,0 +1,16 @@
+# Chat apps (WhatsApp, Telegram, Signal, Viber, IMO, Discord)
+whatsapp.com
+whatsapp.net
+wa.me
+telegram.org
+telegram.me
+t.me
+cdn-telegram.org
+signal.org
+viber.com
+imo.im
+discord.com
+discord.gg
+discordapp.com
+discordapp.net
+discord.media

@@ -1,0 +1,18 @@
+# Profile: Hik-Connect (Hikvision cameras) — the app, live view, playback and alarms.
+# Used with "allow-only hikconnect" (alone or next to whatsapp) in a policy.
+#
+# Directives (also: net CIDR, host NAME, deny-sni WORD, block-quic — see whatsapp.txt):
+#   domain NAME   every name under NAME: the router's DNS (RouterOS 7.15+) puts the addresses it
+#                 answers into the list, so the app's changing cloud / relay servers work
+#   net @lan      this office's own networks (10/8, 172.16/12, 192.168/16): an NVR / DVR here
+#
+# Hik-Connect cloud (login, device list, relay of the video when the NVR is elsewhere)
+domain hik-connect.com
+domain hikvision.com
+# NVR / DVR in this office network
+net @lan
+# NVR / DVR at another place: add its public address or DDNS name, e.g.
+#   net 203.0.113.25
+#   host mynvr.ddns.net
+# Missing something? Dashboard -> Blocking -> App profiles -> "Learn an app" shows the names
+# the app asks for on a phone; add them here as domain lines.

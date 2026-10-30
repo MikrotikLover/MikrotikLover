@@ -1,0 +1,18 @@
+# Encrypted-DNS / private-relay endpoints — blocking these forces devices back to the router's filtered DNS
+dns.google
+dns64.dns.google
+cloudflare-dns.com
+one.one.one.one
+dns.quad9.net
+doh.opendns.com
+dns.adguard-dns.com
+dns.adguard.com
+dns.nextdns.io
+doh.cleanbrowsing.org
+doh.mullvad.net
+dns.mullvad.net
+dns.controld.com
+freedns.controld.com
+use-application-dns.net
+mask.icloud.com
+mask-h2.icloud.com

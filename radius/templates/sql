@@ -1,0 +1,51 @@
+# Managed by MikrotikLover radius/install.sh — re-running the installer overwrites this file.
+#
+# Users, groups, NAS (MikroTik routers), accounting and auth logs all live in MariaDB.
+# Manage them with: radius-admin (see radius/README.md)
+
+sql {
+	dialect = "mysql"
+	driver = "rlm_sql_${dialect}"
+
+	mysql {
+		warnings = auto
+	}
+
+	# "localhost" makes the MySQL driver use the local unix socket.
+	server = "localhost"
+	port = 3306
+	login = "@DB_USER@"
+	password = "@DB_PASS@"
+	radius_db = "@DB_NAME@"
+
+	acct_table1 = "radacct"
+	acct_table2 = "radacct"
+	postauth_table = "radpostauth"
+	authcheck_table = "radcheck"
+	groupcheck_table = "radgroupcheck"
+	authreply_table = "radreply"
+	groupreply_table = "radgroupreply"
+	usergroup_table = "radusergroup"
+
+	delete_stale_sessions = yes
+
+	pool {
+		start = ${thread[pool].start_servers}
+		min = ${thread[pool].min_spare_servers}
+		max = ${thread[pool].max_servers}
+		spare = ${thread[pool].max_spare_servers}
+		uses = 0
+		retry_delay = 5		# Wi-Fi logins resume 5 s after the database is back (default 30)
+		lifetime = 0
+		idle_timeout = 60
+	}
+
+	# MikroTik routers (RADIUS clients) are loaded from the "nas" table at startup.
+	# radius-admin restarts FreeRADIUS after every NAS change.
+	read_clients = yes
+	client_table = "nas"
+
+	group_attribute = "SQL-Group"
+
+	$INCLUDE ${modconfdir}/${.:name}/main/${dialect}/queries.conf
+}

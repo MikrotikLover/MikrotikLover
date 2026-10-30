@@ -1,0 +1,4 @@
+# Internet off at night (00:00–06:00), otherwise like guests
+block-all time=0s-6h,sun,mon,tue,wed,thu,fri,sat
+block torrent-piracy
+block keywords

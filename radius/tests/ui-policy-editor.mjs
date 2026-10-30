@@ -1,0 +1,192 @@
+// Policy editor: every rule keeps its own time.
+//   URL=https://127.0.0.1:8443 USER=admin PASS=... node tests/ui-policy-editor.mjs      (on the server, as root)
+// 1. every policy opened in the editor gives back the same rules (nothing lost, times kept)
+// 2. a new policy with a different time per category / app / site / internet off is saved as expected
+// 3. lines the editor cannot show (the same category twice) are kept as they are
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const { chromium } = require(process.env.PLAYWRIGHT || "playwright");
+import { existsSync, readFileSync, writeFileSync } from "fs";
+import { execFileSync } from "child_process";
+const URL = process.env.URL || "https://127.0.0.1:8443";
+const POL = process.env.POLICY_DIR || "/var/lib/mikrotiklover/policies";
+let fails = 0;
+const ok = (name, cond, info = "") => { console.log((cond ? "ok   " : "FAIL ") + name + (cond ? "" : `: ${info}`)); if (!cond) fails++; };
+const norm = (t) => t.split("\n").map((l) => l.split("#")[0].trim().replace(/\s+/g, " ")).filter(Boolean).sort().join("\n");
+const admin = (...a) => { try { return execFileSync("radius-admin", a, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); } catch (e) { return String(e.stdout || e); } };
+
+const b = await chromium.launch();
+const ctx = await b.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1366, height: 900 } });
+const p = await ctx.newPage();
+const errs = [];
+p.on("pageerror", (e) => errs.push(String(e)));
+p.on("console", (m) => { if (m.type() === "error" && !/401/.test(m.text())) errs.push(m.text()); });
+await p.goto(URL + "/");
+await p.fill("input[name=username]", process.env.USER); await p.fill("input[name=password]", process.env.PASS); await p.keyboard.press("Enter");
+await p.waitForSelector(".nav");
+
+async function openEditor(pol) {
+  await p.goto(URL + "/#/dashboard"); await p.waitForTimeout(200);
+  await p.goto(URL + "/#/blocking/policies"); await p.waitForTimeout(600);
+  if (!pol) { await p.getByRole("button", { name: "+ New policy" }).click(); }
+  else {
+    await p.locator(`.policy-row[data-name="${pol.name}"]`).getByRole("button", { name: "Edit", exact: true }).click();
+  }
+  await p.locator("dialog[open] pre.code-box").waitFor({ state: "attached" });
+}
+const editorText = () => p.locator("dialog[open] pre.code-box").textContent();
+
+// 1. round trip
+const meta = await p.evaluate(async () => (await fetch("/api/blocking")).json());
+for (const pol of meta.policies) {
+  await openEditor(pol);
+  const got = await editorText(), want = readFileSync(`${POL}/${pol.name}.txt`, "utf8");
+  ok(`round trip: ${pol.name}`, norm(got) === norm(want), `\n  file:   ${norm(want).replace(/\n/g, " | ")}\n  editor: ${norm(got).replace(/\n/g, " | ")}`);
+  await p.keyboard.press("Escape");
+}
+
+// only these apps: a policy with two app profiles shows both ticked and keeps both
+const two = meta.policies.find((x) => x.name === "whatsapp-hikconnect");
+if (two) {
+  await openEditor(two);
+  const dd = p.locator("dialog[open]");
+  ok("only-apps policy: mode and both apps ticked", (await dd.locator("select").first().inputValue()) === "only"
+    && await dd.locator("label.chip", { hasText: /^whatsapp$/ }).locator("input").isChecked() && await dd.locator("label.chip", { hasText: /^hikconnect$/ }).locator("input").isChecked());
+  await dd.locator("label.chip", { hasText: /^hikconnect$/ }).locator("input").uncheck();
+  ok("  ... untick one: only the other stays", norm(await editorText()) === norm("allow-only whatsapp"));
+  await p.keyboard.press("Escape");
+}
+
+// 2. a new policy, one time per rule (removed again even when a step fails)
+admin("policy", "del", "ui-times");
+process.on("exit", () => { if (existsSync(`${POL}/ui-times.txt`)) admin("policy", "del", "ui-times"); });
+await openEditor(null);
+const d = p.locator("dialog[open]");
+await d.locator("input[name=name]").fill("ui-times");
+await d.locator("input[placeholder^='e.g. Kids']").fill("UI test: own time per rule");
+const rowOf = (title) => d.locator(".rule-row").filter({ has: p.locator(`b:text-is("${title}")`) });
+await rowOf("social").locator("label.check > input[type=checkbox]").check();
+await rowOf("social").locator("select.tp-sel").selectOption({ label: "Office hours (9–17, Mon–Sat)" });
+await rowOf("gaming").locator("label.check > input[type=checkbox]").check();                         // always
+await d.locator("input[placeholder^='Search apps']").fill("tiktok");
+await d.locator("label.chip", { hasText: "TikTok" }).first().locator("input").check();
+const app = d.locator(".rule-row.item").filter({ hasText: "TikTok" });
+await app.locator("select.tp-sel").selectOption("custom");
+const sels = app.locator(".tp-custom select");
+await sels.nth(0).selectOption("16"); await sels.nth(1).selectOption("19");
+for (const day of ["sat", "sun"]) await app.locator("label.chip", { hasText: day }).locator("input").uncheck();
+await d.getByRole("button", { name: "Add a site" }).click();
+const site = d.locator(".rule-row.item").filter({ has: p.locator("input[placeholder='example-bet.com']") }).last();
+await site.locator("input[placeholder='example-bet.com']").fill("https://www.Example-Bet.com/path");
+await site.locator("select.tp-sel").selectOption("custom");
+await site.locator(".tp-custom select").nth(0).selectOption("22"); await site.locator(".tp-custom select").nth(1).selectOption("6");
+for (const day of ["sat", "sun"]) await site.locator("label.chip", { hasText: day }).locator("input").check();
+await rowOf("Internet off completely").locator("label.check > input[type=checkbox]").check();
+await rowOf("Internet off completely").locator("select.tp-sel").selectOption("custom");
+const offSel = rowOf("Internet off completely").locator(".tp-custom select");
+await offSel.nth(0).selectOption("0"); await offSel.nth(1).selectOption("6");
+await d.locator("textarea").last().fill("linkedin.com");
+const expect = ["block social time=9h-17h,mon,tue,wed,thu,fri,sat", "block gaming", "block-app TikTok time=16h-19h,mon,tue,wed,thu,fri",
+  "block-site example-bet.com time=22h-6h,mon,tue,wed,thu,fri,sat,sun", "block-all time=0s-6h,mon,tue,wed,thu,fri", "allow-web linkedin.com"];
+const shown = await editorText();
+ok("editor: each rule with its own time", norm(shown) === norm(expect.join("\n")), `\n  got:  ${norm(shown).replace(/\n/g, " | ")}\n  want: ${norm(expect.join("\n")).replace(/\n/g, " | ")}`);
+await d.getByRole("button", { name: "Save policy" }).click();
+await p.locator(".toast").last().waitFor();
+let saved = "";
+try { saved = readFileSync(`${POL}/ui-times.txt`, "utf8"); } catch { saved = ""; }
+ok("saved file = what the editor showed", norm(saved) === norm(expect.join("\n")), saved);
+const rsc = readFileSync("/var/lib/mikrotiklover/router/webfilter-policies.rsc", "utf8");
+ok("router: social only at office time, gaming always", /chain=wfp-ui-times .*jump-target=wf-social time=9h-17h,mon,tue,wed,thu,fri,sat/.test(rsc)
+  && /chain=wfp-ui-times .*jump-target=wf-gaming comment/.test(rsc));
+ok("router: site 22:00-06:00 split at midnight", /tls-host="example-bet.com".*time=22h-23h59m59s/.test(rsc) && /tls-host="example-bet.com".*time=0s-6h/.test(rsc));
+
+// 3. lines the editor cannot show are kept
+writeFileSync(`${POL}/ui-times.txt`, "# UI test: own time per rule\nblock social time=9h-12h,mon\nblock social time=14h-17h,mon\nblock gaming\n");
+await openEditor({ name: "ui-times", description: "UI test: own time per rule" });
+const t3 = await editorText();
+ok("second line for the same category kept", norm(t3) === norm("block social time=9h-12h,mon\nblock social time=14h-17h,mon\nblock gaming"), t3);
+ok("  ... and shown as 'other rules'", (await d.locator(".note", { hasText: "Other rules" }).textContent()).includes("block social time=14h-17h,mon"));
+await rowOf("gaming").locator("select.tp-sel").selectOption({ label: "Office hours (9–17, Mon–Sat)" });
+ok("changing one rule leaves the others", norm(await editorText()) === norm("block social time=9h-12h,mon\nblock social time=14h-17h,mon\nblock gaming time=9h-17h,mon,tue,wed,thu,fri,sat"));
+await p.keyboard.press("Escape");
+
+// links straight to a policy's editor ("Edit policy" in Why blocked?), and dialogs close on another page
+await p.goto(URL + "/#/dashboard"); await p.waitForTimeout(200);
+await p.goto(URL + "/#/blocking/why/facebook.com/kid1"); await p.waitForTimeout(1500);
+ok("why blocked: no stray 'null' on the page", !(await p.locator("main, .main, body").first().innerText()).split("\n").some((l) => l.trim() === "null"));
+const editLink = p.locator("a.btn", { hasText: "Edit policy" }).first();
+if (await editLink.count()) {
+  const want = decodeURIComponent((await editLink.getAttribute("href")).split("/").pop());
+  await editLink.click();
+  await p.locator("dialog[open] pre.code-box").waitFor({ state: "attached" });
+  ok("'Edit policy' opens that policy's editor", (await p.locator("dialog[open] input[name=name]").inputValue()) === want, want);
+  await p.goto(URL + "/#/blocking/overview"); await p.waitForTimeout(800);
+  ok("another page: the dialog is closed", (await p.locator("dialog[open]").count()) === 0);
+}
+await p.goto(URL + "/#/blocking/policies/give"); await p.locator("dialog[open] #bl-pol").waitFor();
+ok("give dialog: no wider than the dialog", await p.evaluate(() => { const b = document.querySelector("dialog[open] .dlg-body"); return b.scrollWidth <= b.clientWidth + 1; }));
+await p.keyboard.press("Escape");
+
+// words in site names (block-word): warning for a word that hits big sites, "start of a name part"
+await openEditor(null);
+{
+  const dd = p.locator("dialog[open]");
+  await dd.locator("input[name=name]").fill("ui-words");
+  await dd.getByRole("button", { name: "Add a word" }).click();
+  const word = dd.locator("input[aria-label=word]").last();
+  await word.fill("video");
+  ok("word: warning when it also hits big sites", /googlevideo\.com/.test(await dd.locator(".word-warn").first().textContent()));
+  await dd.locator("select[aria-label='where in the name']").last().selectOption("start");
+  ok("  ... no warning at the start of a name part", (await dd.locator(".word-warn").count()) === 0);
+  ok("  ... saved as ^video", norm(await editorText()).includes("block-word ^video"));
+  await word.fill("ab");
+  await dd.locator("select[aria-label='where in the name']").last().selectOption("any");
+  ok("word: too short is not written to the file", !norm(await editorText()).includes("block-word") && /3–32/.test(await dd.locator(".word-warn").first().textContent()));
+  await p.keyboard.press("Escape");
+}
+
+// policy on / off switch in the table
+await p.goto(URL + "/#/dashboard"); await p.waitForTimeout(200);
+await p.goto(URL + "/#/blocking/policies"); await p.locator('.policy-row[data-name="no-vpn"]').waitFor();
+const swNoVpn = () => p.locator('.policy-row[data-name="no-vpn"] .switch');
+const enabledOf = async (n) => p.evaluate(async (x) => (await (await fetch("/api/blocking")).json()).policies.find((q) => q.name === x).enabled, n);
+if ((await p.locator('.policy-row[data-name="no-vpn"] td.pol-used-td', { hasText: "not used" }).count()) === 1) {
+  await swNoVpn().click();
+  await p.locator('.policy-row.off[data-name="no-vpn"]').waitFor({ timeout: 30000 });
+  ok("switch: policy turned off (row shown off, server says off)", (await enabledOf("no-vpn")) === false);
+  await swNoVpn().click();
+  await p.locator('.policy-row:not(.off)[data-name="no-vpn"]').waitFor({ timeout: 30000 });
+  ok("switch: on again", (await enabledOf("no-vpn")) === true);
+}
+
+// guide: every policy explained in words, every rule known, Give opens with that policy
+await p.goto(URL + "/#/dashboard"); await p.waitForTimeout(200);
+await p.goto(URL + "/#/blocking/guide"); await p.locator(".g-pol").first().waitFor();
+const gmeta = await p.evaluate(async () => (await fetch("/api/blocking")).json());
+ok("guide: one card per policy", (await p.locator(".g-pol").count()) === gmeta.policies.length, `${await p.locator(".g-pol").count()} vs ${gmeta.policies.length}`);
+ok("guide: every rule said in words (no raw rule left)", (await p.locator(".g-rules code").count()) === 0);
+ok("guide: rule lines = rules in the files", (await p.locator(".g-rules li").count()) === gmeta.policies.reduce((n, x) => n + x.rules.length, 0));
+await p.locator("#gp-whatsapp-only").getByRole("button", { name: "Give" }).click();
+ok("guide: Give opens with that policy", (await p.locator("dialog[open] #bl-pol").inputValue()) === "whatsapp-only");
+await p.keyboard.press("Escape");
+
+// quick clicks: a page still loading must not be drawn over the page the user went to
+for (const [slow, fast, title] of [["#/insights", "#/groups", "Groups"], ["#/blocking/overview", "#/blocking/policies", "Blocking"], ["#/users", "#/macs", "MAC devices"]]) {
+  await p.evaluate(([a, b]) => { location.hash = a; setTimeout(() => { location.hash = b; }, 30); }, [slow, fast]);
+  await p.waitForTimeout(2500);
+  const head = await p.locator("header h1").innerText();
+  ok(`quick clicks ${slow} -> ${fast}: the last page is shown`, head.startsWith(title) && (fast !== "#/blocking/policies" || await p.locator(".policy-row").count() > 0), head);
+}
+
+// phone width: no sideways scrolling in the editor
+await p.setViewportSize({ width: 390, height: 800 });
+await openEditor({ name: "ui-times", description: "UI test: own time per rule" });
+ok("phone: editor fits the screen", !(await p.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)));
+if (process.env.SHOTS) await p.screenshot({ path: `${process.env.SHOTS}/116-policy-times-phone.png`, fullPage: false });
+await p.keyboard.press("Escape");
+admin("policy", "del", "ui-times");
+try { execFileSync("rm", ["-f", "/var/lib/mikrotiklover/webscan/linkedin.com.json", "/var/lib/mikrotiklover/webscan/linkedin.com.txt", "/var/lib/mikrotiklover/webscan/linkedin.com.nets"]); } catch { /* not there */ }
+ok("no console / CSP errors", errs.length === 0, errs.join(" | "));
+await b.close();
+console.log(fails ? `${fails} FAILED` : "all policy editor tests passed");
+process.exit(fails ? 1 : 0);

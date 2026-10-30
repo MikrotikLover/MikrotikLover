@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="pragma" content="no-cache">
+<meta http-equiv="expires" content="-1">
+<title>Wi-Fi Login</title>
+<!--
+  MikrotikLover hotspot login page (voucher / PIN friendly).
+  Install: Winbox → Files → hotspot/ → replace login.html with this file (keep md5.js there).
+  Change BRAND below. Works with login-by=http-chap (password is never sent in clear) and http-pap.
+-->
+<style>
+  :root { --a:#2563eb; --bg:#f1f5f9; --t:#0f172a; --m:#64748b; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; background:linear-gradient(135deg,#1d4ed8,#0ea5e9); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; color:var(--t); padding:16px; }
+  .card { width:100%; max-width:360px; background:#fff; border-radius:18px; padding:26px 22px; box-shadow:0 20px 50px rgba(0,0,0,.25); }
+  h1 { margin:0 0 4px; font-size:22px; text-align:center; }
+  .sub { text-align:center; color:var(--m); margin:0 0 18px; font-size:14px; }
+  label { display:block; font-weight:600; font-size:13px; margin:12px 0 5px; }
+  input[type=text], input[type=password] { width:100%; font-size:18px; letter-spacing:.04em; padding:11px 12px; border:1px solid #cbd5e1; border-radius:10px; font-family:ui-monospace,Menlo,Consolas,monospace; }
+  input:focus { outline:2px solid var(--a); border-color:var(--a); }
+  .pin { display:flex; gap:8px; align-items:center; margin-top:12px; font-size:14px; color:var(--m); }
+  button { width:100%; margin-top:18px; padding:12px; font-size:16px; font-weight:700; color:#fff; background:var(--a); border:0; border-radius:10px; cursor:pointer; }
+  .err { background:#fef2f2; color:#b91c1c; border-radius:10px; padding:10px 12px; margin-bottom:6px; font-size:14px; text-align:center; }
+  .foot { text-align:center; margin-top:16px; font-size:13px; color:var(--m); }
+  .foot a { color:var(--a); }
+  .logo { display:block; max-width:160px; max-height:80px; margin:0 auto 10px; }
+  .social { margin-top:16px; padding-top:14px; border-top:1px dashed #cbd5e1; text-align:center; }
+  .social button { background:#16a34a; margin-top:6px; }
+  .social small { color:var(--m); }
+  .ad { background:#eff6ff; border:1px solid #bfdbfe; color:#1e3a8a; border-radius:10px; padding:10px 12px; margin:8px 0; font-size:14px; text-align:center; }
+</style>
+</head>
+<body>
+$(if chap-id)
+<form name="sendin" action="$(link-login-only)" method="post" style="display:none">
+  <input type="hidden" name="username">
+  <input type="hidden" name="password">
+  <input type="hidden" name="dst" value="$(link-orig)">
+  <input type="hidden" name="popup" value="true">
+</form>
+<script src="/md5.js"></script>
+$(endif)
+<div class="card">
+  <!--ML-LOGO-->
+  <h1 id="brand">MikrotikLover WiFi</h1>
+  <p class="sub">Card par likha username aur password likhein</p>
+  $(if error)<div class="err">$(error)</div>$(endif)
+  <!--ML-NOTICE-->
+  <form name="login" action="$(link-login-only)" method="post" onsubmit="return doLogin()">
+    <input type="hidden" name="dst" value="$(link-orig)">
+    <input type="hidden" name="popup" value="true">
+    <label for="u">Username / PIN</label>
+    <input id="u" type="text" name="username" value="$(username)" autocapitalize="characters" autocomplete="username" autocorrect="off" spellcheck="false" required>
+    <div id="pw">
+      <label for="p">Password</label>
+      <input id="p" type="password" name="password" autocomplete="current-password">
+    </div>
+    <label class="pin"><input type="checkbox" id="pinmode"> Card par sirf PIN hai</label>
+    <button type="submit">Login</button>
+  </form>
+  <!--ML-SOCIAL-->
+  <div class="foot">$(if trial == 'yes')<a href="$(link-login-only)?dst=$(link-orig-esc)&amp;username=T-$(mac-esc)">Free trial</a> · $(endif)Masla? Staff se rabta karein.</div>
+</div>
+<script>
+  var pin = document.getElementById('pinmode'), pw = document.getElementById('pw');
+  pin.onchange = function () { pw.style.display = pin.checked ? 'none' : ''; };
+  function doLogin() {
+    var u = document.login.username.value.replace(/\s+/g, '');
+    var p = pin.checked ? u : document.login.password.value;
+    document.login.username.value = u;
+    $(if chap-id)
+    document.sendin.username.value = u;
+    document.sendin.password.value = hexMD5('$(chap-id)' + p + '$(chap-challenge)');
+    document.sendin.submit();
+    return false;
+    $(else)
+    document.login.password.value = p;
+    return true;
+    $(endif)
+  }
+  document.login.username.focus();
+</script>
+</body>
+</html>

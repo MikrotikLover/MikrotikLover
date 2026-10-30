@@ -1,0 +1,3 @@
+# Your own blocked websites — one domain per line, subdomains are blocked too.
+# Then run: ./build.sh  and import mikrotik/webfilter-custom.rsc on the router.
+# example.com

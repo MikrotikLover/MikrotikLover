@@ -1,0 +1,14 @@
+[Unit]
+Description=MikrotikLover first boot: this VM's own passwords, certificates and RADIUS secrets
+After=network-online.target mariadb.service
+Wants=network-online.target
+ConditionPathExists=!/var/lib/mikrotiklover/firstboot.done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mikrotiklover-firstboot
+RemainAfterExit=yes
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=multi-user.target

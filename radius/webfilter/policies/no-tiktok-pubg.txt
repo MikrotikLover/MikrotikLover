@@ -1,0 +1,3 @@
+# Example of single apps: TikTok and PUBG Mobile blocked (all their known domains, learned ones too)
+block-app TikTok
+block-app PUBG Mobile

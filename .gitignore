@@ -6,3 +6,4 @@
 *.log
 *.whl
 /-b
+vm-image/
