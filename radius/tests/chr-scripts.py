@@ -38,6 +38,8 @@ SETUPS = {   # name: parts (+ options) — like the dashboard's presets
 
 
 def fill(text):
+    # adlists: the syntax is what is tested; real lists (100k+ names) keep an emulated CHR busy for minutes
+    text = re.sub(r'url="https?://[^"]+"(?= ssl-verify=)', 'url="https://127.0.0.1/chr-test-adlist"', text)
     return (text.replace("RADIUS_SERVER_IP", SERVER).replace("RADIUS_SECRET", SECRET)
             .replace("SNMP_COMMUNITY", COMMUNITY).replace("ROUTER_IP", "192.168.88.1"))
 
