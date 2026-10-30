@@ -63,7 +63,10 @@ cleanup() {
 }
 trap cleanup EXIT
 cp "$IMG" "$WORK/chr.img"
-SSHO=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=30 -o ServerAliveInterval=15)
+# one SSH connection for every command: security.rsc (imported here too) bans an address that opens
+# 4 new SSH connections a minute from the WAN side — it would ban this test
+SSHO=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=30 -o ServerAliveInterval=15
+      -o ControlMaster=auto -o "ControlPath=$WORK/ssh-%r@%h:%p" -o ControlPersist=900)
 ros() { # -n: never eat the caller's stdin; a busy (emulated) CHR may not answer SSH at once: try again
     local out i
     for i in 1 2 3 4; do
