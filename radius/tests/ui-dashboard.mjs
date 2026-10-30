@@ -307,13 +307,13 @@ try {
   await kidsCard.waitFor({ timeout: 30000 });
   await kidsCard.getByRole("button", { name: "Give", exact: true }).click();
   await page.locator("dialog[open] input[list=bl-users]").fill("ui-user");
-  if (await page.locator("dialog[open] #bl-pol").inputValue() !== "ui-kids") throw new Error("give dialog: the row's policy not chosen");
+  if (JSON.stringify(await page.locator("dialog[open] #bl-pol input:checked").evaluateAll((e) => e.map((x) => x.value))) !== '["ui-kids"]') throw new Error("give dialog: the row's policy not chosen");
   await clickToast(page, dlgButton(page, "Apply"));
   await kidsCard.locator("td.pol-used-td", { hasText: "ui-user" }).waitFor({ timeout: 30000 });
   ok("blocking: policy made in the editor (category + app + VPN + time) and given to a user");
   await page.locator(".page-head").getByRole("button", { name: "Give a policy" }).click();
   await page.locator("dialog[open] input[list=bl-users]").fill("ui-user");
-  await page.locator("dialog[open] #bl-pol").selectOption("whatsapp-only");
+  await page.locator('dialog[open] #bl-pol input[value="whatsapp-only"]').check();
   await clickToast(page, dlgButton(page, "Apply"));
   await page.locator('.policy-row[data-name="whatsapp-only"] td.pol-used-td', { hasText: "ui-user" }).waitFor({ timeout: 30000 });
   await page.locator(".page-head input[type=search]").fill("whatsapp");

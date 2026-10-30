@@ -173,7 +173,7 @@ Dashboard → **MAC devices**: Policy column (apni, ya "(group)"), **Policy** bu
 
 - Hamesha: **apni policy > group / plan ki policy**. Policy badlo to agle login par lagti hai (online user ek dafa disconnect hota hai).
 - **Quarantine** har policy se upar hai; release ke baad purani policy wapas.
-- Login ke baghair poore network / IP range ko policy: Blocking → Give a policy → Network / IP (section 5h2).
+- Login ke baghair poore network / IP range ko policy: Blocking → Give a policy → Network / IP (section 5h2). Wahan **kai policies tick** kar sakte hain — har ek us network par lagti hai (CLI: `radius-admin policy net add students,no-video 192.168.88.0/24 "Office LAN"`). Users ke liye kai tick = jodi hui policy; group ko ek hi.
 - Test: `tests/test-login-policies.sh` — chaaron tareeqon se asli FreeRADIUS login (radclient, hotspot jaisa) aur jawab mein sahi policy; ghalat password / PIN / doosre device se MAC rad; policy badalna; quarantine; routers par har list ke rules.
 
 - MikroTik MAC kisi bhi format mein bheje (`AA:BB:..`, `aabbcc..`), server khud `AA-BB-CC-DD-EE-FF` bana leta hai.

@@ -167,7 +167,7 @@ ok("guide: one card per policy", (await p.locator(".g-pol").count()) === gmeta.p
 ok("guide: every rule said in words (no raw rule left)", (await p.locator(".g-rules code").count()) === 0);
 ok("guide: rule lines = rules in the files", (await p.locator(".g-rules li").count()) === gmeta.policies.reduce((n, x) => n + x.rules.length, 0));
 await p.locator("#gp-whatsapp-only").getByRole("button", { name: "Give" }).click();
-ok("guide: Give opens with that policy", (await p.locator("dialog[open] #bl-pol").inputValue()) === "whatsapp-only");
+ok("guide: Give opens with that policy", JSON.stringify(await p.locator("dialog[open] #bl-pol input:checked").evaluateAll((e) => e.map((x) => x.value))) === '["whatsapp-only"]');
 await p.keyboard.press("Escape");
 
 // quick clicks: a page still loading must not be drawn over the page the user went to

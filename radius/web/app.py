@@ -2185,7 +2185,7 @@ def policy_nets():
 @login_required("admin")
 def policy_net_add():
     data = body()
-    pol = field(data, "policy", POLICY_RE, required=True)
+    pol = field(data, "policy", POLICY_LIST_RE, required=True, maxlen=400)      # one, or several (a,b): one entry each
     target = field(data, "target", re.compile(r"^[0-9./-]{7,40}$"), required=True)
     comment = field(data, "comment", re.compile(r'^[^"\\$]{0,100}$'))
     return result(*radius_admin(["policy", "net", "add", pol, target] + ([comment] if comment else []), timeout=300))

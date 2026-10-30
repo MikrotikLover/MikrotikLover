@@ -3246,14 +3246,22 @@ cmd_policy() {
             list) [ "$(echo "SELECT COUNT(*) FROM ml_policy_net" | db)" = 0 ] && { echo "No network has a policy. Add one: radius-admin policy net add staff 192.168.88.0/24 \"Office LAN\""; return 0; }
                   echo "SELECT id, policy, target, comment, DATE_FORMAT(created, '%Y-%m-%d') AS since FROM ml_policy_net ORDER BY policy, id" | dbt ;;
             add)
-                local p=${1:-} tg=${2:-}; [ -n "$p" ] && [ -n "$tg" ] || die "usage: radius-admin policy net add POLICY 192.168.88.0/24|192.168.88.100-192.168.88.150|192.168.88.23 [comment]"
-                [[ $p =~ ^[a-z0-9-]{1,40}$ ]] && [ -f "$POLICY_DIR/$p.txt" ] || die "No policy '$p' (radius-admin policy list)"
+                local p=${1:-} tg=${2:-}; [ -n "$p" ] && [ -n "$tg" ] || die "usage: radius-admin policy net add POLICY[,POLICY...] 192.168.88.0/24|192.168.88.100-192.168.88.150|192.168.88.23 [comment]"
+                # several policies (a,b): one entry each — on a network every policy of it applies
+                local -a ps=(); local x
+                for x in ${p//,/ }; do
+                    [[ $x =~ ^[a-z0-9-]{1,40}$ ]] && [ -f "$POLICY_DIR/$x.txt" ] || die "No policy '$x' (radius-admin policy list)"
+                    [[ " ${ps[*]} " == *" $x "* ]] || ps+=("$x")
+                done
+                [ ${#ps[@]} -gt 0 ] || die "no policy given"
                 tg=$(valid_target "$tg"); shift 2; local c="$*"
                 [ ${#c} -le 100 ] && [[ ! $c =~ [\"\\\$] ]] || die "comment: 100 characters at most, no \" \\ \$"
-                echo "INSERT INTO ml_policy_net (policy, target, comment, created) VALUES ($(q "$p"), $(q "$tg"), $(q "$c"), NOW())
-                      ON DUPLICATE KEY UPDATE comment=VALUES(comment)" | db
+                for x in "${ps[@]}"; do
+                    echo "INSERT INTO ml_policy_net (policy, target, comment, created) VALUES ($(q "$x"), $(q "$tg"), $(q "$c"), NOW())
+                          ON DUPLICATE KEY UPDATE comment=VALUES(comment)" | db
+                done
                 cmd_policy build >/dev/null || die "router rules not built"
-                ok "Policy '$p' for $tg (no login needed) — routers within 15 minutes" ;;
+                local IFS=,; ok "Policy '${ps[*]}' for $tg (no login needed) — routers within 15 minutes" ;;
             del)
                 [[ ${1:-} =~ ^[0-9]+$ ]] || die "usage: radius-admin policy net del ID   (radius-admin policy net list)"
                 [ "$(echo "SELECT COUNT(*) FROM ml_policy_net WHERE id=$1" | db)" = 1 ] || die "No network policy #$1"
@@ -4555,7 +4563,7 @@ Blocking policies + router auto-sync (dashboard → Blocking)
   policy set NAME < file                create / change a policy (directives: webfilter/policies/README.txt)
   policy del NAME                       delete an unused policy
   winupdate on|off|office|status        Windows Update for everyone: allowed / blocked / blocked in office hours (per policy: block windows-update)
-  policy net add POLICY NET|RANGE|IP [comment] · policy net list|del ID   a policy without logging in (whole LAN, VLAN, IP range)
+  policy net add POLICY[,POLICY..] NET|RANGE|IP [comment] · policy net list|del ID   a policy without logging in (whole LAN, VLAN, IP range)
   policy pause | resume                  emergency: no blocking at all (routers within 15 minutes)
   firewall list                          policies in order (first match wins), port forwards, objects
   firewall rule add NAME --dir out|in|wan|router|lan --src OBJ,geo:CN --dst all --service RDP,SMB

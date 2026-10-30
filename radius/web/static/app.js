@@ -2307,7 +2307,18 @@ function givePolicyDialog(meta, users, preset) {
   drawPick();
   const groupSel = h("select", { name: "group" }, h("option", { value: "" }, "— choose a group —"));
   api("GET", "/api/groups").then((g) => g.groups.forEach((x) => groupSel.append(h("option", { value: x.name }, x.name)))).catch(() => {});
-  const polSel = h("select", { id: "bl-pol", name: "policy" }, meta.policies.map((p) => h("option", { value: p.name, selected: p.name === (preset && preset.policy || preset) }, `${p.name} — ${p.description}`)));
+  // policies: tick one or several (users: joined into one; network: each applies; group: one)
+  const pre = preset && preset.policy || (typeof preset === "string" ? preset : "");
+  const polPicked = new Set(pre ? [pre] : []);
+  const polOrder = pre ? [pre] : [];
+  const polCount = h("span", { class: "muted small" });
+  const polSync = () => { polCount.textContent = polPicked.size > 1 ? `${polPicked.size} selected` : ""; };
+  const polSel = h("div", { class: "pick-list", id: "bl-pol" }, meta.policies.map((p) => h("label", { class: "pick" },
+    h("input", { type: "checkbox", name: "policy", value: p.name, checked: polPicked.has(p.name), onchange: (e) => {
+      if (e.target.checked) { polPicked.add(p.name); if (!polOrder.includes(p.name)) polOrder.push(p.name); } else polPicked.delete(p.name);
+      polSync(); } }),
+    h("span", {}, h("b", {}, p.name), p.description ? h("span", { class: "muted small" }, ` — ${p.description}`) : null))));
+  const polValue = () => polOrder.filter((n) => polPicked.has(n)).join(",");
   const userField = h("div", { class: "field" }, h("span", {}, "Users ", pickCount), userIn, h("datalist", { id: "bl-users" }, users.map((u) => h("option", { value: u.username }))), pickList,
     h("span", { class: "help" }, "Tick one or many. Their own policy beats the group's."));
   const groupField = h("label", { class: "field", hidden: true }, "Group", groupSel, h("span", { class: "help" }, "every user of the group gets it, unless the user has an own policy"));
@@ -2322,19 +2333,22 @@ function givePolicyDialog(meta, users, preset) {
     note.textContent = who === "net" ? "Routers get it within 15 minutes." : "A user who is online is disconnected once and gets the policy at the next login."; };
   if (preset && preset.who) who = preset.who;
   draw();
-  const form = h("form", { class: "form", onsubmit: (e) => e.preventDefault() }, seg, userField, groupField, netField, h("label", { class: "field" }, "Policy", polSel), note);
+  const form = h("form", { class: "form", onsubmit: (e) => e.preventDefault() }, seg, userField, groupField, netField,
+    h("div", { class: "field" }, h("span", {}, "Policies ", polCount), polSel, h("span", { class: "help" }, "Tick one or several. Users: joined into one. Network / IP: each one applies. Group: one only.")), note);
   dialog("Give a policy", form, [{ label: "Cancel" }, { label: "Apply", class: "primary", action: async () => {
+    if (!polPicked.size) { toast("Tick a policy", true); return false; }
+    if (who === "group" && polPicked.size > 1) { toast("A group gets one policy — tick one (several are for users and networks)", true); return false; }
     if (who === "net") {
       if (!netIn.value.trim()) { toast("Type a network, range or IP", true); return false; }
-      if (!await act(api("POST", "/api/policies/net", { policy: polSel.value, target: netIn.value.trim(), comment: netNote.value.trim() }))) return false;
+      if (!await act(api("POST", "/api/policies/net", { policy: polValue(), target: netIn.value.trim(), comment: netNote.value.trim() }))) return false;
     } else if (who === "user") {
       const typed = userIn.value.trim();
       const names = picked.size ? [...picked] : (typed ? [typed] : []);
       if (!names.length) { toast("Tick a user (or type a name)", true); return false; }
-      if (!await act(api("POST", "/api/policies/give", { users: names, policy: polSel.value }))) return false;
+      if (!await act(api("POST", "/api/policies/give", { users: names, policy: polValue() }))) return false;
     } else {
       if (!groupSel.value) { toast("Choose a group", true); return false; }
-      if (!await act(api("POST", "/api/groups", { name: groupSel.value, policy: polSel.value, edit: true }))) return false;
+      if (!await act(api("POST", "/api/groups", { name: groupSel.value, policy: polValue(), edit: true }))) return false;
     }
     blSummary = null; route();
   } }]);
