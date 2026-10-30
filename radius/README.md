@@ -167,7 +167,7 @@ Dashboard → **MAC devices**: Policy column (apni, ya "(group)"), **Policy** bu
 | Login | Policy kahan se | Kaise dein |
 |---|---|---|
 | **MAC address** (printer, TV, CCTV — kuch type nahi) | MAC ki apni policy, warna us ke group ki | Dashboard: **MAC devices → Policy** · CLI: `mac add MAC --policy P` · `mac policy MAC P` |
-| **Username + password** | user ki apni policy, warna group ki | Dashboard: **Blocking → Give a policy → One user / A whole group** · CLI: `user policy NAME P` · `group add G --policy P` |
+| **Username + password** | user ki apni policy, warna group ki | Dashboard: **Users** list mein har user ki Policy dropdown, ya kai users tick → "N selected → policy → Apply"; **Blocking → Give a policy → Users** (search + kai tick) / A whole group · CLI: `user policy NAME P` · `policy give P USER1 USER2 …` · `group add G --policy P` |
 | **PIN voucher** (code hi user aur password) | voucher ke **plan** ki policy | Dashboard: **Plans → Edit → Blocking policy** · CLI: `plan set PLAN --policy P` |
 | **Guest** (Social WiFi, phone number) | `social-free` plan ki policy | Dashboard: **Plans → social-free → Edit → Blocking policy** · CLI: `plan set social-free --policy guests` |
 
@@ -539,6 +539,7 @@ strict-ech            # Encrypted Client Hello bhi band (site ka naam chhupne na
 | Kis par | Kaise |
 |---|---|
 | **Single user** (hotspot) | `sudo radius-admin user policy ali students` — sirf is user par, group se upar. Turant kick hota hai taa ke naye login par policy lag jaye |
+| **Kai users ek saath** | Dashboard → **Users**: users tick karein (ya "select all" — search ke baad sirf dikhne wale), upar bar mein policy chunein → **Apply**; "↩ back to the group's policy" se apni policy hat jati hai. Ya har row ki Policy dropdown se seedha. CLI: `sudo radius-admin policy give students ali sara ahmed` (`-` = naam stdin se; policy `-` = group wali par wapas). Test: `tests/test-policy-give.sh` |
 | **Single device** (MAC) | `/ip dhcp-server lease make-static [find mac-address=AA:BB:CC:DD:EE:FF]` → `/ip dhcp-server lease set [find mac-address=AA:BB:CC:DD:EE:FF] address-lists=policy-students` |
 | **Single IP** | `/ip firewall address-list add list=policy-no-internet address=192.168.88.23 comment="Ahmed"` |
 | **IP Range** | `/ip firewall address-list add list=policy-students address=192.168.88.100-192.168.88.150` |

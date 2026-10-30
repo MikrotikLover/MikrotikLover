@@ -346,19 +346,43 @@ ROUTES.users = async (name) => {
   const vouchers = users.filter((u) => u.voucher_batch).length;
   const search = h("input", { type: "search", placeholder: "Search users…", oninput: () => draw() });
   const holder = h("div");
+  const picked = new Set();
+  // policy straight from the list: one user (the select in the row) or many (tick them, then the bar)
+  const polOpts = (u) => [h("option", { value: "" }, u && u.policy_source === "group" && u.policy ? `group: ${u.policy}` : "— group's / none —"),
+    ...policies.map((p) => h("option", { value: p.name, selected: !!u && u.policy_source !== "group" && u.policy === p.name }, p.name))];
+  const give = async (names, policy) => {
+    const r = await act(api("POST", "/api/policies/give", { users: names, policy }));
+    if (r) { picked.clear(); route(); }
+    return r;
+  };
+  const bulkPol = h("select", { "aria-label": "Policy for the selected users" }, h("option", { value: "__", selected: true, disabled: true }, "— choose a policy —"),
+    policies.map((p) => h("option", { value: p.name }, `${p.name} — ${p.description || ""}`)), h("option", { value: "" }, "↩ back to the group's policy"));
+  const bulkCount = h("b");
+  const bulk = h("div", { class: "toolbar bulk-bar", hidden: true }, bulkCount, h("span", {}, "→ policy"), bulkPol,
+    h("button", { class: "primary", onclick: () => bulkPol.value === "__" ? toast("Choose a policy first", true) : give([...picked], bulkPol.value) }, "Apply"),
+    h("button", { onclick: () => { picked.clear(); draw(); } }, "Clear"));
+  const syncBulk = () => { bulk.hidden = !picked.size; bulkCount.textContent = `${picked.size} selected`; };
   const draw = () => {
     const s = search.value.toLowerCase();
-    holder.replaceChildren(table([
+    const shown = list.filter((u) => s ? (u.username.toLowerCase().includes(s) || (u.grp || "").toLowerCase().includes(s) || (u.policy || "").toLowerCase().includes(s)) : !u.voucher_batch);
+    const all = h("input", { type: "checkbox", "aria-label": "Select all shown", checked: shown.length > 0 && shown.every((u) => picked.has(u.username)),
+      onchange: (e) => { shown.forEach((u) => e.target.checked ? picked.add(u.username) : picked.delete(u.username)); draw(); } });
+    syncBulk();
+    holder.replaceChildren(isAdmin() && shown.length ? h("label", { class: "check-all muted small" }, all, ` select all ${shown.length} shown`) : "", table([
+      ...(isAdmin() ? [{ label: "", render: (u) => h("input", { type: "checkbox", "aria-label": `Select ${u.username}`, checked: picked.has(u.username),
+          onchange: (e) => { e.target.checked ? picked.add(u.username) : picked.delete(u.username); syncBulk(); all.checked = shown.every((x) => picked.has(x.username)); } }) }] : []),
       { label: "User", render: (u) => h("a", { href: `#/users/${encodeURIComponent(u.username)}` }, u.username) },
       { label: "Group", render: (u) => u.grp || "—" },
-      { label: "Policy", render: (u) => u.policy ? h("span", {}, u.policy, " ", u.policy_source === "group" ? h("span", { class: "muted" }, "(group)") : null) : "—" },
+      { label: "Policy", render: (u) => isAdmin()
+          ? h("select", { class: "inline-select", "aria-label": `Policy for ${u.username}`, onchange: async (e) => { if (!(await give([u.username], e.target.value))) draw(); } }, polOpts(u))
+          : u.policy ? h("span", {}, u.policy, " ", u.policy_source === "group" ? h("span", { class: "muted" }, "(group)") : null) : "—" },
       { label: "Plan / expiry", render: (u) => u.plan ? h("span", {}, u.plan, " ", h("span", { class: "muted" }, u.expires_at ? (new Date(u.expires_at.replace(" ", "T")) < new Date() ? "expired" : `till ${u.expires_at.slice(0, 16)}`) : "not started")) : "—" },
       { label: "Status", render: (u) => u.disabled ? badge("disabled", "bad") : u.online ? badge("online", "ok") : badge("offline") },
       { label: "Last login", render: (u) => ago(u.last_login) },
       { label: "", render: (u) => isAdmin() ? h("div", { class: "row-actions" },
           u.online ? h("button", { class: "small", onclick: () => act(api("POST", `/api/users/${encodeURIComponent(u.username)}/kick`, {})).then(route) }, "Kick") : null,
           h("button", { class: "small", onclick: () => act(api("POST", `/api/users/${encodeURIComponent(u.username)}/${u.disabled ? "enable" : "disable"}`, {})).then(route) }, u.disabled ? "Enable" : "Disable")) : null },
-    ], list.filter((u) => s ? (u.username.toLowerCase().includes(s) || (u.grp || "").toLowerCase().includes(s)) : !u.voucher_batch), "No users yet — add the first one."));
+    ], shown, s ? "No user matches." : "No users yet — add the first one."));
   };
   draw();
   const add = () => {
@@ -371,7 +395,7 @@ ROUTES.users = async (name) => {
       route();
     } }]);
   };
-  shell("Users", card(null, null, h("div", { class: "toolbar" }, search, h("span", { class: "grow" }), h("span", { class: "muted" }, `${list.length - vouchers} users`, vouchers ? ` · ${vouchers} vouchers (see Vouchers)` : ""),
+  shell("Users", card(null, null, bulk, h("div", { class: "toolbar" }, search, h("span", { class: "grow" }), h("span", { class: "muted" }, `${list.length - vouchers} users`, vouchers ? ` · ${vouchers} vouchers (see Vouchers)` : ""),
     isAdmin() ? h("button", { class: "primary", onclick: add }, icon("plus"), "Add user") : null), holder));
 };
 
@@ -2245,11 +2269,27 @@ function openPolicyEditor(meta, pol) {
 function givePolicyDialog(meta, users, preset) {
   let who = "user";
   const seg = h("div", { class: "seg" });
-  const userIn = h("input", { list: "bl-users", placeholder: "User name", autocomplete: "off", name: "user" });
+  // users: search + tick as many as you like (a typed full name counts too)
+  const picked = new Set();
+  const userIn = h("input", { list: "bl-users", placeholder: "Search or type a user name", autocomplete: "off", name: "user", type: "search" });
+  const pickList = h("div", { class: "pick-list" });
+  const pickCount = h("span", { class: "muted small" });
+  const drawPick = () => {
+    const q = userIn.value.trim().toLowerCase();
+    const shown = users.filter((u) => !u.is_mac && (!q || u.username.toLowerCase().includes(q))).slice(0, 200);
+    pickList.replaceChildren(...(shown.length ? shown.map((u) => h("label", { class: "pick" },
+      h("input", { type: "checkbox", checked: picked.has(u.username), onchange: (e) => { e.target.checked ? picked.add(u.username) : picked.delete(u.username); pickCount.textContent = picked.size ? `${picked.size} selected` : ""; } }),
+      h("span", {}, u.username), u.policy ? h("span", { class: "muted small" }, ` ${u.policy}${u.policy_source === "group" ? " (group)" : ""}`) : null))
+      : [h("div", { class: "muted small" }, "No user matches.")]));
+    pickCount.textContent = picked.size ? `${picked.size} selected` : "";
+  };
+  userIn.addEventListener("input", drawPick);
+  drawPick();
   const groupSel = h("select", { name: "group" }, h("option", { value: "" }, "— choose a group —"));
   api("GET", "/api/groups").then((g) => g.groups.forEach((x) => groupSel.append(h("option", { value: x.name }, x.name)))).catch(() => {});
   const polSel = h("select", { id: "bl-pol", name: "policy" }, meta.policies.map((p) => h("option", { value: p.name, selected: p.name === (preset && preset.policy || preset) }, `${p.name} — ${p.description}`)));
-  const userField = h("label", { class: "field" }, "User", userIn, h("datalist", { id: "bl-users" }, users.map((u) => h("option", { value: u.username }))));
+  const userField = h("div", { class: "field" }, h("span", {}, "Users ", pickCount), userIn, h("datalist", { id: "bl-users" }, users.map((u) => h("option", { value: u.username }))), pickList,
+    h("span", { class: "help" }, "Tick one or many. Their own policy beats the group's."));
   const groupField = h("label", { class: "field", hidden: true }, "Group", groupSel, h("span", { class: "help" }, "every user of the group gets it, unless the user has an own policy"));
   const netIn = h("input", { name: "target", placeholder: "192.168.88.0/24  or  192.168.88.100-192.168.88.150  or  192.168.88.23", autocomplete: "off" });
   const netNote = h("input", { name: "comment", placeholder: "e.g. Office LAN, Guest Wi-Fi, Ahmed's PC", maxlength: 100 });
@@ -2257,7 +2297,7 @@ function givePolicyDialog(meta, users, preset) {
     h("span", { class: "help" }, "No login needed: every device with such an address gets the policy (the whole LAN, a VLAN, a range, one PC). A logged-in user's own policy comes on top.")),
     h("label", { class: "field" }, "Name (optional)", netNote));
   const note = h("div", { class: "muted small" });
-  const draw = () => { seg.replaceChildren(...[["user", "One user"], ["group", "A whole group"], ["net", "Network / IP"]].map(([k, l]) => h("button", { type: "button", class: k === who ? "on" : "", onclick: () => { who = k; draw(); } }, l)));
+  const draw = () => { seg.replaceChildren(...[["user", "Users"], ["group", "A whole group"], ["net", "Network / IP"]].map(([k, l]) => h("button", { type: "button", class: k === who ? "on" : "", onclick: () => { who = k; draw(); } }, l)));
     userField.hidden = who !== "user"; groupField.hidden = who !== "group"; netField.hidden = who !== "net";
     note.textContent = who === "net" ? "Routers get it within 15 minutes." : "A user who is online is disconnected once and gets the policy at the next login."; };
   if (preset && preset.who) who = preset.who;
@@ -2268,8 +2308,10 @@ function givePolicyDialog(meta, users, preset) {
       if (!netIn.value.trim()) { toast("Type a network, range or IP", true); return false; }
       if (!await act(api("POST", "/api/policies/net", { policy: polSel.value, target: netIn.value.trim(), comment: netNote.value.trim() }))) return false;
     } else if (who === "user") {
-      if (!userIn.value.trim()) { toast("Type a user name", true); return false; }
-      if (!await act(api("POST", `/api/users/${encodeURIComponent(userIn.value.trim())}/policy`, { policy: polSel.value }))) return false;
+      const typed = userIn.value.trim();
+      const names = picked.size ? [...picked] : (typed ? [typed] : []);
+      if (!names.length) { toast("Tick a user (or type a name)", true); return false; }
+      if (!await act(api("POST", "/api/policies/give", { users: names, policy: polSel.value }))) return false;
     } else {
       if (!groupSel.value) { toast("Choose a group", true); return false; }
       if (!await act(api("POST", "/api/groups", { name: groupSel.value, policy: polSel.value, edit: true }))) return false;

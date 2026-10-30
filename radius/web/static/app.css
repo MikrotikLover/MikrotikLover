@@ -542,3 +542,12 @@ a.nm-node { color: inherit; text-decoration: none; }
 .ai-ask { display: flex; gap: 8px; align-items: flex-end; }
 .ai-ask textarea { flex: 1; resize: vertical; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* users list: policy straight from the row, and for many users at once */
+.inline-select { padding: 4px 8px; font-size: 13px; max-width: 190px; }
+.bulk-bar { position: sticky; top: 0; z-index: 5; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.bulk-bar select { max-width: 260px; }
+.check-all { display: inline-flex; align-items: center; gap: 6px; margin: 4px 0 8px; }
+.pick-list { max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 4px; margin-top: 6px; background: var(--panel-2); }
+.pick { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.pick:hover { background: var(--accent-soft); }

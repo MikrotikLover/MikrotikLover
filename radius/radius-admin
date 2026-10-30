@@ -3178,6 +3178,30 @@ except Exception:
 cmd_policy() {
     local sub=${1:-list}; shift || true
     case $sub in
+    give) # one policy for many users at once: policy give POLICY|- USER... (or "-" = names on stdin, one per line)
+        local p=${1:-}; shift || true
+        [ -n "$p" ] && [ $# -gt 0 ] || die "usage: radius-admin policy give POLICY|- USER [USER...]   (- as the only user: names on stdin)   — '-' as POLICY: back to the group's policy"
+        [ "$p" = - ] || { valid_policy "$p"; policy_exists "$p" || die "No policy '$p' (radius-admin policy list)"; }
+        local -a names=()
+        if [ "$*" = - ]; then while IFS= read -r u; do u=${u//[[:space:]]/}; [ -z "$u" ] || names+=("$u"); done
+        else names=("$@"); fi
+        [ ${#names[@]} -le 2000 ] || die "2000 users at most at once"
+        local u done=0 missing=()
+        for u in "${names[@]}"; do valid_name "$u" username; done
+        for u in "${names[@]}"; do
+            if ! user_exists "$u"; then missing+=("$u"); continue; fi
+            if [ "$p" = - ]; then
+                echo "DELETE FROM radreply WHERE username=$(q "$u") AND attribute='Mikrotik-Address-List';" | db
+            else
+                echo "START TRANSACTION; DELETE FROM radreply WHERE username=$(q "$u") AND attribute='Mikrotik-Address-List';
+                      INSERT INTO radreply (username,attribute,op,value) VALUES ($(q "$u"),'Mikrotik-Address-List',':=',$(q "policy-$p")); COMMIT;" | db
+            fi
+            kick_user "$u" quiet || true   # re-login picks up the new policy
+            done=$((done + 1))
+        done
+        [ ${#missing[@]} -eq 0 ] || warn "no such user(s): ${missing[*]}"
+        [ "$done" -gt 0 ] || die "no user changed"
+        ok "$done user(s) → $([ "$p" = - ] && echo "the group's policy" || echo "policy '$p'") (online ones are logged out once and get it at the next login)" ;;
     net|nets)
         local act=${1:-list}; shift || true
         case $act in
@@ -4667,6 +4691,7 @@ Groups (speed limit, VLAN, timeouts, devices per user)
 
 Policies / blocking (per user, group, IP range — see webfilter/policies/)
   user policy NAME POLICY|-            this user only (overrides group); kicks to apply
+  policy give POLICY|- USER [USER...]  many users at once (- = back to the group's policy)
   group add NAME --policy POLICY       whole group
   kick USER|MAC                        disconnect now (re-login applies changes)
   blocked [N] [-u USER]                who tried to open blocked sites (router log, with the policy)

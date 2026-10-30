@@ -2228,6 +2228,23 @@ def policy_save():
     return result(*radius_admin(["policy", "set", name], stdin=text.replace("\r", "") + "\n", action=f"policy set {name}"))
 
 
+@app.post("/api/policies/give")
+@login_required("admin")
+def policy_give():
+    """one policy (or '' = back to the group's) for many users at once"""
+    data = body()
+    policy = field(data, "policy", POLICY_RE) or "-"
+    users = data.get("users")
+    if not isinstance(users, list) or not users or len(users) > 2000:
+        abort(400, "choose 1 to 2000 users")
+    users = [str(u).strip() for u in users]
+    if not all(NAME_RE.match(u) for u in users):
+        abort(400, "invalid user name")
+    users = list(dict.fromkeys(users))
+    return result(*radius_admin(["policy", "give", policy, "-"], stdin="\n".join(users) + "\n", timeout=600,
+                                action=f"policy {policy} for {len(users)} user(s): {', '.join(users[:10])}{' …' if len(users) > 10 else ''}"))
+
+
 @app.post("/api/policies/<name>/<onoff>")
 @login_required("admin")
 def policy_onoff(name, onoff):
