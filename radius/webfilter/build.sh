@@ -63,9 +63,10 @@ static_block() { # static_block CATEGORY FILE  -> RouterOS lines
         valid_name "$d" "$file"
         if [[ $d == *'*'* ]]; then   # pattern -> anchored DNS regexp: * = anything, . = a dot
             re=${d//./[.]}; re=${re//\*/.*}
-            echo "add regexp=\"^$re\\\$\" type=NXDOMAIN comment=\"webfilter:$cat\""
+            echo ":do { /ip dns static add regexp=\"^$re\\\$\" type=NXDOMAIN comment=\"webfilter:$cat\" } on-error={}"
         else
-            echo "add name=$d type=NXDOMAIN match-subdomain=yes comment=\"webfilter:$cat\""
+            # :do … on-error: a name another category file already blocks is skipped (RouterOS refuses a second copy)
+            echo ":do { /ip dns static add name=$d type=NXDOMAIN match-subdomain=yes comment=\"webfilter:$cat\" } on-error={}"
         fi
         n=$((n+1))
     done < "$file"
@@ -186,21 +187,25 @@ ao_lists() { # ao_lists PROFILE COMMENT -> address lists the profile allows
     local p=$1 C=$2 n h
     echo "/ip firewall address-list"
     echo "remove [find comment~\"^$C\"]"
-    for n in "${nets[@]}"; do echo "add list=$p-servers address=$n comment=\"$C\""; done
-    for h in "${hosts[@]}"; do echo "add list=$p-servers address=$h comment=\"$C\""; done
+    # :do … on-error: webfilter-policies.rsc and allow-only-PROFILE.rsc fill the same list; a second copy is skipped
+    for n in "${nets[@]}"; do echo ":do { /ip firewall address-list add list=$p-servers address=$n comment=\"$C\" } on-error={}"; done
+    for h in "${hosts[@]}"; do echo ":do { /ip firewall address-list add list=$p-servers address=$h comment=\"$C\" } on-error={}"; done
     if [ ${#domains[@]} -gt 0 ] && [[ $C == wfchain:* ]]; then
         dnsnames+=("${domains[@]}")       # one DNS entry per name for all policies (end of the policies file)
     elif [ ${#domains[@]} -gt 0 ]; then
         # every name under these domains: the router's DNS adds the addresses it answers to the list
         echo "/ip dns static"
         echo "remove [find comment=\"$C dns\"]"
+        # list mlname-NAME, like webfilter-policies.rsc: whichever file adds the name first, both files' rules work
         echo ":do {"
         echo "  :local up [:tostr [:pick [/ip dns get servers] 0]]"
         echo "  :if ([:len \$up] = 0) do={ :set up [:tostr [:pick [/ip dns get dynamic-servers] 0]] }"
         echo "  :if ([:len \$up] = 0) do={ :set up \"1.1.1.1\" }"
+        echo "  :local miss 0"
         for d in "${domains[@]}"; do
-            echo "  /ip dns static add name=$d match-subdomain=yes type=FWD forward-to=\$up address-list=$p-servers address-list-timeout=1d comment=\"$C dns\""
+            echo "  :do { /ip dns static add name=$d match-subdomain=yes type=FWD forward-to=\$up address-list=mlname-$d address-list-timeout=1d comment=\"$C dns\" } on-error={ :set miss (\$miss + 1) }"
         done
+        echo "  :if (\$miss > 0) do={ :log warning \"allow-only $p: \$miss DNS name(s) not added: already there from another file, or RouterOS older than 7.15\" }"
         echo "} on-error={ :log warning \"allow-only $p: DNS names not added (RouterOS 7.15+ needed)\" }"
         echo "/ip firewall address-list"
     fi
@@ -225,9 +230,7 @@ ao_rules() { # ao_rules PROFILE CHAIN MATCH COMMENT [return] -> filter rules (MA
         read -r wn wpr wpt <<<"$w"
         echo "add chain=$ch$M dst-address=$wn protocol=$wpr dst-port=$wpt action=accept comment=\"$C allow $wpr/$wpt\""
     done
-    if [ "$last" = return ]; then
-        for w in "${domains[@]}"; do echo "add chain=$ch$M dst-address-list=mlname-$w action=accept comment=\"$C allow $w\""; done
-    fi
+    for w in "${domains[@]}"; do echo "add chain=$ch$M dst-address-list=mlname-$w action=accept comment=\"$C allow $w\""; done
     echo "add chain=$ch$M dst-address-list=allowonly-checks protocol=tcp dst-port=80 action=accept comment=\"$C connectivity check\""
     echo "add chain=$ch$M dst-address-list=allowonly-gpush protocol=tcp dst-port=5228-5230 action=accept comment=\"$C Android push\""
     echo "add chain=$ch$M dst-address=17.0.0.0/8 protocol=tcp dst-port=5223 action=accept comment=\"$C Apple push\""

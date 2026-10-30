@@ -41,23 +41,23 @@ add chain=forward in-interface-list=LAN src-address-list=!web-filter-exempt dst-
 # Encrypted-DNS hostnames
 /ip dns static
 remove [find comment="webfilter:doh"]
-add name=dns.google type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
-add name=dns64.dns.google type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
-add name=cloudflare-dns.com type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
-add name=one.one.one.one type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
-add name=dns.quad9.net type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
-add name=doh.opendns.com type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
-add name=dns.adguard-dns.com type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
-add name=dns.adguard.com type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
-add name=dns.nextdns.io type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
-add name=doh.cleanbrowsing.org type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
-add name=doh.mullvad.net type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
-add name=dns.mullvad.net type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
-add name=dns.controld.com type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
-add name=freedns.controld.com type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
-add name=use-application-dns.net type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
-add name=mask.icloud.com type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
-add name=mask-h2.icloud.com type=NXDOMAIN match-subdomain=yes comment="webfilter:doh"
+:do { /ip dns static add name=dns.google type=NXDOMAIN match-subdomain=yes comment="webfilter:doh" } on-error={}
+:do { /ip dns static add name=dns64.dns.google type=NXDOMAIN match-subdomain=yes comment="webfilter:doh" } on-error={}
+:do { /ip dns static add name=cloudflare-dns.com type=NXDOMAIN match-subdomain=yes comment="webfilter:doh" } on-error={}
+:do { /ip dns static add name=one.one.one.one type=NXDOMAIN match-subdomain=yes comment="webfilter:doh" } on-error={}
+:do { /ip dns static add name=dns.quad9.net type=NXDOMAIN match-subdomain=yes comment="webfilter:doh" } on-error={}
+:do { /ip dns static add name=doh.opendns.com type=NXDOMAIN match-subdomain=yes comment="webfilter:doh" } on-error={}
+:do { /ip dns static add name=dns.adguard-dns.com type=NXDOMAIN match-subdomain=yes comment="webfilter:doh" } on-error={}
+:do { /ip dns static add name=dns.adguard.com type=NXDOMAIN match-subdomain=yes comment="webfilter:doh" } on-error={}
+:do { /ip dns static add name=dns.nextdns.io type=NXDOMAIN match-subdomain=yes comment="webfilter:doh" } on-error={}
+:do { /ip dns static add name=doh.cleanbrowsing.org type=NXDOMAIN match-subdomain=yes comment="webfilter:doh" } on-error={}
+:do { /ip dns static add name=doh.mullvad.net type=NXDOMAIN match-subdomain=yes comment="webfilter:doh" } on-error={}
+:do { /ip dns static add name=dns.mullvad.net type=NXDOMAIN match-subdomain=yes comment="webfilter:doh" } on-error={}
+:do { /ip dns static add name=dns.controld.com type=NXDOMAIN match-subdomain=yes comment="webfilter:doh" } on-error={}
+:do { /ip dns static add name=freedns.controld.com type=NXDOMAIN match-subdomain=yes comment="webfilter:doh" } on-error={}
+:do { /ip dns static add name=use-application-dns.net type=NXDOMAIN match-subdomain=yes comment="webfilter:doh" } on-error={}
+:do { /ip dns static add name=mask.icloud.com type=NXDOMAIN match-subdomain=yes comment="webfilter:doh" } on-error={}
+:do { /ip dns static add name=mask-h2.icloud.com type=NXDOMAIN match-subdomain=yes comment="webfilter:doh" } on-error={}
 
 # Encrypted DNS on servers that are not in doh-servers: reset HTTPS by server name (SNI)
 /ip firewall filter

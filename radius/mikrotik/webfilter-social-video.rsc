@@ -6,18 +6,18 @@
 
 /ip dns static
 remove [find comment="webfilter:social-video"]
-add regexp="^video.*[.]fbcdn[.]net\$" type=NXDOMAIN comment="webfilter:social-video"
-add name=googlevideo.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video"
-add name=tiktok.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video"
-add name=tiktokv.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video"
-add name=tiktokv.us type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video"
-add name=tiktokv.eu type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video"
-add name=tiktokw.us type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video"
-add name=tiktokcdn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video"
-add name=tiktokcdn-us.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video"
-add name=tiktokcdn-eu.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video"
-add name=byteoversea.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video"
-add name=ibytedtos.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video"
-add name=ibyteimg.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video"
-add name=ttwstatic.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video"
-add name=musical.ly type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video"
+:do { /ip dns static add regexp="^video.*[.]fbcdn[.]net\$" type=NXDOMAIN comment="webfilter:social-video" } on-error={}
+:do { /ip dns static add name=googlevideo.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video" } on-error={}
+:do { /ip dns static add name=tiktok.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video" } on-error={}
+:do { /ip dns static add name=tiktokv.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video" } on-error={}
+:do { /ip dns static add name=tiktokv.us type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video" } on-error={}
+:do { /ip dns static add name=tiktokv.eu type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video" } on-error={}
+:do { /ip dns static add name=tiktokw.us type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video" } on-error={}
+:do { /ip dns static add name=tiktokcdn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video" } on-error={}
+:do { /ip dns static add name=tiktokcdn-us.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video" } on-error={}
+:do { /ip dns static add name=tiktokcdn-eu.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video" } on-error={}
+:do { /ip dns static add name=byteoversea.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video" } on-error={}
+:do { /ip dns static add name=ibytedtos.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video" } on-error={}
+:do { /ip dns static add name=ibyteimg.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video" } on-error={}
+:do { /ip dns static add name=ttwstatic.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video" } on-error={}
+:do { /ip dns static add name=musical.ly type=NXDOMAIN match-subdomain=yes comment="webfilter:social-video" } on-error={}

@@ -6,18 +6,18 @@
 
 /ip dns static
 remove [find comment="webfilter:messaging"]
-add name=whatsapp.com type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging"
-add name=whatsapp.net type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging"
-add name=wa.me type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging"
-add name=telegram.org type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging"
-add name=telegram.me type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging"
-add name=t.me type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging"
-add name=cdn-telegram.org type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging"
-add name=signal.org type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging"
-add name=viber.com type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging"
-add name=imo.im type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging"
-add name=discord.com type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging"
-add name=discord.gg type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging"
-add name=discordapp.com type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging"
-add name=discordapp.net type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging"
-add name=discord.media type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging"
+:do { /ip dns static add name=whatsapp.com type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging" } on-error={}
+:do { /ip dns static add name=whatsapp.net type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging" } on-error={}
+:do { /ip dns static add name=wa.me type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging" } on-error={}
+:do { /ip dns static add name=telegram.org type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging" } on-error={}
+:do { /ip dns static add name=telegram.me type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging" } on-error={}
+:do { /ip dns static add name=t.me type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging" } on-error={}
+:do { /ip dns static add name=cdn-telegram.org type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging" } on-error={}
+:do { /ip dns static add name=signal.org type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging" } on-error={}
+:do { /ip dns static add name=viber.com type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging" } on-error={}
+:do { /ip dns static add name=imo.im type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging" } on-error={}
+:do { /ip dns static add name=discord.com type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging" } on-error={}
+:do { /ip dns static add name=discord.gg type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging" } on-error={}
+:do { /ip dns static add name=discordapp.com type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging" } on-error={}
+:do { /ip dns static add name=discordapp.net type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging" } on-error={}
+:do { /ip dns static add name=discord.media type=NXDOMAIN match-subdomain=yes comment="webfilter:messaging" } on-error={}

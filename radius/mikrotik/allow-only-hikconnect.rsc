@@ -14,17 +14,19 @@
 
 /ip firewall address-list
 remove [find comment~"^allowonly:hikconnect"]
-add list=hikconnect-servers address=10.0.0.0/8 comment="allowonly:hikconnect"
-add list=hikconnect-servers address=172.16.0.0/12 comment="allowonly:hikconnect"
-add list=hikconnect-servers address=192.168.0.0/16 comment="allowonly:hikconnect"
+:do { /ip firewall address-list add list=hikconnect-servers address=10.0.0.0/8 comment="allowonly:hikconnect" } on-error={}
+:do { /ip firewall address-list add list=hikconnect-servers address=172.16.0.0/12 comment="allowonly:hikconnect" } on-error={}
+:do { /ip firewall address-list add list=hikconnect-servers address=192.168.0.0/16 comment="allowonly:hikconnect" } on-error={}
 /ip dns static
 remove [find comment="allowonly:hikconnect dns"]
 :do {
   :local up [:tostr [:pick [/ip dns get servers] 0]]
   :if ([:len $up] = 0) do={ :set up [:tostr [:pick [/ip dns get dynamic-servers] 0]] }
   :if ([:len $up] = 0) do={ :set up "1.1.1.1" }
-  /ip dns static add name=hik-connect.com match-subdomain=yes type=FWD forward-to=$up address-list=hikconnect-servers address-list-timeout=1d comment="allowonly:hikconnect dns"
-  /ip dns static add name=hikvision.com match-subdomain=yes type=FWD forward-to=$up address-list=hikconnect-servers address-list-timeout=1d comment="allowonly:hikconnect dns"
+  :local miss 0
+  :do { /ip dns static add name=hik-connect.com match-subdomain=yes type=FWD forward-to=$up address-list=mlname-hik-connect.com address-list-timeout=1d comment="allowonly:hikconnect dns" } on-error={ :set miss ($miss + 1) }
+  :do { /ip dns static add name=hikvision.com match-subdomain=yes type=FWD forward-to=$up address-list=mlname-hikvision.com address-list-timeout=1d comment="allowonly:hikconnect dns" } on-error={ :set miss ($miss + 1) }
+  :if ($miss > 0) do={ :log warning "allow-only hikconnect: $miss DNS name(s) not added: already there from another file, or RouterOS older than 7.15" }
 } on-error={ :log warning "allow-only hikconnect: DNS names not added (RouterOS 7.15+ needed)" }
 /ip firewall address-list
 # Phone/PC support: Wi-Fi "internet available" checks (HTTP only) and push notifications
@@ -47,6 +49,8 @@ add list=allowonly-gpush address=alt8-mtalk.google.com comment="allowonly:suppor
 /ip firewall filter
 remove [find comment~"^allowonly:hikconnect"]
 add chain=forward src-address-list=allow-only-hikconnect dst-address-list=hikconnect-servers action=accept comment="allowonly:hikconnect allow"
+add chain=forward src-address-list=allow-only-hikconnect dst-address-list=mlname-hik-connect.com action=accept comment="allowonly:hikconnect allow hik-connect.com"
+add chain=forward src-address-list=allow-only-hikconnect dst-address-list=mlname-hikvision.com action=accept comment="allowonly:hikconnect allow hikvision.com"
 add chain=forward src-address-list=allow-only-hikconnect dst-address-list=allowonly-checks protocol=tcp dst-port=80 action=accept comment="allowonly:hikconnect connectivity check"
 add chain=forward src-address-list=allow-only-hikconnect dst-address-list=allowonly-gpush protocol=tcp dst-port=5228-5230 action=accept comment="allowonly:hikconnect Android push"
 add chain=forward src-address-list=allow-only-hikconnect dst-address=17.0.0.0/8 protocol=tcp dst-port=5223 action=accept comment="allowonly:hikconnect Apple push"

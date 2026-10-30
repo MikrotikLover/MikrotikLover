@@ -6,31 +6,31 @@
 
 /ip dns static
 remove [find comment="webfilter:gaming"]
-add name=steampowered.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=steamcommunity.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=steamcontent.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=steamserver.net type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=steamstatic.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=epicgames.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=epicgames.dev type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=roblox.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=rbxcdn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=pubg.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=pubgmobile.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=garena.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=freefiremobile.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=ea.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=riotgames.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=leagueoflegends.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=playvalorant.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=minecraft.net type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=xboxlive.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=playstation.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=playstation.net type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=supercell.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=clashofclans.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=miniclip.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=poki.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=y8.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=friv.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
-add name=crazygames.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming"
+:do { /ip dns static add name=steampowered.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=steamcommunity.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=steamcontent.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=steamserver.net type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=steamstatic.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=epicgames.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=epicgames.dev type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=roblox.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=rbxcdn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=pubg.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=pubgmobile.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=garena.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=freefiremobile.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=ea.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=riotgames.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=leagueoflegends.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=playvalorant.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=minecraft.net type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=xboxlive.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=playstation.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=playstation.net type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=supercell.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=clashofclans.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=miniclip.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=poki.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=y8.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=friv.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}
+:do { /ip dns static add name=crazygames.com type=NXDOMAIN match-subdomain=yes comment="webfilter:gaming" } on-error={}

@@ -6,14 +6,14 @@
 
 /ip dns static
 remove [find comment="webfilter:torrent-piracy"]
-add name=thepiratebay.org type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy"
-add name=1337x.to type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy"
-add name=yts.mx type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy"
-add name=torrentgalaxy.to type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy"
-add name=nyaa.si type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy"
-add name=eztv.re type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy"
-add name=fitgirl-repacks.site type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy"
-add name=bittorrent.com type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy"
-add name=utorrent.com type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy"
-add name=opentrackr.org type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy"
-add name=openbittorrent.com type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy"
+:do { /ip dns static add name=thepiratebay.org type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy" } on-error={}
+:do { /ip dns static add name=1337x.to type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy" } on-error={}
+:do { /ip dns static add name=yts.mx type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy" } on-error={}
+:do { /ip dns static add name=torrentgalaxy.to type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy" } on-error={}
+:do { /ip dns static add name=nyaa.si type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy" } on-error={}
+:do { /ip dns static add name=eztv.re type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy" } on-error={}
+:do { /ip dns static add name=fitgirl-repacks.site type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy" } on-error={}
+:do { /ip dns static add name=bittorrent.com type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy" } on-error={}
+:do { /ip dns static add name=utorrent.com type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy" } on-error={}
+:do { /ip dns static add name=opentrackr.org type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy" } on-error={}
+:do { /ip dns static add name=openbittorrent.com type=NXDOMAIN match-subdomain=yes comment="webfilter:torrent-piracy" } on-error={}

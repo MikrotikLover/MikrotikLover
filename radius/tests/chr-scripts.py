@@ -22,12 +22,8 @@ SERVER, SECRET, COMMUNITY = "10.0.2.2", "ChrTest#Secret1", "chrtestcommunity42"
 ORDER = ["webfilter-base.rsc", "hotspot.rsc", "wpa-enterprise-wifi-ros7.rsc", "wpa-enterprise-wireless-legacy.rsc",
          "passpoint-wifi-ros7.rsc", "passpoint-wireless-legacy.rsc", "mac-auth.rsc", "mac-auth-wireless-legacy.rsc",
          "pppoe-server.rsc"]
-# Known overlap (not fixed yet): some category files block the same names (social / video-streaming /
-# social-video), and webfilter-policies.rsc fills an address list allow-only-*.rsc fills too. RouterOS 7.25
-# refuses the second copy ("entry already exists") and stops that import. Each file is tested on its own here.
-OVERLAP = {"webfilter-social.rsc", "webfilter-video-streaming.rsc", "webfilter-social-video.rsc", "webfilter-policies.rsc"}
-OVERLAP_CLEAN = (":do { /ip dns static remove [find where type=NXDOMAIN and comment~\"^webfilter:(social|video)\"] } on-error={}\n"
-                 ":do { /ip firewall address-list remove [find where comment~\"^(allowonly|wfchain:ao-)\"] } on-error={}\n")
+# Files that add the same entries (social / social-video / video-streaming; webfilter-policies.rsc and allow-only-*.rsc)
+# are imported one after the other with nothing removed in between: a second copy must be skipped, not stop the import.
 SKIP = {"autosync.rsc": "template of the dashboard's auto-sync (tested in the Router setup sets)"}
 V7_ONLY = {"wpa-enterprise-wifi-ros7.rsc", "mac-auth.rsc", "passpoint-wifi-ros7.rsc"}   # v6 routers get the legacy file
 PP = {"domain": "wifi.chrtest.example", "name": "CHR Test Ltd", "ssid": "CHR-Passpoint", "venue": "industrial-factory",
@@ -70,8 +66,6 @@ def main():
             text = passpoint.router(passpoint.settings(PP), text)
         if a.ros == "6":
             text = rosv6.convert(text)
-        if f in OVERLAP:
-            text = OVERLAP_CLEAN + text
         jobs.append((f[:-4], text, f.startswith("passpoint-"), ""))
     st = passpoint.settings(PP)
     for name, parts in SETUPS.items():

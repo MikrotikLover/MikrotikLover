@@ -6,30 +6,30 @@
 
 /ip dns static
 remove [find comment="webfilter:vpn-proxy"]
-add name=nordvpn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=nordcdn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=expressvpn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=protonvpn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=surfshark.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=windscribe.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=hide.me type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=psiphon.ca type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=psiphon3.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=tunnelbear.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=hotspotshield.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=privateinternetaccess.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=cyberghostvpn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=ipvanish.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=vyprvpn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=purevpn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=ultrasurf.us type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=hola.org type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=betternet.co type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=urban-vpn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=browsec.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=zenmate.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=kproxy.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=hidester.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=proxysite.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=croxyproxy.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
-add name=vpnbook.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy"
+:do { /ip dns static add name=nordvpn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=nordcdn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=expressvpn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=protonvpn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=surfshark.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=windscribe.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=hide.me type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=psiphon.ca type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=psiphon3.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=tunnelbear.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=hotspotshield.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=privateinternetaccess.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=cyberghostvpn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=ipvanish.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=vyprvpn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=purevpn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=ultrasurf.us type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=hola.org type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=betternet.co type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=urban-vpn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=browsec.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=zenmate.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=kproxy.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=hidester.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=proxysite.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=croxyproxy.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}
+:do { /ip dns static add name=vpnbook.com type=NXDOMAIN match-subdomain=yes comment="webfilter:vpn-proxy" } on-error={}

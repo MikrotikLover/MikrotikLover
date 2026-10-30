@@ -6,42 +6,42 @@
 
 /ip dns static
 remove [find comment="webfilter:social"]
-add name=facebook.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=fb.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=fb.me type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=fbcdn.net type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=fbsbx.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=messenger.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=instagram.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=cdninstagram.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=threads.net type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=tiktok.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=tiktokv.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=tiktokcdn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=tiktokcdn-us.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=byteoversea.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=ibytedtos.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=musical.ly type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=snapchat.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=snap.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=sc-cdn.net type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=snapkit.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=twitter.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=x.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=twimg.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=t.co type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=linkedin.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=licdn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=pinterest.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=pinimg.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=reddit.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=redd.it type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=redditmedia.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=redditstatic.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=tumblr.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=likee.video type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=likeevideo.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=snackvideo.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=kwai.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=bigo.tv type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
-add name=quora.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social"
+:do { /ip dns static add name=facebook.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=fb.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=fb.me type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=fbcdn.net type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=fbsbx.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=messenger.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=instagram.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=cdninstagram.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=threads.net type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=tiktok.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=tiktokv.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=tiktokcdn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=tiktokcdn-us.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=byteoversea.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=ibytedtos.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=musical.ly type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=snapchat.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=snap.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=sc-cdn.net type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=snapkit.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=twitter.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=x.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=twimg.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=t.co type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=linkedin.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=licdn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=pinterest.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=pinimg.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=reddit.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=redd.it type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=redditmedia.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=redditstatic.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=tumblr.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=likee.video type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=likeevideo.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=snackvideo.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=kwai.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=bigo.tv type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}
+:do { /ip dns static add name=quora.com type=NXDOMAIN match-subdomain=yes comment="webfilter:social" } on-error={}

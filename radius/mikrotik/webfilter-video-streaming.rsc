@@ -6,30 +6,30 @@
 
 /ip dns static
 remove [find comment="webfilter:video-streaming"]
-add name=youtube.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=youtu.be type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=youtube-nocookie.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=ytimg.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=googlevideo.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=youtubei.googleapis.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=netflix.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=netflix.net type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=nflxvideo.net type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=nflximg.net type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=nflxext.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=nflxso.net type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=primevideo.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=aiv-cdn.net type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=aiv-delivery.net type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=disneyplus.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=dssott.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=hotstar.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=tamashaweb.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=tapmad.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=dailymotion.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=dmcdn.net type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=vimeo.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=vimeocdn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=twitch.tv type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=ttvnw.net type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
-add name=jtvnw.net type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming"
+:do { /ip dns static add name=youtube.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=youtu.be type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=youtube-nocookie.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=ytimg.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=googlevideo.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=youtubei.googleapis.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=netflix.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=netflix.net type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=nflxvideo.net type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=nflximg.net type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=nflxext.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=nflxso.net type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=primevideo.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=aiv-cdn.net type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=aiv-delivery.net type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=disneyplus.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=dssott.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=hotstar.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=tamashaweb.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=tapmad.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=dailymotion.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=dmcdn.net type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=vimeo.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=vimeocdn.com type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=twitch.tv type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=ttvnw.net type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
+:do { /ip dns static add name=jtvnw.net type=NXDOMAIN match-subdomain=yes comment="webfilter:video-streaming" } on-error={}
