@@ -19,13 +19,23 @@ async function newPage(opts = {}) {
   const page = await ctx.newPage();
   page.on("console", (m) => { if (m.type() === "error" && !/401/.test(m.text()) && !(expect400 && /400/.test(m.text()))) errors.push(`[${step}] console: ${m.text()}`); });
   page.on("pageerror", (e) => errors.push(`[${step}] pageerror: ${e.message}`));
+  // requests still open (shown when a page does not finish loading)
+  page._open = new Map();
+  page.on("request", (r) => page._open.set(r, Date.now()));
+  page.on("requestfinished", (r) => page._open.delete(r));
+  page.on("requestfailed", (r) => page._open.delete(r));
   return page;
 }
 const shot = async (page, name) => { if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: true }); };
 const go = async (page, hash, title) => {
   step = hash;
   await page.goto(`${URL}/${hash}`);
-  await page.locator("header h1", { hasText: title }).waitFor({ timeout: 15000 });
+  try {
+    await page.locator("header h1", { hasText: title }).waitFor({ timeout: 15000 });
+  } catch (e) {
+    const open = [...(page._open || new Map()).entries()].map(([r, t]) => `${r.method()} ${r.url().replace(URL, "")} (${Math.round((Date.now() - t) / 1000)} s)`);
+    throw new Error(`${e.message.split("\n")[0]} — still waiting for: ${open.join(", ") || "nothing"}`);
+  }
   await page.waitForTimeout(400);
 };
 async function login(page) {
