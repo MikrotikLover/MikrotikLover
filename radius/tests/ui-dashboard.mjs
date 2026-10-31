@@ -8,6 +8,32 @@ const { chromium } = require(process.env.PLAYWRIGHT || "playwright");
 
 const URL = process.env.URL || "https://127.0.0.1:8443";
 const SHOTS = process.env.SHOTS || "";
+// the CDN detective step needs one learned TikTok domain; a new server has learned none yet: on the server itself
+// put a sample in (and put the file back as it was at the end)
+const LEARNED = "/var/lib/mikrotiklover/cdn-apps.learned.json";
+let learnedBefore = null;
+try {
+  const fs = await import("fs");
+  if (fs.existsSync("/var/lib/mikrotiklover")) {
+    learnedBefore = fs.existsSync(LEARNED) ? fs.readFileSync(LEARNED, "utf8") : "";
+    const d = learnedBefore ? JSON.parse(learnedBefore) : { domains: {}, rejected: [] };
+    if (!(d.domains || {})["tiktokcdn-new.net"]) {
+      d.domains = { ...(d.domains || {}), "tiktokcdn-new.net": { app: "TikTok", site: "tiktok.com", score: 40, devices: 3, share: 1, why: "cname x3 (UI test sample)", first_seen: "2026-01-01 00:00", last_seen: "2026-01-01 00:00" } };
+      d.rejected = (d.rejected || []).filter((x) => x !== "tiktokcdn-new.net");
+      fs.writeFileSync(LEARNED, JSON.stringify(d));
+      process.on("exit", () => { try { if (learnedBefore) fs.writeFileSync(LEARNED, learnedBefore); else fs.unlinkSync(LEARNED); } catch { /* */ } });
+    } else learnedBefore = null;
+  }
+} catch { learnedBefore = null; }
+// the block-code page (#/blocking/why/XVR6JW) needs that code; on the server itself put a sample block event in
+try {
+  const { execFileSync } = await import("child_process");
+  const sql = (q) => execFileSync("mysql", ["-N", "-e", q, "radius"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  if (sql("SELECT COUNT(*) FROM ml_block_event WHERE code='XVR6JW'") === "0") {
+    sql("INSERT INTO ml_block_event (code, ip, username, host, path, policy, rule, why) VALUES ('XVR6JW', '192.0.2.9', '', 'facebook.com', '/', 'guests', 'block social', 'UI test sample')");
+    process.on("exit", () => { try { sql("DELETE FROM ml_block_event WHERE code='XVR6JW' AND why='UI test sample'"); } catch { /* */ } });
+  }
+} catch { /* not on the server: the code must be there already */ }
 const errors = [];
 let step = "";
 let expect400 = false;   // set while a test sends bad input on purpose
@@ -70,6 +96,14 @@ try {
   await shot(page, "01-login");
   await login(page);
   ok("login");
+  // what an earlier run that stopped half-way left behind (it would make "create" fail now)
+  {
+    const csrf = (await (await page.request.get(`${URL}/api/me`)).json()).csrf;
+    const h = { "X-CSRF-Token": csrf, "Content-Type": "application/json" };
+    for (const path of ["/api/users/ui-user", "/api/plans/ui-day", "/api/policies/ui-kids", "/api/macs/02-00-5E-10-20-30", "/api/groups/ui-group"])
+      await page.request.delete(`${URL}${path}`, { headers: h }).catch(() => {});
+    await page.request.delete(`${URL}/api/nas?ip=10.99.0.1`, { headers: h }).catch(() => {});
+  }
   await page.waitForTimeout(800);
   await shot(page, "02-dashboard");
 
@@ -102,9 +136,10 @@ try {
 
   // user detail: own policy
   await go(page, "#/users/ui-user", "ui-user");
-  const sel = page.locator("label", { hasText: "Own web-filter policy" }).locator("select");
-  await sel.selectOption("guests");
-  await page.locator("label", { hasText: "Own web-filter policy" }).locator("button", { hasText: "Save" }).click();
+  // the policy picker (one or several policies)
+  await page.locator(".field", { hasText: "Own web-filter policy" }).locator("button", { hasText: "Change" }).click();
+  await page.locator('dialog[open] .pick input[value="guests"]').check();
+  await dlgButton(page, "Save").click();
   console.log("     toast:", (await toastText(page)).trim());
   await page.locator(".tile", { hasText: "Policy" }).locator(".value", { hasText: "guests" }).waitFor();
   ok("per-user policy set");
@@ -243,6 +278,10 @@ try {
     await page.locator(".toolbar select").first().selectOption("30");
     await page.getByRole("button", { name: "Show", exact: true }).click();
   };
+  // these pages show the traffic collector's data: a new server without router traffic has none (skip, said so)
+  const portRows = await (await page.request.get(`${URL}/api/ports?by=port&days=30`)).json().then((j) => (j.rows || []).length).catch(() => 0);
+  if (!portRows) console.log("skip ports & protocols: no traffic data on this server (router traffic-flow + collector)");
+  else {
   await ports30("#/ports/port");
   await page.locator("code", { hasText: "443/udp" }).first().waitFor({ timeout: 15000 });
   await shot(page, "30-ports");
@@ -252,6 +291,7 @@ try {
   await page.locator("h2", { hasText: "whatsapp.com" }).first().waitFor({ timeout: 15000 });
   await shot(page, "31-app-port-profiles");
   ok("ports & protocols: top ports, inbound, saved app profiles");
+  }
 
   // apps on the network (automatic inventory)
   await go(page, "#/apps", "Apps on network");
@@ -507,7 +547,7 @@ try {
     const ac = page.locator(".card", { has: page.locator("h2", { hasText: /^Alerts/ }) });
     await ac.waitFor({ timeout: 30000 });
     await page.waitForLoadState("networkidle");
-    if ((await ac.locator(".alert-events input[type=checkbox]").count()) !== 15) throw new Error("alerts: 15 event switches expected");
+    if ((await ac.locator(".alert-events input[type=checkbox]").count()) !== 16) throw new Error("alerts: 16 event switches expected (newdev included)");
     for (const ch of ["Telegram", "WhatsApp", "Email"]) await ac.locator(".sub-card", { hasText: ch }).first().waitFor();
     if (/AAFake|SmtpPass/.test(await page.content())) throw new Error("alerts: a secret reached the browser");
     await ac.locator("input[name=WHATSAPP_PHONE]").fill("12ab");
@@ -575,7 +615,7 @@ try {
   for (const [hash, title, name] of [["#/online", "Online", "08-online"], ["#/live", "Live log", "09-live"],
     ["#/reports/sites", "Reports", "10-reports-sites"], ["#/reports/blocked", "Reports", "11-reports-blocked"],
     ["#/data/site", "Data usage", "12-data-site"], ["#/data/ip", "Data usage", "13-data-ip"],
-    ["#/settings", "Settings", "14-settings"], ["#/health", "Health check", "14b-health"], ["#/speed", "Speed schedule", "14c-speed"], ["#/insights", "Insights", "14d-insights"], ["#/security/reports", "Security", "14e-security-reports"], ["#/hotspot", "Hotspot page", "14f-hotspot"], ["#/blocking/parental", "Blocking", "14g-parental"], ["#/social", "Social WiFi", "14h-social"], ["#/setup", "Router setup", "14i-router-setup"], ["#/ipbind", "IP binding", "14j-ipbind"], ["#/traffic", "Traffic graphs", "14k-traffic"], ["#/departments", "Departments", "14l-departments"], ["#/blocking/why/facebook.com/kid1", "Blocking", "14m-why-blocked"], ["#/blocking/why/XVR6JW", "Blocking", "14n-block-code"], ["#/blocking/requests", "Blocking", "14o-requests"], ["#/blocking/apps", "Blocking", "14p-app-profiles"], ["#/blocking/web", "Blocking", "14q-allowed-websites"], ["#/blocking/guide", "Blocking", "14r-blocking-guide"], ["#/blocking/overview", "Blocking", "14s-blocking-overview"]]) {
+    ["#/settings", "Settings", "14-settings"], ["#/health", "Health check", "14b-health"], ["#/speed", "Speed schedule", "14c-speed"], ["#/insights", "Insights", "14d-insights"], ["#/security/reports", "Security", "14e-security-reports"], ["#/hotspot", "Hotspot page", "14f-hotspot"], ["#/blocking/parental", "Blocking", "14g-parental"], ["#/social", "Social WiFi", "14h-social"], ["#/setup", "Router setup", "14i-router-setup"], ["#/ipbind", "IP binding", "14j-ipbind"], ["#/traffic", "Traffic graphs", "14k-traffic"], ["#/departments", "Departments", "14l-departments"], ["#/blocking/why/facebook.com/ui-user", "Blocking", "14m-why-blocked"], ["#/blocking/why/XVR6JW", "Blocking", "14n-block-code"], ["#/blocking/requests", "Blocking", "14o-requests"], ["#/blocking/apps", "Blocking", "14p-app-profiles"], ["#/blocking/web", "Blocking", "14q-allowed-websites"], ["#/blocking/guide", "Blocking", "14r-blocking-guide"], ["#/blocking/overview", "Blocking", "14s-blocking-overview"]]) {
     await go(page, hash, title);
     if (hash === "#/health") { await page.locator(".health-hero").waitFor({ timeout: 60000 }); await page.locator(".health-row").first().waitFor({ timeout: 60000 }); }
     if (hash === "#/insights") await page.locator(".insight-words li").first().waitFor({ timeout: 60000 });

@@ -11,16 +11,23 @@ MAC=AA:BB:CC:16:00:01
 # the policy "kids" these checks use (made when the server has none)
 . "$(dirname "$0")/lib-kids.sh"
 cleanup() {
-    kids_cleanup
     for u in nm-a nm-b nm-c; do radius-admin user del "$u" >/dev/null 2>&1; done
     radius-admin mac del $MAC >/dev/null 2>&1
     for id in $(db "SELECT id FROM ml_snmp_device WHERE name LIKE 'nm-%'"); do radius-admin snmp del "$id" >/dev/null 2>&1; done
     db "DELETE FROM radacct WHERE acctsessionid LIKE 'nm-%'; DELETE FROM ml_dept_member WHERE dept='nm-office'; DELETE FROM ml_department WHERE name='nm-office';
         DELETE FROM radgroupreply WHERE groupname='nm-grp'; DELETE FROM radusergroup WHERE groupname='nm-grp'; DELETE FROM radgroup_meta WHERE groupname='nm-grp';
         DELETE FROM ml_device WHERE client_ip LIKE '192.168.160.%'; DELETE FROM ml_ip_bind WHERE username LIKE 'nm-%'"
+    [ "${MADE_NAS:-0}" = 1 ] && db "DELETE FROM nas WHERE nasname='127.0.0.1' AND shortname='nm-test'"
+    kids_cleanup      # last: the test's users and groups are gone, nothing uses it any more
 }
 trap cleanup EXIT
 cleanup
+kids_ensure
+# the router of this map is this machine (127.0.0.1): on the Routers page (made here when missing)
+MADE_NAS=0
+if [ -z "$(db "SELECT 1 FROM nas WHERE nasname='127.0.0.1'")" ]; then
+    db "INSERT INTO nas (nasname, shortname, type, secret) VALUES ('127.0.0.1', 'nm-test', 'other', 'NmTest-Secret-42')"; MADE_NAS=1
+fi
 sess() { db "INSERT INTO radacct (acctsessionid, acctuniqueid, username, nasipaddress, framedipaddress, callingstationid, acctstarttime, acctupdatetime)
              VALUES ('nm-$RANDOM', 'nm-$1-$RANDOM$RANDOM', '$1', '127.0.0.1', '$2', '$3', NOW(), NOW())"; }
 

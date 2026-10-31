@@ -17,16 +17,17 @@ was=$(db "SELECT v FROM ml_setting WHERE k='wifi_policy'")
 # the policy "kids" these checks use (made when the server has none)
 . "$(dirname "$0")/lib-kids.sh"
 cleanup() {
-    kids_cleanup
     for u in wp-own wp-grp wp-none wp-hs; do radius-admin user del "$u" >/dev/null 2>&1; done
     radius-admin mac del $M4 >/dev/null 2>&1
     db "DELETE FROM radgroupreply WHERE groupname='wp-grp'; DELETE FROM radgroupcheck WHERE groupname='wp-grp'; DELETE FROM radusergroup WHERE groupname='wp-grp'"
     db "DELETE FROM ml_eap_identity WHERE mac LIKE 'AA-00-11-22-33-%' OR mac LIKE 'AA:00:11:22:33:%'; DELETE FROM ml_mac_ip WHERE mac LIKE 'AA:00:11:22:33:%';
         DELETE FROM radacct WHERE acctsessionid LIKE 'wp-%'; DELETE FROM ml_quarantine WHERE username LIKE 'wp-%'"
     db "REPLACE INTO ml_setting (k, v) VALUES ('wifi_policy', '${was:-}')"
+    kids_cleanup      # last: the test's users and groups are gone, nothing uses it any more
 }
 trap cleanup EXIT
 cleanup 2>/dev/null
+kids_ensure
 
 peap() {   # a phone: anonymous outer name, real user inside the tunnel, its MAC as Calling-Station-Id
     local cfg; cfg=$(mktemp)

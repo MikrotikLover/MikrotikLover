@@ -112,7 +112,10 @@ await p.keyboard.press("Escape");
 
 // links straight to a policy's editor ("Edit policy" in Why blocked?), and dialogs close on another page
 await p.goto(URL + "/#/dashboard"); await p.waitForTimeout(200);
+// the "why blocked" page for a user: kid1, made here when the server has none (a missing user is a 404)
+const madeKid1 = /No such user/.test(admin("user", "show", "kid1")) && !/ERROR/.test(admin("user", "add", "kid1", "-p", "Kid1-Pass-2026"));
 await p.goto(URL + "/#/blocking/why/facebook.com/kid1"); await p.waitForTimeout(1500);
+if (madeKid1) admin("user", "del", "kid1");
 ok("why blocked: no stray 'null' on the page", !(await p.locator("main, .main, body").first().innerText()).split("\n").some((l) => l.trim() === "null"));
 const editLink = p.locator("a.btn", { hasText: "Edit policy" }).first();
 if (await editLink.count()) {

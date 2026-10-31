@@ -18,7 +18,6 @@ had_social=$(db "SELECT COUNT(*) FROM ml_plan WHERE name='social-free'")
 # the policy "kids" these checks use (made when the server has none)
 . "$(dirname "$0")/lib-kids.sh"
 cleanup() {
-    kids_cleanup
     for u in ln-staff ln-boss ln-ppp ln-other "$GUEST" $(db "SELECT username FROM ml_account WHERE plan='ln-plan'"); do radius-admin user del "$u" >/dev/null 2>&1; done
     radius-admin mac del $MACDEV >/dev/null 2>&1
     db "DELETE FROM ml_account WHERE plan='ln-plan'; DELETE FROM ml_voucher_batch WHERE plan='ln-plan'; DELETE FROM ml_plan WHERE name='ln-plan';
@@ -27,9 +26,11 @@ cleanup() {
     [ "$had_social" != 0 ] || db "DELETE FROM ml_plan WHERE name='social-free'; DELETE FROM radgroupreply WHERE groupname='social-free'; DELETE FROM radgroupcheck WHERE groupname='social-free'"
     db "REPLACE INTO ml_setting (k, v) VALUES ('ipbind_auto', '${was%%,*}'), ('ipbind_scope', '${was##*,}')"
     radius-admin policy build >/dev/null 2>&1
+    kids_cleanup      # last: the test's users and groups are gone, nothing uses it any more
 }
 trap cleanup EXIT
 cleanup 2>/dev/null
+kids_ensure
 
 # auth like the hotspot -> "accept|<address list>|<framed ip>" or "reject"
 auth() {

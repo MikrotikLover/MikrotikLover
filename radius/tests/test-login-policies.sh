@@ -18,7 +18,6 @@ had_social=$(db "SELECT COUNT(*) FROM ml_plan WHERE name='social-free'")
 # the policy "kids" these checks use (made when the server has none)
 . "$(dirname "$0")/lib-kids.sh"
 cleanup() {
-    kids_cleanup
     for u in lp-pass lp-grpuser lp-own "$GUEST" $(db "SELECT username FROM ml_account WHERE plan='lp-plan'"); do radius-admin user del "$u" >/dev/null 2>&1; done
     for m in $MAC1 $MAC2 $MAC3 AA:BB:CC:10:00:04 AA:BB:CC:10:00:05; do radius-admin mac del "$m" >/dev/null 2>&1; done
     db "DELETE FROM ml_account WHERE plan='lp-plan'; DELETE FROM ml_voucher_batch WHERE plan='lp-plan'; DELETE FROM ml_plan WHERE name='lp-plan'"
@@ -27,9 +26,11 @@ cleanup() {
     db "DELETE FROM radgroupreply WHERE groupname='social-free' AND attribute='Mikrotik-Address-List'"
     [ -z "$was_social" ] || db "INSERT INTO radgroupreply (groupname,attribute,op,value) VALUES ('social-free','Mikrotik-Address-List','=','$was_social')"
     if [ "$had_social" = 0 ]; then db "DELETE FROM ml_plan WHERE name='social-free'; DELETE FROM radgroupreply WHERE groupname='social-free'; DELETE FROM radgroupcheck WHERE groupname='social-free'"; fi
+    kids_cleanup      # last: the test's users and groups are gone, nothing uses it any more
 }
 trap cleanup EXIT
 cleanup 2>/dev/null
+kids_ensure
 
 # login like the hotspot: PAP with the device's MAC; -> "Access-Accept|<address list>" or "Access-Reject"
 login() {
