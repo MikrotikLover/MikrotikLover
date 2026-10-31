@@ -22,6 +22,7 @@ cleanup() {
     mysql -e "DROP USER IF EXISTS 'ml_repl'@'127.0.0.1'; DROP USER IF EXISTS 'ml_repl'@'127.0.0.2'" 2>/dev/null
     db "DELETE FROM radacct WHERE acctsessionid LIKE 'ha-%'; REPLACE INTO ml_setting (k, v) VALUES ('server_ip', '${was_sip:-}')"
     rm -f /var/backups/mikrotiklover/ha-join-*.enc; rm -rf "$W"
+    [ "${MADE_NAS:-0}" = 1 ] && db "DELETE FROM nas WHERE nasname='127.0.0.1' AND shortname='ha-test'"
     radius-admin policy build >/dev/null 2>&1
 }
 trap cleanup EXIT
@@ -90,6 +91,11 @@ sleep 3
 t "accounting sent to the backup server shows on the first (quota, online list)" "$(db "SELECT COUNT(*) FROM radacct WHERE acctsessionid='ha-b2' AND framedipaddress='10.77.0.9'")" "1"
 
 # ---- routers: the backup RADIUS entry with each router's own secret
+# the asking "router" is this machine (127.0.0.1): it must be on the Routers page (made here when missing)
+MADE_NAS=0
+if [ -z "$(db "SELECT 1 FROM nas WHERE nasname='127.0.0.1'")" ]; then
+    db "INSERT INTO nas (nasname, shortname, type, secret) VALUES ('127.0.0.1', 'ha-test', 'other', 'HaTest-Secret-42')"; MADE_NAS=1
+fi
 db "REPLACE INTO ml_setting (k, v) VALUES ('ha_servers', '127.0.0.1,127.0.0.2')"; radius-admin policy build >/dev/null
 K=$(cat /var/lib/mikrotiklover/router/key); SEC=$(db "SELECT secret FROM nas WHERE nasname='127.0.0.1'")
 sync=$(curl -sk "https://127.0.0.1:${WEB_PORT:-8443}/api/public/router/sync.rsc?key=$K")
