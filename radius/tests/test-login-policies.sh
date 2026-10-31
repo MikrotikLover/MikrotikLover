@@ -15,7 +15,10 @@ P=/var/lib/mikrotiklover/router/webfilter-policies.rsc
 MAC1=AA:BB:CC:10:00:01 MAC2=AA:BB:CC:10:00:02 MAC3=AA:BB:CC:10:00:03 GUEST=sw-923009998877
 was_social=$(db "SELECT IFNULL((SELECT value FROM radgroupreply WHERE groupname='social-free' AND attribute='Mikrotik-Address-List' LIMIT 1),'')")
 had_social=$(db "SELECT COUNT(*) FROM ml_plan WHERE name='social-free'")
+# the policy "kids" these checks use (made when the server has none)
+. "$(dirname "$0")/lib-kids.sh"
 cleanup() {
+    kids_cleanup
     for u in lp-pass lp-grpuser lp-own "$GUEST" $(db "SELECT username FROM ml_account WHERE plan='lp-plan'"); do radius-admin user del "$u" >/dev/null 2>&1; done
     for m in $MAC1 $MAC2 $MAC3 AA:BB:CC:10:00:04 AA:BB:CC:10:00:05; do radius-admin mac del "$m" >/dev/null 2>&1; done
     db "DELETE FROM ml_account WHERE plan='lp-plan'; DELETE FROM ml_voucher_batch WHERE plan='lp-plan'; DELETE FROM ml_plan WHERE name='lp-plan'"

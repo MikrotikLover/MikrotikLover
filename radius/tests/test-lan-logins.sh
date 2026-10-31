@@ -15,7 +15,10 @@ S=/var/lib/mikrotiklover/router/sync.rsc
 MACDEV=AA:BB:CC:15:00:01 GUEST=sw-923001110000
 was=$(db "SELECT CONCAT(IFNULL((SELECT v FROM ml_setting WHERE k='ipbind_auto'),'0'),',',IFNULL((SELECT v FROM ml_setting WHERE k='ipbind_scope'),'users'))")
 had_social=$(db "SELECT COUNT(*) FROM ml_plan WHERE name='social-free'")
+# the policy "kids" these checks use (made when the server has none)
+. "$(dirname "$0")/lib-kids.sh"
 cleanup() {
+    kids_cleanup
     for u in ln-staff ln-boss ln-ppp ln-other "$GUEST" $(db "SELECT username FROM ml_account WHERE plan='ln-plan'"); do radius-admin user del "$u" >/dev/null 2>&1; done
     radius-admin mac del $MACDEV >/dev/null 2>&1
     db "DELETE FROM ml_account WHERE plan='ln-plan'; DELETE FROM ml_voucher_batch WHERE plan='ln-plan'; DELETE FROM ml_plan WHERE name='ln-plan';

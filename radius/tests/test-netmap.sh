@@ -8,7 +8,10 @@ fails=0
 t() { if [[ $2 == "$3" ]]; then echo "ok   $1"; else echo "FAIL $1: got '$2' expected '$3'"; fails=$((fails+1)); fi; }
 [ -n "${URL:-}" ] || { echo "skip: needs URL USER PASS (dashboard)"; exit 0; }
 MAC=AA:BB:CC:16:00:01
+# the policy "kids" these checks use (made when the server has none)
+. "$(dirname "$0")/lib-kids.sh"
 cleanup() {
+    kids_cleanup
     for u in nm-a nm-b nm-c; do radius-admin user del "$u" >/dev/null 2>&1; done
     radius-admin mac del $MAC >/dev/null 2>&1
     for id in $(db "SELECT id FROM ml_snmp_device WHERE name LIKE 'nm-%'"); do radius-admin snmp del "$id" >/dev/null 2>&1; done

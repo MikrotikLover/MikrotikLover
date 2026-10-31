@@ -14,7 +14,10 @@ t() { if [[ $2 == "$3" ]]; then echo "ok   $1"; else echo "FAIL $1: got '$2' exp
 WEB=${URL:-https://127.0.0.1:8443} K=$(cat /var/lib/mikrotiklover/router/key)
 M1=AA:00:11:22:33:01 M2=AA:00:11:22:33:02 M3=AA:00:11:22:33:03 M4=AA:00:11:22:33:04 HS=AA:00:11:22:33:05
 was=$(db "SELECT v FROM ml_setting WHERE k='wifi_policy'")
+# the policy "kids" these checks use (made when the server has none)
+. "$(dirname "$0")/lib-kids.sh"
 cleanup() {
+    kids_cleanup
     for u in wp-own wp-grp wp-none wp-hs; do radius-admin user del "$u" >/dev/null 2>&1; done
     radius-admin mac del $M4 >/dev/null 2>&1
     db "DELETE FROM radgroupreply WHERE groupname='wp-grp'; DELETE FROM radgroupcheck WHERE groupname='wp-grp'; DELETE FROM radusergroup WHERE groupname='wp-grp'"
