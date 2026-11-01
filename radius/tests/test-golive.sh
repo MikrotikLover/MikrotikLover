@@ -22,7 +22,8 @@ db "DELETE FROM ml_policy_net WHERE comment LIKE 'gl-%' OR target LIKE '10.123.%
 t "network: whole LAN" "$(radius-admin policy net add staff 10.123.0.0/16 gl-office | grep -c 'no login needed')" "1"
 radius-admin policy net add guests 10.123.5.10-10.123.5.50 gl-guests >/dev/null
 radius-admin policy net add no-internet 10.123.9.7 gl-pc >/dev/null
-t "  ... in the router file (address list policy-NAME)" "$(grep -c 'add list=policy-staff address=10.123.0.0/16 comment="mlnet: gl-office"' $S) $(grep -c 'add list=policy-guests address=10.123.5.10-10.123.5.50' $S) $(grep -c 'add list=policy-no-internet address=10.123.9.7 ' $S)" "1 1 1"
+t "  ... in the router file (address list polnet-NAME)" "$(grep -c 'add list=polnet-staff address=10.123.0.0/16 comment="mlnet: gl-office"' $S) $(grep -c 'add list=polnet-guests address=10.123.5.10-10.123.5.50' $S) $(grep -c 'add list=polnet-no-internet address=10.123.9.7 ' $S)" "1 1 1"
+t "  ... an IP with its own policy (ml-own) is left alone, then the policy's rules" "$(grep -c 'add chain=mlnet-staff src-address-list=ml-own action=return' $S) $(grep -c 'add chain=mlnet-staff action=jump jump-target=wfp-staff' $S) $(grep -c 'add chain=forward src-address-list=polnet-staff action=jump jump-target=mlnet-staff' $S)" "1 1 1"
 t "  ... the old entries are removed first" "$(grep -c 'remove \[find comment~"^mlnet:"\]' $S)" "1"
 t "  ... router file passes the RouterOS lint" "$(python3 "$HERE/lint-rsc.py" $S | head -1)" "ok   sync.rsc"
 t "network written in short form (10.123.7.9/24 -> 10.123.7.0/24)" "$(radius-admin policy net add staff 10.123.7.9/24 gl-x >/dev/null; db "SELECT target FROM ml_policy_net WHERE comment='gl-x'")" "10.123.7.0/24"

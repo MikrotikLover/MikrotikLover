@@ -99,7 +99,9 @@ t "policy changed: the next minute's list has the new one" "$(curl -sk "$WEB/api
 
 radius-admin wifipolicy off >/dev/null
 live=$(curl -sk "$WEB/api/public/router/live.rsc?key=$K")
-t "off: the routers take the MAC entries out, no list sent" "$(grep -c 'remove \[find where comment~"^mlmac"\]' <<<"$live") $(grep -c "$M1" <<<"$live")" "1 0"
+# off: the Wi-Fi users' MACs are not sent; the router takes their entries out (all mlmac entries when nothing else
+# uses them, else the minute's reconcile removes what is no longer sent — Devices page policies keep theirs)
+t "off: the routers take the MAC entries out, no list sent" "$([ "$(grep -c 'comment~"^mlmac"' <<<"$live")" -ge 1 ] && echo 1 || echo 0) $(grep -c "$M1" <<<"$live")" "1 0"
 radius-admin wifipolicy on >/dev/null
 
 if [ -n "${URL:-}" ]; then
