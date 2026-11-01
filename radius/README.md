@@ -173,7 +173,8 @@ Dashboard → **MAC devices**: Policy column (apni, ya "(group)"), **Policy** bu
 
 - Hamesha: **apni policy > group / plan ki policy**. Policy badlo to agle login par lagti hai (online user ek dafa disconnect hota hai).
 - **Quarantine** har policy se upar hai; release ke baad purani policy wapas.
-- Login ke baghair poore network / IP range ko policy: Blocking → Give a policy → Network / IP (section 5h2). Wahan **kai policies tick** kar sakte hain — har ek us network par lagti hai (CLI: `radius-admin policy net add students,no-video 192.168.88.0/24 "Office LAN"`). Users ke liye kai tick = jodi hui policy; group ko ek hi.
+- Kisi bhi LAN device (MAC) ko list se policy, bina login aur bina IP fix kiye: dashboard → **Devices** (upar wala section).
+- Login ke baghair poore network / IP range ko policy: Blocking → Give a policy → Network / IP (section 5h2). Wahan **kai policies tick** kar sakte hain — har ek us network par lagti hai (CLI: `radius-admin policy net add students,no-video 192.168.88.0/24 "Office LAN"`). Users ke liye kai tick = jodi hui policy; group ko ek hi. Jis IP ki apni policy ho (login, device, quarantine) us par network policy nahi lagti.
 - Test: `tests/test-login-policies.sh` — chaaron tareeqon se asli FreeRADIUS login (radclient, hotspot jaisa) aur jawab mein sahi policy; ghalat password / PIN / doosre device se MAC rad; policy badalna; quarantine; routers par har list ke rules.
 
 - MikroTik MAC kisi bhi format mein bheje (`AA:BB:..`, `aabbcc..`), server khud `AA-BB-CC-DD-EE-FF` bana leta hai.
@@ -205,6 +206,26 @@ sudo radius-admin newdev status | off
 - **Had (limits):** jo device DHCP ke baghair khud IP rakh le (static IP) woh lease-script mein nahi aata. Sakhti chahiye to router par: DHCP server `add-arp=yes` aur LAN bridge `arp=reply-only` (sirf DHCP walon ki ARP).
 - Server IP zaroori hai intezar wale page ke liye: `radius-admin security quarantine-server IP`.
 - Test: `tests/test-newdev.py` (`--live`: server endpoint, learning, approve / deny, IP badalna, har router ki apni list, page) aur `tests/test-chr.sh` (RouterOS 7 aur 6 par on / jawab / off).
+
+### Devices — network ke har device ko list se policy (bina IP fix kiye)
+
+Dashboard → **Devices**: har router har minute apne **DHCP leases** (MAC, IP, host name, interface) aur un devices ke **ARP** jin ka IP haath se fix hai, server ko bhejta hai. List mein har device: naam (aap ka diya, warna host name), MAC (+ **random MAC** nishaan — phone ka private address), IP, router / port, aakhri dafa kab dekha, aur **policy ka dropdown**. Naye devices upar, search, phone par cards.
+
+- **Policy MAC par lagti hai** — IP fix karne ki zaroorat nahi: router MAC ka IP (DHCP lease, warna ARP) dhoond kar `policy-NAAM` list mein daalta hai, IP badle to purana khud nikalta hai (ek minute mein).
+- **Naya device aaye to:** isi page par "New devices get" — koi policy nahi, ya koi bhi policy (maslan `whatsapp-only`). Pehle se dekhe hue devices apni policy rakhte hain.
+- **Tarteeb (ek device = ek policy):** quarantine › jo user device par login kare (hotspot / WPA-Enterprise / PPPoE) us ki policy › device ki policy › network / IP range policy. Network range ab `polnet-NAAM` list mein jati hai aur sirf un IPs par lagti hai jin ki apni policy nahi (router har minute `ml-own` list banata hai).
+
+```bash
+sudo radius-admin devices list                       # * = random MAC
+sudo radius-admin devices name aa:bb:cc:dd:ee:ff "Ali ka laptop"
+sudo radius-admin devices policy aa:bb:cc:dd:ee:ff whatsapp-only   # - = koi policy nahi
+sudo radius-admin devices default guests             # naye devices ko · default - = koi nahi
+sudo radius-admin devices forget aa:bb:cc:dd:ee:ff
+```
+
+- Router par kuch nahi karna — **auto-sync** wala ml-live har minute khud bhejta hai (RouterOS 6 aur 7). Badi list tukron mein jati hai.
+- `radius-admin snmp …` = Devices (SNMP) page (switch, UPS, printer) — `radius-admin devices` ab is naye page ka hai.
+- Test: `tests/test-lan-devices.py` (`--live`: report, default, IP badalna, tarteeb, API), `tests/test-chr.sh` (asli RouterOS 7 / 6: asli DHCP client ki lease → server → policy list → IP badla to list update).
 
 ### Device yaad rakho (random MAC wale Android / iPhone)
 

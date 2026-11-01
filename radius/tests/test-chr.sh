@@ -89,9 +89,11 @@ wait_up() {
 }
 boot() {
     local accel=tcg; [ -w /dev/kvm ] && accel=kvm
-    # ether1 = WAN (QEMU NAT, SSH forwarded); ether2, ether3 = spare ports (PPPoE, server port) without a network
+    # ether1 = WAN (QEMU NAT, SSH forwarded); ether2, ether3 = spare ports (PPPoE, server port) without a network;
+    # ether4 + ether5 = one cable (a QEMU hub): ether4 is in the LAN bridge, ether5 is a DHCP client of it — a real LAN device
     qemu-system-x86_64 -m 1024 -smp 2 -accel $accel -drive "file=$WORK/chr.img,format=raw,if=virtio" \
         -nic "user,model=virtio,hostfwd=tcp:127.0.0.1:$PORT-:22" -nic user,model=virtio,restrict=on -nic user,model=virtio,restrict=on \
+        -netdev hubport,id=lanA,hubid=7 -device virtio-net-pci,netdev=lanA -netdev hubport,id=lanB,hubid=7 -device virtio-net-pci,netdev=lanB \
         -display none -daemonize -pidfile "$WORK/qemu.pid" \
         || { echo "QEMU did not start (port $PORT busy? CHR_SSH_PORT=...)" >&2; exit 2; }
     QPID=$(cat "$WORK/qemu.pid")
@@ -111,6 +113,7 @@ ros '/system package print' | grep -q wireless && note "wireless package install
 # like a home router: LAN bridge, interface lists, DHCP server; ether1 = WAN (QEMU NAT)
 SETUP=$(cat <<'RSC'
 /interface bridge add name=bridge
+/interface bridge port add bridge=bridge interface=ether4
 /interface list add name=LAN
 /interface list add name=WAN
 /interface list member add list=LAN interface=bridge
@@ -173,6 +176,59 @@ if ros '/system package print' | grep -q wireless; then
         tr ';' '\n' <<<"$p" | grep -qxF "$want" && ok "wireless interworking-profile: $want" || bad "wireless interworking-profile: $want (got: ${p:0:300})"
     done
 fi
+# ---------------------------------------------------------------- Devices page, end to end with this server
+# (only when the RADIUS server is installed on this machine: the CHR reaches it as 10.0.2.2)
+if command -v radius-admin >/dev/null && [ -s /var/lib/mikrotiklover/router/key ] && command -v mysql >/dev/null; then
+    note "Devices page: the router's leases -> server -> policy by MAC (this machine's server)"
+    DOM=$(mysql -N -e "SELECT v FROM ml_setting WHERE k='radius_domain'" radius 2>/dev/null); DOM=${DOM:-radius.local}
+    WP=$(. /etc/mikrotiklover-radius/radius.conf 2>/dev/null; echo "${WEB_PORT:-8443}")
+    SY=/var/lib/mikrotiklover/router/sync$([ "$ROS" = 6 ] && echo 6).rsc
+    radius-admin policy build >/dev/null 2>&1
+    POL=$(ls /var/lib/mikrotiklover/policies/*.txt | grep -v README | head -1 | xargs basename | sed 's/\.txt$//')
+    {   echo "/ip dns static add name=$DOM address=10.0.2.2"
+        echo "/tool fetch url=\"https://10.0.2.2:$WP/static/ca.pem\" dst-path=mlca.pem check-certificate=no"
+        echo ":delay 2s"
+        echo "/certificate import file-name=mlca.pem passphrase=\"\""
+        echo "/ip dhcp-client add interface=ether5 disabled=no add-default-route=no use-peer-dns=no"
+        awk '/^# ml-live: every minute/{f=1} f{print} /^\/system scheduler add name=ml-live/{exit}' "$SY" | grep -v '^/system scheduler'
+    } > "$WORK/devices.rsc"
+    put "$WORK/devices.rsc"
+    import_one devices.rsc && ok "devices: server name, its certificate, ml-live from the server's sync" || bad "devices: setup import"
+    MAC="" IP1=""
+    for i in $(seq 1 24); do
+        IP1=$(ros ':put [/ip dhcp-server lease get [find where server=defconf and status="bound"] address]' | tail -1)
+        MAC=$(ros ':put [/ip dhcp-server lease get [find where server=defconf and status="bound"] mac-address]' | tail -1)
+        [[ $IP1 =~ ^192\.168\.88\.[0-9]+$ ]] && break; sleep 5
+    done
+    [[ $IP1 =~ ^192\.168\.88\.[0-9]+$ ]] && ok "devices: a real DHCP client got a lease ($MAC $IP1)" || bad "devices: no bound lease (got '$IP1')"
+    sql() { mysql -N -e "$1" radius 2>/dev/null; }
+    sql "DELETE FROM ml_lan_device WHERE mac='$MAC'"
+    ros '/system script run ml-live' >/dev/null; sleep 2
+    got=$(sql "SELECT CONCAT(last_ip,'|',router,'|',iface,'|',src) FROM ml_lan_device WHERE mac='$MAC'")
+    [ "$got" = "$IP1|127.0.0.1|bridge|dhcp" ] && ok "devices: the lease reached the server (IP, router, interface)" || bad "devices: server has '$got' for $MAC"
+    radius-admin devices policy "$MAC" "$POL" >/dev/null
+    ros '/system script run ml-live' >/dev/null; sleep 2
+    inl() { ros ":put [:len [/ip firewall address-list find where list=\"$1\" and address=$2]]" | tail -1; }
+    [ "$(inl "policy-$POL" "$IP1")" = 1 ] && ok "devices: policy by MAC — the IP is in policy-$POL" || bad "devices: $IP1 not in policy-$POL"
+    [ "$(inl ml-own "$IP1")" = 1 ] && ok "devices: the IP is in ml-own (a network policy leaves it alone)" || bad "devices: $IP1 not in ml-own"
+    IP2=192.168.88.77
+    ros "/ip dhcp-server lease make-static [find where mac-address=$MAC]; /ip dhcp-server lease set [find where mac-address=$MAC] address=$IP2; /ip dhcp-client release [find interface=ether5]" >/dev/null
+    for i in $(seq 1 24); do
+        [ "$(ros ":put [/ip dhcp-server lease get [find where mac-address=$MAC] status]" | tail -1)" = bound ] && \
+        [ "$(ros ":put [/ip dhcp-server lease get [find where mac-address=$MAC] address]" | tail -1)" = "$IP2" ] && break; sleep 5
+    done
+    ros '/system script run ml-live' >/dev/null; sleep 2
+    [ "$(inl "policy-$POL" "$IP2")" = 1 ] && [ "$(inl "policy-$POL" "$IP1")" = 0 ] && ok "devices: IP changed -> the new IP in the list, the old one out" \
+        || bad "devices: after the IP change: new $(inl "policy-$POL" "$IP2"), old $(inl "policy-$POL" "$IP1")"
+    [ "$(sql "SELECT last_ip FROM ml_lan_device WHERE mac='$MAC'")" = "$IP2" ] && ok "devices: the server has the new IP" || bad "devices: server IP not updated"
+    radius-admin devices policy "$MAC" - >/dev/null
+    ros '/system script run ml-live' >/dev/null; sleep 2
+    [ "$(inl "policy-$POL" "$IP2")" = 0 ] && ok "devices: policy taken away -> the IP is out of the list" || bad "devices: still in policy-$POL"
+    sql "DELETE FROM ml_lan_device WHERE mac='$MAC'"
+else
+    note "Devices page end to end: skipped (no RADIUS server installed on this machine)"
+fi
+
 # new device approval: after on / answers / off the router holds nothing of it
 n=$(ros ':put ("script=" . [:len [/system script find name=ml-newdev]] . " sched=" . [:len [/system scheduler find name=ml-newdev]] . " fw=" . [:len [/ip firewall filter find comment~"^mlnewdev"]] . " nat=" . [:len [/ip firewall nat find comment~"^mlnewdev"]] . " list=" . [:len [/ip firewall address-list find list=ml-newdev]] . " ls=" . [:len [/ip dhcp-server find where lease-script~"mlNdOne"]])' | tail -1)
 [ "$n" = "script=0 sched=0 fw=0 nat=0 list=0 ls=0" ] && ok "new device approval: on, answers, off — nothing left behind" || bad "new device approval left: $n"

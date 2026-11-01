@@ -796,3 +796,22 @@ CREATE TABLE IF NOT EXISTS ml_newdev (
   KEY (status),
   KEY (router, ip)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Devices page (tools/landev.py): every device a router reports (DHCP lease, or ARP for an IP set by hand) and its own
+-- policy by MAC — no fixed IP. (ml_device is something else: the kind of device per IP, for Apps on network.)
+CREATE TABLE IF NOT EXISTS ml_lan_device (
+  mac CHAR(17) NOT NULL PRIMARY KEY,                  -- AA:BB:CC:DD:EE:FF
+  name VARCHAR(64) NOT NULL DEFAULT '',               -- given by the admin
+  host VARCHAR(64) NOT NULL DEFAULT '',               -- DHCP host name the device sent
+  policy VARCHAR(40) NOT NULL DEFAULT '',
+  policy_how VARCHAR(10) NOT NULL DEFAULT '',         -- '' | default (new device, the default policy) | admin
+  last_ip VARCHAR(45) NOT NULL DEFAULT '',
+  router VARCHAR(45) NOT NULL DEFAULT '',
+  iface VARCHAR(32) NOT NULL DEFAULT '',
+  src VARCHAR(8) NOT NULL DEFAULT '',                 -- dhcp | arp
+  random_mac TINYINT NOT NULL DEFAULT 0,              -- 'locally administered' bit: a phone's private address
+  first_seen DATETIME NOT NULL,
+  last_seen DATETIME NOT NULL,
+  KEY (last_seen),
+  KEY (policy)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

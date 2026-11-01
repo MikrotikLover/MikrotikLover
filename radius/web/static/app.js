@@ -228,7 +228,7 @@ const legend = () => h("div", { class: "legend" }, h("span", {}, h("i", { class:
 // ------------------------------------------------------------------ shell + router
 const NAV = [
   ["dashboard", "Dashboard", "home"], ["ask", "Ask (AI)", "ask"], ["golive", "Setup steps", "flag"], ["users", "Users", "users"], ["groups", "Groups & policies", "groups"], ["departments", "Departments", "team"], ["netmap", "Network map", "map"],
-  ["macs", "MAC devices", "mac"], ["newdev", "New devices", "shield"], ["ipbind", "IP binding", "pin"], ["routers", "Routers", "router"], ["devices", "Devices (SNMP)", "device"], ["setup", "Router setup", "term"], "-",
+  ["macs", "MAC devices", "mac"], ["newdev", "New devices", "shield"], ["lan", "Devices", "device"], ["ipbind", "IP binding", "pin"], ["routers", "Routers", "router"], ["devices", "Devices (SNMP)", "device"], ["setup", "Router setup", "term"], "-",
   ["plans", "Plans", "plan"], ["vouchers", "Vouchers", "voucher"], ["sales", "Sales", "money"], ["speed", "Speed schedule", "clock"], ["hotspot", "Hotspot page", "brush"], ["social", "Social WiFi", "phone"], "-",
   ["online", "Online now", "online"], ["live", "Live log", "live"], ["insights", "Insights (samajh)", "bulb"], ["reports", "Reports", "reports"], ["cdn", "CDN detective", "search"],
   ["traffic", "Traffic graphs", "graph"], ["data", "Data usage", "data"], ["apps", "Apps on network", "apps"], ["ports", "Ports & protocols", "ports"], "-",
@@ -661,6 +661,50 @@ ROUTES.newdev = async (tab = "pending") => {
           x.status === "pending" ? actBtn(x, "deny", "Deny", "small danger") : null,
           actBtn(x, "forget", "Forget")) : null }], list,
       tab === "pending" ? (st.on ? "No device is waiting." : "Approval is off — turn it on above.") : "Nothing here.")))));
+};
+
+// ------------------------------------------------------------------ Devices: every LAN device and its policy by MAC
+ROUTES.lan = async () => {
+  const d = await api("GET", "/api/lan");
+  const search = h("input", { type: "search", placeholder: "Search name, MAC, IP, policy…", oninput: () => draw() });
+  const holder = h("div");
+  const polSel = (cur, onChange, label) => h("select", { class: "inline-select lan-pol", "aria-label": label, disabled: !isAdmin(), onchange: (e) => onChange(e.target.value) },
+    h("option", { value: "" }, "— no policy —"), d.policies.map((p) => h("option", { value: p, selected: p === cur }, p)));
+  const set = async (action, payload) => { if (await act(api("POST", `/api/lan/${action}`, payload))) route(); else draw(); };
+  const rename = (x) => {
+    const inp = h("input", { name: "name", maxlength: 64, value: x.name || "", placeholder: x.host || "Ali's laptop" });
+    dialog(`Name for ${x.mac}`, h("form", { class: "form", onsubmit: (e) => e.preventDefault() }, h("label", { class: "field" }, "Name",
+      h("span", { class: "help" }, "empty = the device's own host name"), inp)),
+      [{ label: "Cancel" }, { label: "Save", class: "primary", action: async () => { if (!(await act(api("POST", "/api/lan/name", { mac: x.mac, name: inp.value.trim() })))) return false; route(); } }]);
+  };
+  const DAY = 86400000;
+  const draw = () => {
+    const q = search.value.toLowerCase();
+    const rows = d.devices.filter((x) => !q || [x.name, x.host, x.mac, x.last_ip, x.policy, x.iface, x.router_name, x.router].some((v) => (v || "").toLowerCase().includes(q)));
+    holder.replaceChildren(((el) => { el.querySelectorAll?.("table").forEach((t) => t.classList.add("rw-table")); return el; })(table([
+      { label: "Device", render: (x) => h("div", {},
+          h("b", {}, x.name || x.host || "—"), " ",
+          Date.now() - new Date(String(x.first_seen).replace(" ", "T")) < DAY ? badge("new", "info") : null,
+          x.name && x.host ? h("div", { class: "muted small" }, x.host) : null,
+          isAdmin() ? h("div", {}, h("button", { class: "small link-btn", "aria-label": `Rename ${x.mac}`, onclick: () => rename(x) }, "✎ name")) : null) },
+      { label: "MAC", render: (x) => h("span", {}, h("code", {}, x.mac), x.random_mac ? h("span", { class: "muted small", title: "a phone's private (random) address" }, " random MAC") : null) },
+      { label: "IP", render: (x) => h("span", {}, x.last_ip || "—", h("div", { class: "muted small" }, x.src === "arp" ? "IP set by hand" : "DHCP")) },
+      { label: "Router / port", render: (x) => h("span", {}, x.router_name || x.router || "—", h("div", { class: "muted small" }, x.iface || "")) },
+      { label: "Last seen", render: (x) => h("span", {}, ago(x.last_seen), h("div", { class: "muted small" }, `first ${ago(x.first_seen)}`)) },
+      { label: "Policy", render: (x) => h("span", {}, polSel(x.policy, (v) => set("policy", { mac: x.mac, policy: v }), `Policy for ${x.mac}`),
+          x.policy_how === "default" ? h("div", { class: "muted small" }, "default for new devices") : null) },
+      { label: "", render: (x) => isAdmin() ? h("button", { class: "small", onclick: async () => {
+          if (await confirmDlg("Forget device", `Forget ${x.name || x.host || x.mac}? If it comes again it is a new device.`, "Forget")) set("forget", { mac: x.mac }); } }, "Forget") : null },
+    ], rows, q ? "No device matches." : "No device yet — routers with auto-sync send their DHCP leases every minute.")));
+  };
+  draw();
+  const defSel = polSel(d.default, (v) => set("default", { policy: v }), "Policy for new devices");
+  shell("Devices", h("div", { class: "stack" },
+    card("Devices on the network", "every device the routers see (DHCP, or ARP for an IP set by hand) — its own policy by MAC, no fixed IP needed",
+      h("div", { class: "toolbar" }, search, h("span", { class: "grow" }),
+        h("label", { class: "field inline-field" }, "New devices get", defSel)),
+      h("div", { class: "muted small" }, "Order: quarantine › the policy of a user who logs in on the device › the device's policy › a network / IP range policy. Routers take a change within a minute.")),
+    card(null, `${d.devices.length} device(s), newest first`, holder)));
 };
 
 // ------------------------------------------------------------------ routers

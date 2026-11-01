@@ -88,6 +88,12 @@ Har feature ke liye: **kya karta hai**, **dashboard mein kahan**, **CLI** (serve
 - **Masla:** routers auto-sync par hon (rules agle sync par, approve 1 minute mein). Static-IP device DHCP ke baghair aaye to pakra nahi jata (README: `arp=reply-only`). Phone ka random MAC har Wi-Fi par naya device.
 - README: [Naye device ki manzoori](../README.md#naye-device-ki-manzoori--har-naya-device-pehle-approve-ho)
 
+### B5b. Devices — har device ko list se policy
+- **Kya:** routers ke DHCP leases (aur haath se fix IP wale ARP se) har device ki list; har device ko dropdown se policy — MAC par, IP fix nahi karna.
+- **Dashboard:** **Devices** (naam badalna, policy, search, "New devices get"). **CLI:** `devices list` · `devices name MAC "Naam"` · `devices policy MAC NAAM|-` · `devices default NAAM|-` · `devices forget MAC`.
+- **Tarteeb:** quarantine › login wale user ki policy › device ki policy › network policy.
+- **Check:** `sudo tests/test-lan-devices.py --live`; list mein device na aaye to router par auto-sync (ml-live) check karein.
+
 ### B6. Device yaad rakho (random MAC)
 - **Kya:** ek dafa password se login, phir phone MAC se khud andar (usi user ke taur par).
 - **Dashboard:** Hotspot page → Remember devices · Router setup → Hotspot → Remember devices. **CLI:** `remember on` · `remember max 2` · `remember list`.

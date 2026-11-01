@@ -624,6 +624,45 @@ try {
     ok(`page ${hash}`);
   }
 
+  // Devices page: a device a router reported -> policy from the list, name, then on a phone (cards)
+  {
+    const fs = await import("fs");
+    const keyFile = "/var/lib/mikrotiklover/router/key";
+    if (fs.existsSync(keyFile)) {
+      const key = fs.readFileSync(keyFile, "utf8").trim();
+      const UIMAC = "02:5E:DE:00:00:42";
+      const rep = await page.request.post(`${URL}/api/public/router/devices?key=${key}`, { data: `${UIMAC}|192.168.88.142|ui-tablet|bridge|dhcp\n`, headers: { "Content-Type": "text/plain" } });
+      if (rep.status() !== 200) throw new Error(`devices report: ${rep.status()}`);
+      await go(page, "#/lan", "Devices");
+      const row = page.locator("tr", { hasText: UIMAC });
+      await row.waitFor({ timeout: 15000 });
+      if (!(await row.textContent()).includes("random MAC")) throw new Error("devices: random MAC not shown");
+      await row.locator("select").selectOption("guests");
+      console.log("     toast:", (await toastText(page)).trim());
+      await page.locator("tr", { hasText: UIMAC }).locator("button", { hasText: "name" }).click();
+      await page.locator("dialog[open] input[name=name]").fill("UI tablet");
+      await dlgButton(page, "Save").click();
+      await page.locator("tr", { hasText: UIMAC }).locator("b", { hasText: "UI tablet" }).waitFor({ timeout: 15000 });
+      const d = await (await page.request.get(`${URL}/api/lan`)).json();
+      const x = d.devices.find((v) => v.mac === UIMAC);
+      if (!x || x.policy !== "guests" || x.name !== "UI tablet") throw new Error(`devices: saved ${JSON.stringify(x)}`);
+      await page.locator("input[type=search]").fill("ui tab");
+      if ((await page.locator("tbody tr").count()) !== 1) throw new Error("devices: search");
+      await shot(page, "33-devices");
+      const ph = await newPage({ viewport: { width: 390, height: 844 }, colorScheme: "dark", isMobile: true });
+      await login(ph);
+      await go(ph, "#/lan", "Devices");
+      await ph.locator("tr", { hasText: UIMAC }).waitFor({ timeout: 15000 });
+      if (await ph.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)) throw new Error("devices: wider than a phone");
+      await shot(ph, "34-devices-phone");
+      await ph.close();
+      await page.locator("tr", { hasText: UIMAC }).locator("button", { hasText: "Forget" }).click();
+      await dlgButton(page, "Forget").click();
+      await page.locator("tr", { hasText: UIMAC }).waitFor({ state: "detached", timeout: 15000 });
+      ok("devices: reported device, policy from the list, name, search, phone cards, forget");
+    } else console.log("skip devices page (not on the server: no router key to report a device)");
+  }
+
   // mobile + dark
   const mobile = await newPage({ viewport: { width: 390, height: 844 }, colorScheme: "dark", isMobile: true });
   await login(mobile);

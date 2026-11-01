@@ -2435,15 +2435,77 @@ def router_live():
 
 
 def macpol_script():
-    """Wi-Fi (WPA-Enterprise) users and MAC devices: policy by MAC, the router finds the IP (tools/macpolicy.py)"""
+    """Wi-Fi (WPA-Enterprise) users, MAC devices and the Devices page: policy by MAC, the router finds the IP
+    (tools/macpolicy.py + tools/landev.py); the router's device report and the ml-own list (one policy per device)"""
+    import landev
     import macpolicy
     on = (q1("SELECT v FROM ml_setting WHERE k='wifi_policy'") or {}).get("v") != "0"
     dom = (q1("SELECT v FROM ml_setting WHERE k='radius_domain'") or {}).get("v") or "radius.local"
+    base = f"https://{dom}:{web_port()}/api/public/router"
     try:
         rows = macpolicy.rows(q) if on else []
     except pymysql.MySQLError:             # an old database without ml_mac_ip: leave the part out this minute
         return ""
-    return macpolicy.script(rows, f"https://{dom}:{web_port()}/api/public/router", router_key(), on)
+    try:                                   # devices with their own policy (a login's policy and quarantine come first)
+        devs = landev.device_rows(q(landev.DEV_SQL), [r["mac"] for r in rows])
+    except pymysql.MySQLError:
+        devs = []
+    text = macpolicy.script(rows + devs, base, router_key(), on or bool(devs))
+    return text + landev.report_script(base, router_key()) + landev.own_script()
+
+
+@app.get("/api/lan")
+@login_required()
+def lan_devices():
+    """Devices page: every device the routers reported, its policy; the policy new devices get"""
+    rows = jsonable(q("""SELECT mac, name, host, policy, policy_how, last_ip, router, iface, src, random_mac, first_seen, last_seen
+                         FROM ml_lan_device ORDER BY first_seen DESC LIMIT 5000"""))
+    names = {r["nasname"]: r["shortname"] for r in q("SELECT nasname, shortname FROM nas")}
+    for r in rows:
+        r["random_mac"] = bool(r["random_mac"])
+        r["router_name"] = names.get(r["router"], "")
+    pols = sorted(f[:-4] for f in os.listdir(POLICY_DIR) if f.endswith(".txt") and f != "README.txt") if os.path.isdir(POLICY_DIR) else []
+    default = (q1("SELECT v FROM ml_setting WHERE k='lan_default_policy'") or {}).get("v") or ""
+    return jsonify(devices=rows, policies=pols, default=default)
+
+
+LAN_NAME_RE = re.compile(r"^[A-Za-z0-9 ._()+'&-]{0,64}$")
+
+
+@app.post("/api/lan/<action>")
+@login_required("admin")
+def lan_action(action):
+    data = body()
+    if action == "default":
+        p = field(data, "policy", POLICY_RE) or "-"
+        return result(*radius_admin(["devices", "default", p]))
+    if action not in ("name", "policy", "forget"):
+        abort(404)
+    mac = field(data, "mac", MAC_RE, required=True, maxlen=17)
+    if action == "name":
+        name = str(data.get("name") or "").strip()
+        if not LAN_NAME_RE.match(name):
+            abort(400, "name: letters, digits, space . _ ( ) + ' & - (64 at most)")
+        return result(*radius_admin(["devices", "name", mac, name]))
+    if action == "policy":
+        return result(*radius_admin(["devices", "policy", mac, field(data, "policy", POLICY_RE) or "-"]))
+    return result(*radius_admin(["devices", "forget", mac]))
+
+
+@app.post("/api/public/router/devices")
+def router_devices():
+    """A router's devices (ml-live, every minute): MAC|IP|HOST|INTERFACE|dhcp/arp lines, in parts."""
+    if not _router_key_ok():
+        abort(403)
+    if (request.content_length or 0) > 262144:
+        abort(413)
+    import landev
+    found = landev.parse_report(request.get_data(as_text=True))
+    default = (q1("SELECT v FROM ml_setting WHERE k='lan_default_policy'") or {}).get("v") or ""
+    if default and not os.path.isfile(os.path.join(POLICY_DIR, default + ".txt")):
+        default = ""                       # the default policy was deleted: new devices get none
+    seen, new = landev.store(q, client_ip(), found, default)
+    return app.response_class(f"{seen} {new}\n", mimetype="text/plain")
 
 
 @app.post("/api/public/router/macip")

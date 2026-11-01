@@ -2002,6 +2002,45 @@ cmd_newdev() { # every new device on the LAN needs the admin's approval before i
     esac
 }
 
+# ---------------------------------------------------------------- Devices page: every LAN device, its policy by MAC
+LANDEVPY=/usr/local/lib/mikrotiklover/landev.py
+lan_mac() { # any format -> AA:BB:CC:DD:EE:FF
+    local m; m=$(python3 -I -c 'import sys; sys.path.insert(0, "/usr/local/lib/mikrotiklover"); import landev; print(landev.norm_mac(sys.argv[1]) or "")' "${1:-}")
+    [ -n "$m" ] || die "Invalid MAC address '${1:-}'"
+    printf '%s' "$m"
+}
+cmd_devices() { # radius-admin devices list | name MAC "Name" | policy MAC NAME|- | default NAME|- | forget MAC
+    local sub=${1:-list}; shift || true
+    case $sub in
+    list|ls) python3 -I "$LANDEVPY" list --cnf "$CONF_DIR/my.cnf" --db "$DB_NAME" "$@"
+        [ "${1:-}" = --json ] || echo "default policy for new devices: $(setting_get lan_default_policy | grep . || echo none)   (* = random MAC)" ;;
+    name)
+        local m; m=$(lan_mac "${1:-}"); local n=${2:-}
+        [ -z "$n" ] || [[ $n =~ ^[A-Za-z0-9\ ._()+\'\&-]{1,64}$ ]] || die "name: letters, digits, space . _ ( ) + ' & - (64 at most)"
+        [ -n "$(echo "SELECT 1 FROM ml_lan_device WHERE mac=$(q "$m")" | db)" ] || die "No device $m (radius-admin devices list)"
+        echo "UPDATE ml_lan_device SET name=$(q "$n") WHERE mac=$(q "$m")" | db
+        ok "$m → $([ -n "$n" ] && echo "\"$n\"" || echo "no name (its host name is shown)")" ;;
+    policy)
+        local m; m=$(lan_mac "${1:-}"); local p=${2:-}
+        [ -n "$p" ] || die "usage: radius-admin devices policy MAC NAME|-"
+        [ -n "$(echo "SELECT 1 FROM ml_lan_device WHERE mac=$(q "$m")" | db)" ] || die "No device $m (radius-admin devices list)"
+        if [ "$p" = - ]; then p=""; else valid_policy "$p"; policy_exists "$p" || die "No policy '$p' (radius-admin policy list)"; fi
+        echo "UPDATE ml_lan_device SET policy=$(q "$p"), policy_how=$(q "$([ -n "$p" ] && echo admin)") WHERE mac=$(q "$m")" | db
+        ok "$m → $([ -n "$p" ] && echo "policy '$p'" || echo "no policy of its own (a network policy can apply)") — the routers within a minute" ;;
+    default)
+        local p=${1:-}; [ -n "$p" ] || die "usage: radius-admin devices default NAME|-   (the policy a new device gets)"
+        if [ "$p" = - ]; then p=""; else valid_policy "$p"; policy_exists "$p" || die "No policy '$p' (radius-admin policy list)"; fi
+        setting_set lan_default_policy "$p"
+        ok "new devices get: $([ -n "$p" ] && echo "policy '$p'" || echo "no policy") (devices already seen keep theirs)" ;;
+    forget)
+        local m; m=$(lan_mac "${1:-}")
+        [ -n "$(echo "SELECT 1 FROM ml_lan_device WHERE mac=$(q "$m")" | db)" ] || die "No device $m"
+        echo "DELETE FROM ml_lan_device WHERE mac=$(q "$m")" | db
+        ok "$m forgotten (if it comes again it is a new device: the default policy)" ;;
+    *) die "usage: radius-admin devices list [--json] | name MAC \"Name\" | policy MAC NAME|- | default NAME|- | forget MAC" ;;
+    esac
+}
+
 cmd_remember() { # "remember this device": after one password login a phone logs in by its MAC as that user (random MACs)
     local sub=${1:-status}; shift || true
     case $sub in
@@ -3182,11 +3221,36 @@ cmd_winupdate() { # Windows Update for everyone: on (allowed) | off | office (of
 policy_is_off() { [ -f "$POLICY_DIR/.off" ] && grep -qx "$1" "$POLICY_DIR/.off"; }
 
 policy_net_rsc() { # router part of sync.rsc: networks / IP ranges / IPs that have a policy without logging in
-    echo "# Policies for networks and IPs (Blocking → Give a policy → Network / IP)"
+    # The range is in polnet-NAME (not policy-NAME): it reaches the policy's rules through chain mlnet-NAME, which
+    # first lets an IP with a policy of its own go (list ml-own, kept every minute by ml-live: a login's policy, a
+    # device's policy, quarantine) — the order is quarantine > login > device > network, one policy per device.
+    local pol="$lists/webfilter-policies.rsc" rows p
+    rows=$(echo "SELECT policy, target, comment FROM ml_policy_net ORDER BY id" | db 2>/dev/null || true)
+    echo "# Policies for networks and IPs (Blocking → Give a policy → Network / IP); an IP with its own policy (ml-own) is left alone"
     echo "/ip firewall address-list"
     echo 'remove [find comment~"^mlnet:"]'
-    echo "SELECT policy, target, comment FROM ml_policy_net ORDER BY id" | db 2>/dev/null \
-        | awk -F'\t' '$1 ~ /^[a-z0-9-]+$/ && $2 ~ /^[0-9.\/-]+$/ { c = $3; gsub(/["\\$]/, "", c); printf "add list=policy-%s address=%s comment=\"mlnet: %s\"\n", $1, $2, substr(c, 1, 60) }'
+    awk -F'\t' '$1 ~ /^[a-z0-9-]+$/ && $2 ~ /^[0-9.\/-]+$/ { c = $3; gsub(/["\\$]/, "", c); printf "add list=polnet-%s address=%s comment=\"mlnet: %s\"\n", $1, $2, substr(c, 1, 60) }' <<<"$rows"
+    echo "/ip firewall filter"
+    echo 'remove [find comment~"^mlnet[jc]"]'
+    echo "/ip firewall nat"
+    echo 'remove [find comment~"^mlnet[jc]"]'
+    for p in $(cut -f1 <<<"$rows" | grep -E '^[a-z0-9-]+$' | sort -u); do
+        # only a policy whose rules are on the router (a policy turned off has none: nothing to jump to)
+        grep -q "jump-target=wfp-$p " "$pol" 2>/dev/null || continue
+        echo "/ip firewall filter"
+        echo "add chain=forward src-address-list=polnet-$p action=jump jump-target=mlnet-$p comment=\"mlnetj: $p\""
+        echo "add chain=mlnet-$p src-address-list=ml-own action=return comment=\"mlnetc: $p its own policy first\""
+        echo "add chain=mlnet-$p action=jump jump-target=wfp-$p comment=\"mlnetc: $p\""
+        if grep -q "^add chain=dstnat src-address-list=policy-$p " "$pol"; then
+            echo "/ip firewall nat"
+            echo "add chain=dstnat src-address-list=polnet-$p action=jump jump-target=mlnetd-$p comment=\"mlnetj: $p dns\""
+            echo "add chain=mlnetd-$p src-address-list=ml-own action=return comment=\"mlnetc: $p its own policy first\""
+            grep "^add chain=dstnat src-address-list=policy-$p " "$pol" \
+                | sed -E "s/^add chain=dstnat src-address-list=policy-$p /add chain=mlnetd-$p /; s/comment=\"[^\"]*\"/comment=\"mlnetc: $p dns\"/"
+        fi
+    done
+    rsc_move_top "/ip firewall filter" 'chain=forward comment~"^mlnetj"'
+    rsc_move_top "/ip firewall nat" 'chain=dstnat comment~"^mlnetj"'
 }
 
 valid_target() { # an IP, a network (a.b.c.d/nn) or a range (a-b) -> normalised, or die
@@ -3686,6 +3750,7 @@ GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_stat TO 'radius_web'@'loc
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_setup TO 'radius_web'@'localhost';
 GRANT UPDATE ON \`$DB_NAME\`.ml_passpoint_link TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE ON \`$DB_NAME\`.ml_newdev TO 'radius_web'@'localhost';
+GRANT INSERT, UPDATE ON \`$DB_NAME\`.ml_lan_device TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE, DELETE ON \`$DB_NAME\`.ml_router_fetch TO 'radius_web'@'localhost';
 GRANT INSERT, UPDATE ON \`$DB_NAME\`.ml_traffic TO 'radius_web'@'localhost';
 GRANT INSERT, DELETE ON \`$DB_NAME\`.ml_block_event TO 'radius_web'@'localhost';
@@ -4782,6 +4847,8 @@ MAC authentication (devices without username/password: printers, CCTV, TVs, POS)
                                         a phone that logged in with a password logs in by its MAC next time (random MACs)
   newdev on [--learn 24h] | off | status | list [pending] | approve MAC [-n NAME] [-u USER] | deny MAC | approve-all
   newdev add MAC [-n NAME] | forget MAC | enable|disable MAC | strict on|off | learn HOURS   every new device on the LAN waits for your approval
+  devices list | name MAC "Name" | policy MAC NAME|- | default NAME|- | forget MAC
+                                        every LAN device (DHCP / ARP) and its own policy by MAC — no fixed IP
 
 Routers (MikroTik = NAS)
   nas add IP[/PREFIX] [SECRET] [NAME]   (no SECRET: random one is generated)
@@ -4842,7 +4909,8 @@ case ${1:-help} in
     firewall|fw) shift; cmd_firewall "$@" ;;
     ips) shift; cmd_ips "$@" ;;
     mail) shift; cmd_mail "$@" ;;
-    snmp|devices) shift; cmd_snmp "$@" ;;
+    snmp) shift; cmd_snmp "$@" ;;
+    devices|device) shift; cmd_devices "$@" ;;
     remember) shift; cmd_remember "$@" ;;
     wifipolicy) shift; cmd_wifipolicy "$@" ;;
     newdev|newdevice) shift; cmd_newdev "$@" ;;
