@@ -2,6 +2,8 @@
 
 Yeh guide ek khali server se le kar poore chalte hue system tak har qadam batati hai: install, router setup, users, blocking, reports, security, backup aur update. Har feature ki tafseel `README.md` mein hai; yahan **tarteeb (order)** aur **zaroori settings** hain.
 
+> 🏢 **Sirf apne office / organization ke LAN mein chalana hai?** Seedha [1c. Organization ke andar (sirf LAN par)](#1c-organization-ke-andar-sirf-lan-par--poora-tareeqa) dekhein.
+
 ---
 
 ## 0. Pehle samjhein — kya kahan chalta hai
@@ -86,6 +88,76 @@ network:
 - Dashboard: admin ke PC se `https://10.10.10.10:8443` (users ke LAN se router ke raaste khulta hai).
 
 **Doosri jagahen:** server internet par (VPS) ya doosri branch mein ho to cable ki jagah **WireGuard** tunnel lagayein, aur upar wala `10.10.10.x` tunnel ke IPs ban jate hain. Kai routers hon to har router aik `nas add` aur wohi scripts.
+
+---
+
+## 1c. Organization ke andar (sirf LAN par) — poora tareeqa
+
+Server apne office mein (PC, mini PC ya VM) — internet par koi server nahi, dashboard sirf andar se khulta hai. Upar wala cable diagram (1b) isi ke liye hai. Qadam:
+
+**1. Machine**
+- Kam se kam 2 CPU, 2–4 GB RAM, 20 GB disk; zyada users ho to 4 CPU, 8 GB RAM, SSD.
+- Ubuntu 24.04 LTS saaf install, **ya** tayyar VM image (section 2b — Proxmox / VMware / VirtualBox / Hyper-V; pehli boot par internet ki zaroorat nahi).
+
+**2. Server ka apna port aur network (zaroori)**
+- Server users wale LAN / bridge mein **nahi** — alag port, alag network (misaal router `ether5` = `10.10.10.1/24`, server `10.10.10.10`). Warna DNS logger ke jawab router ko bypass kar jate hain.
+- Router par haath se kuch nahi likhna: dashboard → **Router setup** → "Server port" (`ether5`) aur "Router address on that port" (`10.10.10.1/24`) bhar dein — script yeh hissa khud lagati hai (ya 1b wali 3 lines).
+- Server ka pakka IP:
+  ```bash
+  sudo radius-admin netip static 10.10.10.10/24 10.10.10.1     # address/size  gateway  [DNS]
+  sudo radius-admin netip show
+  ```
+  (VM image par pehli boot ke baad; Ubuntu par netplan wala tareeqa bhi upar 1b mein hai.)
+
+**3. Install** (Ubuntu par; VM image mein pehle se hai)
+```bash
+curl -fsSL https://raw.githubusercontent.com/MikrotikLover/MikrotikLover/main/radius/get.sh | sudo bash -s -- --domain radius.company.lan --yes --firewall
+```
+- `--domain` = server ka naam (Wi-Fi certificate isi naam ka banta hai) — andar ka naam (`.lan`) theek hai.
+- Dashboard **default mein sirf private networks** (10.x, 172.16–31.x, 192.168.x) se khulta hai — bahar internet se nahi. Sirf kuch IPs ko: `--web-allow "10.10.10.0/24 192.168.88.50"`.
+
+**4. Router jodna**
+```bash
+sudo radius-admin nas add 10.10.10.1          # router isi IP se RADIUS bhejta hai (secret khud banta hai)
+```
+Phir dashboard → **Router setup** → zaroori hisse tick (Hotspot / staff Wi-Fi / blocking / **auto-sync** …) → jo **ek line** mile, router ke Terminal mein paste. Us ke baad router har 15 minute naye rules khud leta hai — dobara kuch paste nahi karna.
+
+**5. Dashboard**
+- Admin PC se `https://10.10.10.10:8443` (ya `https://radius.company.lan:8443` agar andar ka DNS naam banaya ho).
+- Pehla login: VM ki screen par, ya `sudo cat /root/mikrotiklover-first-login.txt`.
+- Pehli dafa: **Setup steps** page qadam ba qadam le jata hai (sab ek saath on na karein).
+
+**6. Certificate (Wi-Fi login ke liye)** — dono LAN ke andar chalte hain:
+
+| Tareeqa | Kab | Phones par |
+|---|---|---|
+| **Apna CA** (default, kuch nahi karna) | internet ya domain nahi | kuch Android par `ca.der` install karna ya "Trust" dabana; connect guide: `https://10.10.10.10:8443/connect` |
+| **Let's Encrypt, Cloudflare DNS** | company ka public domain Cloudflare par ho | kuch install nahi. Koi port bahar nahi kholna — sirf DNS se check hota hai |
+
+```bash
+echo CLOUDFLARE_API_TOKEN | sudo radius-admin cert letsencrypt wifi.company.com --email it@company.com --cloudflare
+sudo radius-admin cert status
+```
+
+**7. Internet kis cheez ke liye** (server ko router ke NAT se milta hai)
+- Login, plans, policies, blocking, reports, dashboard — **sab bina internet ke** chalte hain.
+- Internet chahiye sirf: haftawar updates, threat / VPN lists, app catalog, Let's Encrypt renewal, alerts (Telegram / WhatsApp / email). Na ho to yeh purane rehte hain, baqi sab chalta hai.
+
+**8. Hifazat aur backup**
+```bash
+sudo ufw allow from 10.10.10.1 to any port 1812:1813 proto udp     # RADIUS sirf apne router(s) se (section 3: Server firewall)
+sudo radius-admin doctor                                           # sab theek hai? har masle ke saath hal
+```
+- Backup har raat khud banta hai (`/var/backups/mikrotiklover`). Us ki copy **doosri machine** par rakhein: dashboard → Settings → **Off-site copy** (SSH se andar ka doosra PC / NAS chalta hai; internet ho to Google Drive bhi).
+- Server kharab hone se bachne ke liye doosra RADIUS server (backup), isi LAN mein: `radius-admin ha start BACKUP-IP` (README 4e).
+
+**9. Kai branches / doosri building**
+- Har branch ka router **WireGuard** tunnel se isi server tak (RADIUS attributes encrypted nahi hote — internet par khula na bhejein). Tunnel ke IP se `nas add`, aur har router par wohi Router setup line.
+
+**Check list (sab theek hai?)**
+- `sudo radius-admin doctor` hara (routers "has the newest rules").
+- `sudo radius-admin test ali --peap` → Wi-Fi jaisa login OK.
+- Dashboard → Routers: router online; Online now: users nazar aate hain.
 
 ---
 

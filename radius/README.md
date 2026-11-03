@@ -13,6 +13,7 @@ FreeRADIUS 3.2 + MariaDB par bana hua RADIUS server, MikroTik Wi-Fi ke liye:
 > Ye RADIUS server **Linux VPS ya local Ubuntu machine** par chalta hai (UDP 1812/1813). Hostinger shared hosting par nahi chal sakta.
 
 > 📘 **Poori installation aur configuration guide (shuru se aakhir tak, tarteeb ke saath): [`docs/INSTALL.md`](docs/INSTALL.md)**
+> 🏢 Sirf organization ke LAN ke andar (internet par koi server nahi): [`docs/INSTALL.md` → 1c](docs/INSTALL.md#1c-organization-ke-andar-sirf-lan-par--poora-tareeqa)
 
 ## 1. Install (Ubuntu 22.04/24.04, Debian 12/13)
 
